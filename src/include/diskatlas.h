@@ -1,6 +1,10 @@
 #ifndef DISKATLAS_H
 #define DISKATLAS_H
 
+#include <stddef.h>
+#include <stdint.h>
+#include <stdbool.h>
+
 #if defined(_WIN32) || defined(__CYGWIN__)
 #ifdef DISKATLAS_BUILD_SHARED
 #define DISKATLAS_API __declspec(dllexport)
@@ -17,7 +21,114 @@
 extern "C" {
 #endif
 
+/** Library-wide init (optional); safe to call once before any scan_* from any thread. */
 DISKATLAS_API int diskatlas_init(void);
+
+/* -------------------------------------------------------------------------- */
+/* Versioning: bump when fields are appended; zero-initialize new structs.   */
+/* -------------------------------------------------------------------------- */
+
+#define DISKATLAS_SCAN_OPTIONS_STRUCT_VERSION 1u
+#define DISKATLAS_FILE_NODE_STRUCT_VERSION 1u
+#define DISKATLAS_SCAN_PROGRESS_STRUCT_VERSION 1u
+#define DISKATLAS_SCAN_RESULTS_VIEW_STRUCT_VERSION 1u
+
+/* -------------------------------------------------------------------------- */
+/* scan_options_t — forward-compatible options (extend with new trailing fields,
+ * bump struct_version in a future header revision; keep flags for behavior bits). */
+/* -------------------------------------------------------------------------- */
+
+typedef struct scan_options {
+  uint32_t struct_version; /**< Must be DISKATLAS_SCAN_OPTIONS_STRUCT_VERSION. */
+  uint32_t flags;          /**< Bitmask; see DISKATLAS_SCAN_OPTION_*. */
+  uint32_t max_depth;      /**< 0 = unlimited directory depth. */
+  uint32_t io_threads;     /**< Hint for parallel directory reads; 0 = library default. */
+  uint64_t reserved_u64[2];
+  void *reserved_ptr;
+} scan_options_t;
+
+#define DISKATLAS_SCAN_OPTION_FOLLOW_SYMLINKS (1u << 0)
+#define DISKATLAS_SCAN_OPTION_INCLUDE_HIDDEN (1u << 1)
+
+/* -------------------------------------------------------------------------- */
+/* scan_result_t — incomplete / opaque; only scan_result_t* may appear in API. */
+/* -------------------------------------------------------------------------- */
+
+typedef struct diskatlas_scan_result scan_result_t;
+
+/* -------------------------------------------------------------------------- */
+/* file_node_t — minimal entry metadata; strings are library-owned for the
+ * lifetime of the scan_result_t they came from (see scan_get_results). */
+/* -------------------------------------------------------------------------- */
+
+typedef struct file_node {
+  uint32_t struct_version; /**< DISKATLAS_FILE_NODE_STRUCT_VERSION. */
+  uint32_t attributes;     /**< DISKATLAS_NODE_* bits. */
+  uint64_t size_bytes;
+  uint64_t mtime_unix_ns; /**< UTC wall time if available; 0 if unknown. */
+  const char *path;       /**< UTF-8, NUL-terminated; not owned by caller. */
+  uint64_t reserved_u64;
+} file_node_t;
+
+#define DISKATLAS_NODE_KIND_MASK (7u << 0)
+#define DISKATLAS_NODE_KIND_UNKNOWN 0u
+#define DISKATLAS_NODE_KIND_FILE 1u
+#define DISKATLAS_NODE_KIND_DIR 2u
+#define DISKATLAS_NODE_KIND_SYMLINK 3u
+
+/* -------------------------------------------------------------------------- */
+/* scan_progress_t — instantaneous snapshot returned by scan_get_progress. */
+/* Safe to poll from UI threads while a scan worker runs. Implementation must
+ * not block other threads indefinitely (short critical sections only).          */
+/* -------------------------------------------------------------------------- */
+
+typedef struct scan_progress {
+  uint32_t struct_version; /**< DISKATLAS_SCAN_PROGRESS_STRUCT_VERSION. */
+  uint32_t phase; /**< Reserved for future phased scans; implementation-defined today. */
+  uint64_t bytes_accounted;
+  uint64_t entry_count_visits;
+  bool is_running;
+  bool is_complete;
+  bool is_cancel_requested;
+  bool is_cancel_observed;
+  uint64_t reserved_u64;
+} scan_progress_t;
+
+/* -------------------------------------------------------------------------- */
+/* scan_results_view_t — read-only snapshot from scan_get_results. Valid only
+ * while scan_result_t is alive and after logical completion/cancel settles. */
+/* -------------------------------------------------------------------------- */
+
+typedef struct scan_results_view {
+  uint32_t struct_version; /**< DISKATLAS_SCAN_RESULTS_VIEW_STRUCT_VERSION. */
+  uint32_t reserved_u32;
+  const file_node_t *nodes;
+  size_t count;
+  uint64_t reserved_u64;
+} scan_results_view_t;
+
+/* -------------------------------------------------------------------------- */
+/* Lifecycle & threading contract (informative)                                */
+/* - scan_start: allocates a scan_result_t; begins work asynchronously unless
+ *   specified otherwise in a future option flag.
+ * - scan_cancel: thread-safe cancellation request; idempotent when complete.
+ * - scan_get_progress / scan_get_results: callable concurrently from observers;
+ *   return atomically consistent snapshots relative to implementation locks.
+ * - scan_result_free: joins workers, frees result; MUST NOT be concurrent with
+ *   other calls using the same pointer; call exactly once after last use.
+ * - path: UTF-8; native path separators per OS conventions. */
+/* -------------------------------------------------------------------------- */
+
+DISKATLAS_API scan_result_t *scan_start(const char *path,
+                                        const scan_options_t *options);
+
+DISKATLAS_API void scan_cancel(scan_result_t *result);
+
+DISKATLAS_API scan_progress_t scan_get_progress(scan_result_t *result);
+
+DISKATLAS_API scan_results_view_t scan_get_results(scan_result_t *result);
+
+DISKATLAS_API void scan_result_free(scan_result_t *result);
 
 #ifdef __cplusplus
 }
