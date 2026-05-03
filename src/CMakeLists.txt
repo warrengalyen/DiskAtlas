@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18)
 
 project(diskatlas
   VERSION 0.1.0
-  DESCRIPTION "Disk space analyzer - DiskAtlas"
+  DESCRIPTION "Disk space analyzer — DiskAtlas (Win32 GUI + core DLL)"
   LANGUAGES C
 )
 
@@ -14,7 +14,6 @@ set(CMAKE_C_EXTENSIONS OFF)
 set(DISKATLAS_BIN_DIR "${CMAKE_SOURCE_DIR}/../bin")
 file(MAKE_DIRECTORY "${DISKATLAS_BIN_DIR}")
 
-# Executable: runtime only (.exe).
 function(diskatlas_set_exe_bin_output target)
   set_target_properties(${target} PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${DISKATLAS_BIN_DIR}"
@@ -28,8 +27,6 @@ function(diskatlas_set_exe_bin_output target)
   endif()
 endfunction()
 
-# Core SHARED: only ship the loadable module in bin (.dll / .so). Do not mirror the
-# link-time import artifact (Windows: *.dll.a / MSVC *.lib stays under build/).
 function(diskatlas_set_core_shared_bin_output target)
   if(WIN32)
     set_target_properties(${target} PROPERTIES
@@ -56,13 +53,6 @@ function(diskatlas_set_core_shared_bin_output target)
   endif()
 endfunction()
 
-# Prefer GTK3 and transitive deps from .pc as static libs (no GTK DLLs bundled with releases).
-set(PKG_CONFIG_USE_STATIC_LIBS ON)
-
-find_package(PkgConfig REQUIRED)
-# With PKG_CONFIG_USE_STATIC_LIBS=ON, pkg-config resolves static deps (CMake 4.x: no separate STATIC token here).
-pkg_check_modules(GTK3 REQUIRED IMPORTED_TARGET gtk+-3.0)
-
 add_library(diskatlas_core SHARED
   lib/diskatlas.c
   lib/diskatlas_index.c
@@ -84,28 +74,30 @@ if(WIN32)
   set_target_properties(diskatlas_core PROPERTIES PREFIX "")
 endif()
 
-add_executable(diskatlas_gui WIN32 app/main.c)
-set_target_properties(diskatlas_gui PROPERTIES
-  OUTPUT_NAME diskatlas
-)
-
-diskatlas_set_core_shared_bin_output(diskatlas_core)
-diskatlas_set_exe_bin_output(diskatlas_gui)
-
-target_include_directories(diskatlas_gui PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
-
-# MinGW: static archives pull circular refs; MSVC link.exe ignores GNU link-group flags.
-if(WIN32 AND NOT MSVC)
-  target_link_libraries(diskatlas_gui PRIVATE
-    -Wl,--start-group
-    diskatlas_core
-    PkgConfig::GTK3
-    -Wl,--end-group
+if(WIN32)
+  add_executable(diskatlas_gui WIN32 app/main.c)
+  set_target_properties(diskatlas_gui PROPERTIES
+    OUTPUT_NAME diskatlas
   )
-else()
-  target_link_libraries(diskatlas_gui PRIVATE diskatlas_core PkgConfig::GTK3)
-endif()
 
-if(MINGW)
-  target_link_options(diskatlas_gui PRIVATE -mwindows)
+  diskatlas_set_core_shared_bin_output(diskatlas_core)
+  diskatlas_set_exe_bin_output(diskatlas_gui)
+
+  target_include_directories(diskatlas_gui PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+  target_compile_definitions(diskatlas_gui PRIVATE UNICODE _UNICODE)
+  target_link_libraries(diskatlas_gui PRIVATE
+    diskatlas_core
+    comctl32
+    shell32
+    user32
+    gdi32
+    ole32
+    uuid
+  )
+
+  if(MINGW)
+    target_link_options(diskatlas_gui PRIVATE -mwindows)
+  endif()
+else()
+  diskatlas_set_core_shared_bin_output(diskatlas_core)
 endif()
