@@ -65,6 +65,7 @@ pkg_check_modules(GTK3 REQUIRED IMPORTED_TARGET gtk+-3.0)
 
 add_library(diskatlas_core SHARED
   lib/diskatlas.c
+  lib/diskatlas_index.c
 )
 target_include_directories(diskatlas_core
   PUBLIC

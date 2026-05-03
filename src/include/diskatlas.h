@@ -130,6 +130,62 @@ DISKATLAS_API scan_results_view_t scan_get_results(scan_result_t *result);
 
 DISKATLAS_API void scan_result_free(scan_result_t *result);
 
+/* -------------------------------------------------------------------------- */
+/* Contiguous scan index — parent linkage by ID only (tree navigation TBD).  */
+/* All entries live in a single realloc'd array (growth by doubling); no     */
+/* per-node allocations. Implicit node id equals array index [0,count).       */
+/* -------------------------------------------------------------------------- */
+
+#define DISKATLAS_INDEX_STRUCT_VERSION 1u
+/** Sentinel: node has no parent in this index (e.g., logical roots). */
+#define DISKATLAS_INDEX_NO_PARENT (UINT32_MAX)
+
+typedef struct diskatlas_index_entry {
+  file_node_t node;
+  uint32_t parent_id; /**< DISKATLAS_INDEX_NO_PARENT or index of parent. */
+  uint32_t reserved_u32;
+} diskatlas_index_entry_t;
+
+typedef struct diskatlas_index {
+  uint32_t struct_version;
+  diskatlas_index_entry_t *entries; /**< Owned; single contiguous slab. */
+  size_t count;
+  size_t capacity;
+  unsigned char finalized; /**< Non-zero after index_finalize(): no adds. */
+} diskatlas_index_t;
+
+/** Zero-initialize index; allocates no storage yet (see index_add_node growth). */
+DISKATLAS_API void diskatlas_index_init(diskatlas_index_t *idx);
+
+/** Shallow-insert a copy of *node at the end of the slab; assigns id == current count before push.
+ * Paths in file_node_t remain pointers owned by whoever supplied *node's lifetime (e.g. scan blob).
+ * Returns 0 on success, -1 on invalid args / finalized / allocation / bad parent id / overflow.
+ * Sets *out_id when non-NULL (id is uint32_t only if count stays < 4Gi entries). */
+DISKATLAS_API int diskatlas_index_add_node(diskatlas_index_t *idx, const file_node_t *node,
+                                           uint32_t parent_id, uint32_t *out_id);
+
+/** Trims capacity down to count (best-effort realloc) and marks index read-only for adds.
+ * Safe to call more than once. */
+DISKATLAS_API void diskatlas_index_finalize(diskatlas_index_t *idx);
+
+DISKATLAS_API size_t diskatlas_index_count(const diskatlas_index_t *idx);
+
+/** O(1) lookup; NULL if idx NULL or i >= count. */
+DISKATLAS_API const diskatlas_index_entry_t *diskatlas_index_get(const diskatlas_index_t *idx,
+                                                                 size_t i);
+
+/** Frees slab; leaves idx in reusable zero state (calls diskatlas_index_init semantics). */
+DISKATLAS_API void diskatlas_index_clear(diskatlas_index_t *idx);
+
+/* --- Short names mirroring logical index_* API (same linkage as symbols above where used) --- */
+
+DISKATLAS_API void index_init(diskatlas_index_t *idx);
+
+DISKATLAS_API int index_add_node(diskatlas_index_t *idx, const file_node_t *node,
+                                 uint32_t parent_id, uint32_t *out_id);
+
+DISKATLAS_API void index_finalize(diskatlas_index_t *idx);
+
 #ifdef __cplusplus
 }
 #endif
