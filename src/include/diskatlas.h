@@ -109,13 +109,14 @@ typedef struct scan_results_view {
 
 /* -------------------------------------------------------------------------- */
 /* Lifecycle & threading contract (informative)                                */
-/* - scan_start: allocates a scan_result_t; begins work asynchronously unless
- *   specified otherwise in a future option flag.
+/* - scan_start: allocates a scan_result_t; launches a Win32 worker via CreateThread
+ *   and returns immediately while the filesystem scan runs on that thread.
  * - scan_cancel: thread-safe cancellation request; idempotent when complete.
- * - scan_get_progress / scan_get_results: callable concurrently from observers;
- *   return atomically consistent snapshots relative to implementation locks.
- * - scan_result_free: joins workers, frees result; MUST NOT be concurrent with
- *   other calls using the same pointer; call exactly once after last use.
+ * - scan_get_progress / scan_get_results: observable from UI threads via atomics
+ *   and minimal barriers; callers must not tear down buffers until joined in
+ *   scan_result_free.
+ * - scan_result_free: WaitForSingleObject on the worker, then frees result —
+ *   not concurrent with other uses of this pointer after you begin freeing.
  * - path: UTF-8; native path separators per OS conventions. */
 /* -------------------------------------------------------------------------- */
 

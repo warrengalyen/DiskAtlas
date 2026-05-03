@@ -29,6 +29,12 @@ struct diskatlas_scan_result {
   volatile LONG64 bytes_accounted;
   volatile LONG64 entry_visits;
 
+  wchar_t *scan_root_wide; /* Owned; consumed by worker (first stk_push frees later). */
+
+  HANDLE worker;
+
+  scan_options_t options_copy;
+
   wchar_t **stk_paths;
   uint32_t *stk_depths;
   size_t stk_len;
@@ -49,6 +55,14 @@ struct diskatlas_scan_result {
   size_t join_wcap;
 };
 
+static void scan_drive_tree(struct diskatlas_scan_result *r, wchar_t *root_path,
+                             const scan_options_t *opts);
+static DWORD WINAPI diskatlas_worker_main(void *param);
+
+static void scan_join_worker(struct diskatlas_scan_result *r);
+static void scan_free_heap_state(struct diskatlas_scan_result *r);
+static void scan_destroy(struct diskatlas_scan_result *r);
+
 static void da_atomic_add_i64(volatile LONG64 *cell, LONG64 delta) {
   LONG64 d = delta;
   while (d > 0) {
@@ -56,6 +70,11 @@ static void da_atomic_add_i64(volatile LONG64 *cell, LONG64 delta) {
     InterlockedExchangeAdd64(cell, chunk);
     d -= chunk;
   }
+}
+
+static uint64_t da_atomic_load_u64(volatile LONG64 *cell) {
+  /* Reads are coherent with publisher Interlocked increments. */
+  return (uint64_t)InterlockedExchangeAdd64(cell, 0LL);
 }
 
 static wchar_t *wcs_dup(const wchar_t *s) {
@@ -328,13 +347,27 @@ DISKATLAS_API int diskatlas_init(void) {
   return 0;
 }
 
-static void scan_abort_free(struct diskatlas_scan_result *r) {
+static void scan_join_worker(struct diskatlas_scan_result *r) {
+  if (!r || !r->worker) {
+    return;
+  }
+
+  DWORD w = WaitForSingleObject(r->worker, INFINITE);
+  (void)w;
+
+  CloseHandle(r->worker);
+  r->worker = NULL;
+}
+
+static void scan_free_heap_state(struct diskatlas_scan_result *r) {
   if (!r) {
     return;
   }
+
   for (size_t i = 0; i < r->stk_len; i++) {
     free(r->stk_paths[i]);
   }
+
   free(r->stk_paths);
   free(r->stk_depths);
   free(r->path_blob);
@@ -342,16 +375,32 @@ static void scan_abort_free(struct diskatlas_scan_result *r) {
   free(r->nodes);
   free(r->pat_buf);
   free(r->join_buf);
+
+  if (r->scan_root_wide) {
+    free(r->scan_root_wide);
+    r->scan_root_wide = NULL;
+  }
+}
+
+static void scan_destroy(struct diskatlas_scan_result *r) {
+  if (!r) {
+    return;
+  }
+
+  scan_join_worker(r);
+  scan_free_heap_state(r);
   free(r);
 }
 
-static bool scan_drive_tree(struct diskatlas_scan_result *r, wchar_t *root_path,
+static void scan_drive_tree(struct diskatlas_scan_result *r, wchar_t *root_path,
                              const scan_options_t *opts) {
   wchar_t *root_owned = root_path;
   if (!stk_push(r, root_owned, 0)) {
     free(root_owned);
-    return false;
+    r->scan_root_wide = NULL;
+    goto scan_done;
   }
+  r->scan_root_wide = NULL;
   root_owned = NULL;
 
   uint32_t max_depth_req = opts->max_depth;
@@ -365,7 +414,7 @@ static bool scan_drive_tree(struct diskatlas_scan_result *r, wchar_t *root_path,
     wchar_t *dir_path = r->stk_paths[r->stk_len - 1];
     uint32_t depth = r->stk_depths[r->stk_len - 1];
     r->stk_len--;
-    /* ownership transferred */
+
     InterlockedIncrement64(&r->entry_visits);
 
     if (!build_pattern(r, dir_path)) {
@@ -409,7 +458,6 @@ static bool scan_drive_tree(struct diskatlas_scan_result *r, wchar_t *root_path,
       const bool follow = (opts->flags & DISKATLAS_SCAN_OPTION_FOLLOW_SYMLINKS) != 0;
       const bool is_dir = (att & FILE_ATTRIBUTE_DIRECTORY) != 0;
 
-      /* Default: do not traverse reparse points (junctions, symlinks) */
       bool descend = is_dir;
       if (is_reparse && !follow) {
         descend = false;
@@ -418,7 +466,8 @@ static bool scan_drive_tree(struct diskatlas_scan_result *r, wchar_t *root_path,
       if (!record_entry(r, r->join_buf, &fd, is_dir)) {
         FindClose(h);
         free(dir_path);
-        return false;
+        stk_drain_all(r);
+        goto scan_done;
       }
 
       if (descend) {
@@ -429,7 +478,8 @@ static bool scan_drive_tree(struct diskatlas_scan_result *r, wchar_t *root_path,
             free(child_copy);
             FindClose(h);
             free(dir_path);
-            return false;
+            stk_drain_all(r);
+            goto scan_done;
           }
         }
       }
@@ -441,8 +491,15 @@ static bool scan_drive_tree(struct diskatlas_scan_result *r, wchar_t *root_path,
 
 scan_done:
   finalize_paths(r);
+  MemoryBarrier();
   InterlockedExchange(&r->complete, 1);
-  return true;
+}
+
+static DWORD WINAPI diskatlas_worker_main(void *param) {
+  struct diskatlas_scan_result *r = (struct diskatlas_scan_result *)param;
+  wchar_t *root = r->scan_root_wide;
+  scan_drive_tree(r, root, &r->options_copy);
+  return 0;
 }
 
 DISKATLAS_API scan_result_t *scan_start(const char *path, const scan_options_t *options) {
@@ -476,17 +533,21 @@ DISKATLAS_API scan_result_t *scan_start(const char *path, const scan_options_t *
   wchar_t *full = normalize_full_path_w(wrel);
   free(wrel);
   if (!full) {
-    scan_abort_free(r);
+    scan_destroy(r);
     return NULL;
   }
 
-  if (!scan_drive_tree(r, full, opts)) {
-    scan_abort_free(r);
+  memcpy(&r->options_copy, opts, sizeof(scan_options_t));
+  r->scan_root_wide = full;
+
+  HANDLE th = CreateThread(NULL, 0, diskatlas_worker_main, r, 0, NULL);
+  if (!th) {
+    scan_destroy(r);
     return NULL;
   }
 
-  /* root path ownership consumed by stk_push/free inside traversal */
-  return r;
+  r->worker = th;
+  return (scan_result_t *)r;
 }
 
 DISKATLAS_API void scan_cancel(scan_result_t *result) {
@@ -504,8 +565,8 @@ DISKATLAS_API scan_progress_t scan_get_progress(scan_result_t *result) {
     return p;
   }
   struct diskatlas_scan_result *r = (struct diskatlas_scan_result *)result;
-  p.bytes_accounted = (uint64_t)r->bytes_accounted;
-  p.entry_count_visits = (uint64_t)r->entry_visits;
+  p.bytes_accounted = da_atomic_load_u64(&r->bytes_accounted);
+  p.entry_count_visits = da_atomic_load_u64(&r->entry_visits);
 
   LONG c = InterlockedCompareExchange(&r->complete, 0, 0);
   p.is_complete = (c != 0);
@@ -527,9 +588,9 @@ DISKATLAS_API scan_results_view_t scan_get_results(scan_result_t *result) {
   }
   struct diskatlas_scan_result *r = (struct diskatlas_scan_result *)result;
   if (!InterlockedCompareExchange(&r->complete, 0, 0)) {
-    /* Spec: callers should observe completed/canceled state; unfinished scans return empty. */
     return v;
   }
+  MemoryBarrier();
   v.nodes = r->nodes;
   v.count = r->node_count;
   return v;
@@ -539,18 +600,8 @@ DISKATLAS_API void scan_result_free(scan_result_t *result) {
   if (!result) {
     return;
   }
-  struct diskatlas_scan_result *r = (struct diskatlas_scan_result *)result;
-  for (size_t i = 0; i < r->stk_len; i++) {
-    free(r->stk_paths[i]);
-  }
-  free(r->stk_paths);
-  free(r->stk_depths);
-  free(r->path_blob);
-  free(r->path_offs);
-  free(r->nodes);
-  free(r->pat_buf);
-  free(r->join_buf);
-  free(r);
+
+  scan_destroy((struct diskatlas_scan_result *)result);
 }
 
 #else /* !_WIN32 */
