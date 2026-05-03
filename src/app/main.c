@@ -7,17 +7,23 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <commctrl.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
 #include <stdint.h>
+#include <limits.h>
+
+#include "diskatlas.h"
 
 #ifndef ICC_HEADER_CLASS
 #define ICC_HEADER_CLASS 0x00000020
 #endif
-
-#include "diskatlas.h"
+#ifndef TVM_SETEXTENDEDSTYLE
+#define TVM_SETEXTENDEDSTYLE (TV_FIRST + 44)
+#endif
+#ifndef TVS_EX_DOUBLEBUFFER
+#define TVS_EX_DOUBLEBUFFER 0x0004
+#endif
 
 #define DA_IDC_FILETREE 1001
 #define DA_IDC_STATUS 1002
@@ -25,12 +31,17 @@
 #define DA_IDC_SCAN 1004
 #define DA_IDC_CHKMATCHMTIME 1006
 #define DA_IDC_COLHDR 1007
+#define DA_IDC_DISPLAYMAX 1008
+#define DA_IDC_LBLDISPLAYMAX 1009
+/** Space reserved on the checkbox row for the “max list” label + combo (right-aligned). */
+#define DA_DISPLAYMAX_ROW_W 218
 #define DA_TIMER_SCAN 1
 #define DA_TIMER_FILL 2
 #define DA_TIMER_SEARCH_DEBOUNCE 3
 #define DA_TIMER_FILTER_CHUNK 4
 #define DA_TIMER_TREEINSERT 5
-#define DA_TREEINSERT_BATCH 500
+#define DA_TREEINSERT_BATCH 960
+#define DA_TREEINSERT_MS 22
 /** Rows per WM_TIMER tick (filter pass over master indices, keeps pump responsive). */
 #define DA_FILTER_BATCH 4000
 #define DA_SEARCH_DEBOUNCE_MS 200
@@ -69,15 +80,49 @@ typedef struct {
   uint8_t *dupGroupSeen;
   size_t dupGroupSeenCap;
   int colWidth[DA_COL_COUNT];
+  HWND hwndLblDisplayMax;
+  HWND hwndDisplayMaxCb;
+  /** Top-N files shown at root when non-zero (matches combo); 0 = All. */
+  size_t displayMaxEntries;
 } AppState;
+
+/** Keep displayMaxEntries in sync with hwndDisplayMaxCb (default 10000 = index 3). */
+static void SyncDisplayMaxCapFromCombo(AppState *app) {
+  if (app == NULL || app->hwndDisplayMaxCb == NULL) {
+    return;
+  }
+  static const size_t caps[] = {0u, 100u, 1000u, 10000u, 100000u};
+  const int ncaps = (int)(sizeof(caps) / sizeof(caps[0]));
+  int ix = (int)SendMessageW(app->hwndDisplayMaxCb, CB_GETCURSEL, 0, 0);
+  if (ix == CB_ERR || ix < 0 || ix >= ncaps) {
+    ix = 3;
+  }
+  app->displayMaxEntries = caps[ix];
+}
 
 static void FileTree_Clear(AppState *app);
 static void FileTree_BeginRootInsert(HWND hwnd, AppState *app);
+static void FileTree_TreeInsertRedrawRelease(AppState *app);
+static void FileTree_InsertRootsChunk(HWND hwnd, AppState *app);
 
 static void EnableScanButton(AppState *app, BOOL enable) {
   if (app != NULL && app->hwndScan != NULL) {
     EnableWindow(app->hwndScan, enable);
   }
+}
+
+static void DiskAtlas_ApplyDpiAndShell(void) {
+  typedef BOOL(WINAPI * SetProcessDpiAwarenessContextFn)(void *);
+  HMODULE uh = GetModuleHandleW(L"user32.dll");
+  void *perMonitorV2 = (void *)(intptr_t)-4; /* DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 */
+  SetProcessDpiAwarenessContextFn pfn =
+      uh ? (SetProcessDpiAwarenessContextFn)(void *)GetProcAddress(
+               uh, "SetProcessDpiAwarenessContext")
+         : NULL;
+  if (pfn != NULL && pfn(perMonitorV2)) {
+    return;
+  }
+  SetProcessDPIAware();
 }
 
 static char *DupWideToUtf8(const wchar_t *wide) {
@@ -304,6 +349,7 @@ static void FileTree_LoadWidthsFromHeader(AppState *app) {
 
 static void FileTree_PrepareDuringFilter(HWND hwnd, AppState *app) {
   KillTimer(hwnd, DA_TIMER_TREEINSERT);
+  FileTree_TreeInsertRedrawRelease(app);
   FileTree_Clear(app);
   if (app->hwndFileTree != NULL) {
     InvalidateRect(app->hwndFileTree, NULL, TRUE);
@@ -318,11 +364,23 @@ static void FileTree_RebuildRootsIfReady(HWND hwnd, AppState *app) {
   FileTree_BeginRootInsert(hwnd, app);
 }
 
-static size_t FileTree_SourceCount(const AppState *app) {
+static size_t FileTree_SourcePoolCount(const AppState *app) {
   if (app == NULL) {
     return 0;
   }
   return app->filterActive ? app->filteredCount : app->masterCount;
+}
+
+static size_t FileTree_SourceCount(const AppState *app) {
+  if (app == NULL) {
+    return 0;
+  }
+  size_t pool = FileTree_SourcePoolCount(app);
+  size_t cap = app->displayMaxEntries;
+  if (cap == 0) {
+    return pool;
+  }
+  return pool < cap ? pool : cap;
 }
 
 static size_t FileTree_SourceAt(const AppState *app, size_t i) {
@@ -366,6 +424,15 @@ static void FileTree_Clear(AppState *app) {
   }
   app->treeInsertPos = 0;
   FileTree_FreeGroupSeen(app);
+}
+
+static void FileTree_TreeInsertRedrawRelease(AppState *app) {
+  if (app == NULL || app->hwndFileTree == NULL) {
+    return;
+  }
+  SendMessageW(app->hwndFileTree, WM_SETREDRAW, TRUE, 0);
+  RedrawWindow(app->hwndFileTree, NULL, NULL,
+               RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
 }
 
 static void FileTree_InsertFileAt(HWND tv, HTREEITEM parent, size_t nodeIdx,
@@ -440,6 +507,7 @@ static void FileTree_BeginRootInsert(HWND hwnd, AppState *app) {
     return;
   }
   KillTimer(hwnd, DA_TIMER_TREEINSERT);
+  FileTree_TreeInsertRedrawRelease(app);
   FileTree_Clear(app);
   if (app->masterCount == 0) {
     InvalidateRect(app->hwndFileTree, NULL, TRUE);
@@ -452,12 +520,23 @@ static void FileTree_BeginRootInsert(HWND hwnd, AppState *app) {
       MessageBoxW(app->hwnd,
                   L"Could not allocate duplicate-group state for the tree.",
                   L"DiskAtlas", MB_ICONWARNING);
+      RedrawWindow(app->hwndFileTree, NULL, NULL,
+                   RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
       return;
     }
   }
 
   app->treeInsertPos = 0;
-  SetTimer(hwnd, DA_TIMER_TREEINSERT, 12, NULL);
+  if (!SetTimer(hwnd, DA_TIMER_TREEINSERT, DA_TREEINSERT_MS, NULL)) {
+    SendMessageW(app->hwndFileTree, WM_SETREDRAW, TRUE, 0);
+    RedrawWindow(app->hwndFileTree, NULL, NULL,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+    MessageBoxW(app->hwnd, L"Could not schedule tree build (SetTimer failed).", L"DiskAtlas",
+                MB_ICONWARNING);
+    return;
+  }
+  /** Run first chunk immediately so the list is not blank until the first WM_TIMER. */
+  FileTree_InsertRootsChunk(hwnd, app);
 }
 
 static void FileTree_InsertRootsChunk(HWND hwnd, AppState *app) {
@@ -465,6 +544,7 @@ static void FileTree_InsertRootsChunk(HWND hwnd, AppState *app) {
   scan_results_view_t v = scan_get_results(app->scan);
   if (tv == NULL || v.nodes == NULL) {
     KillTimer(hwnd, DA_TIMER_TREEINSERT);
+    FileTree_TreeInsertRedrawRelease(app);
     return;
   }
 
@@ -487,6 +567,7 @@ static void FileTree_InsertRootsChunk(HWND hwnd, AppState *app) {
 
     uint32_t gid = n->duplicate_group_id;
     if (gid >= app->dupGroupSeenCap) {
+      FileTree_InsertFileAt(tv, TVI_ROOT, nid, n->path);
       continue;
     }
     if (app->dupGroupSeen[gid]) {
@@ -505,8 +586,8 @@ static void FileTree_InsertRootsChunk(HWND hwnd, AppState *app) {
 
   if (app->treeInsertPos >= total) {
     KillTimer(hwnd, DA_TIMER_TREEINSERT);
+    FileTree_TreeInsertRedrawRelease(app);
   }
-  InvalidateRect(tv, NULL, TRUE);
 }
 
 static LRESULT FileTree_OnItemExpanding(HWND hwnd, AppState *app, NMTREEVIEWW *nm) {
@@ -541,6 +622,12 @@ static LRESULT FileTree_OnItemExpanding(HWND hwnd, AppState *app, NMTREEVIEWW *n
   }
 
   /** Children are duplicate paths only (index 0 is the root's canonical/original copy). */
+  size_t dupChildCount = (nmem > 1) ? (nmem - 1) : 0;
+  HWND wtv = app->hwndFileTree;
+  BOOL holdPaint = dupChildCount >= 48;
+  if (holdPaint && wtv != NULL) {
+    SendMessageW(wtv, WM_SETREDRAW, FALSE, 0);
+  }
   for (size_t k = 1; k < nmem; k++) {
     size_t ni = mp[k];
     if (ni >= v.count) {
@@ -548,18 +635,14 @@ static LRESULT FileTree_OnItemExpanding(HWND hwnd, AppState *app, NMTREEVIEWW *n
     }
     FileTree_InsertDupMemberAt(app->hwndFileTree, nm->itemNew.hItem, ni, v.nodes[ni].path);
   }
+  if (holdPaint && wtv != NULL) {
+    SendMessageW(wtv, WM_SETREDRAW, TRUE, 0);
+    RedrawWindow(wtv, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+  }
   return 0;
 }
 
-static void FileTree_DrawRowColumns(AppState *app, HDC hdc, HTREEITEM hItem, RECT *rcRow) {
-  TVITEMW ti;
-  memset(&ti, 0, sizeof(ti));
-  ti.hItem = hItem;
-  ti.mask = TVIF_PARAM;
-  if (!TreeView_GetItem(app->hwndFileTree, &ti)) {
-    return;
-  }
-  LONG_PTR lp = ti.lParam;
+static void FileTree_DrawRowColumns(AppState *app, HDC hdc, LONG_PTR lp, RECT *rcRow) {
   scan_results_view_t v = scan_get_results(app->scan);
   if (v.nodes == NULL) {
     return;
@@ -633,9 +716,63 @@ static void FileTree_DrawRowColumns(AppState *app, HDC hdc, HTREEITEM hItem, REC
   DrawTextW(hdc, gr, -1, &rGr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
 
+/**
+ * Builds the sameWide label the tree displays (basename at root vs full path under a dup group)
+ * without calling TreeView_GetItem TVIF_TEXT (expensive on huge result sets during paint).
+ */
+static BOOL FileTree_BuildLabelForEllipsis(HWND tv, AppState *app, HTREEITEM hItem,
+                                           LONG_PTR lp, WCHAR *dst, int dstCch) {
+  if (tv == NULL || app == NULL || dst == NULL || dstCch < 8) {
+    return FALSE;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (v.nodes == NULL) {
+    return FALSE;
+  }
+  dst[0] = L'\0';
+
+  if (lp < 0) {
+    uint32_t gid = (uint32_t)(-lp);
+    size_t nmem = 0;
+    const size_t *mp = diskatlas_dup_group_members(app->scan, gid, &nmem);
+    if (mp == NULL || nmem == 0 || mp[0] >= v.count) {
+      return FALSE;
+    }
+    Utf8BasenameToWideBuf(v.nodes[mp[0]].path, dst, dstCch);
+    return dst[0] != L'\0';
+  }
+
+  if (lp <= 0) {
+    return FALSE;
+  }
+  size_t ni = (size_t)(lp - 1);
+  if (ni >= v.count) {
+    return FALSE;
+  }
+
+  BOOL fullPathDupChild = FALSE;
+  HTREEITEM parent = TreeView_GetNextItem(tv, hItem, TVGN_PARENT);
+  if (parent != NULL) {
+    TVITEMW tp;
+    memset(&tp, 0, sizeof(tp));
+    tp.hItem = parent;
+    tp.mask = TVIF_PARAM;
+    if (TreeView_GetItem(tv, &tp) && tp.lParam < 0) {
+      fullPathDupChild = TRUE;
+    }
+  }
+  if (fullPathDupChild) {
+    Utf8FullPathToWideTrunc(v.nodes[ni].path, dst, dstCch);
+  } else {
+    Utf8BasenameToWideBuf(v.nodes[ni].path, dst, dstCch);
+  }
+  return dst[0] != L'\0';
+}
+
 /** After TreeView paints the label, repaint the name band with ellipsis so text stays within header column 0. */
 static void FileTree_OverpaintEllipsizedName(AppState *app, NMTVCUSTOMDRAW *tvcd,
-                                             HTREEITEM hItem, const RECT *rcRow) {
+                                             HTREEITEM hItem, LONG_PTR lp,
+                                             const RECT *rcRow) {
   HWND tv = app->hwndFileTree;
   HDC hdc = tvcd->nmcd.hdc;
   if (tv == NULL || hdc == NULL || rcRow == NULL) {
@@ -667,13 +804,7 @@ static void FileTree_OverpaintEllipsizedName(AppState *app, NMTVCUSTOMDRAW *tvcd
   }
 
   WCHAR buf[4112];
-  TVITEMW tvi;
-  memset(&tvi, 0, sizeof(tvi));
-  tvi.hItem = hItem;
-  tvi.mask = TVIF_TEXT;
-  tvi.pszText = buf;
-  tvi.cchTextMax = (int)(ARRAYSIZE(buf) - 1);
-  if (!TreeView_GetItem(tv, &tvi)) {
+  if (!FileTree_BuildLabelForEllipsis(tv, app, hItem, lp, buf, ARRAYSIZE(buf))) {
     return;
   }
 
@@ -703,11 +834,8 @@ static void FileTree_OverpaintEllipsizedName(AppState *app, NMTVCUSTOMDRAW *tvcd
   HFONT hf = (HFONT)SendMessageW(tv, WM_GETFONT, 0, 0);
   HFONT hfOld = hf ? (HFONT)SelectObject(hdc, hf) : NULL;
 
-  HBRUSH br = CreateSolidBrush(bk);
-  FillRect(hdc, &rcErase, br ? br : (HBRUSH)GetStockObject(WHITE_BRUSH));
-  if (br) {
-    DeleteObject(br);
-  }
+  SetDCBrushColor(hdc, bk);
+  FillRect(hdc, &rcErase, (HBRUSH)GetStockObject(DC_BRUSH));
 
   SetBkMode(hdc, TRANSPARENT);
   SetTextColor(hdc, tx);
@@ -738,8 +866,15 @@ static LRESULT FileTree_OnCustomDraw(AppState *app, NMTVCUSTOMDRAW *tvcd) {
         return CDRF_DODEFAULT;
       }
     }
-    FileTree_OverpaintEllipsizedName(app, tvcd, hItem, &rcRow);
-    FileTree_DrawRowColumns(app, tvcd->nmcd.hdc, hItem, &rcRow);
+    TVITEMW tig;
+    memset(&tig, 0, sizeof(tig));
+    tig.hItem = hItem;
+    tig.mask = TVIF_PARAM;
+    if (!TreeView_GetItem(app->hwndFileTree, &tig)) {
+      return CDRF_DODEFAULT;
+    }
+    FileTree_OverpaintEllipsizedName(app, tvcd, hItem, tig.lParam, &rcRow);
+    FileTree_DrawRowColumns(app, tvcd->nmcd.hdc, tig.lParam, &rcRow);
     return CDRF_DODEFAULT;
   }
   default:
@@ -757,8 +892,11 @@ static void SetScanDoneStatus(AppState *app) {
 
   scan_results_view_t v = scan_get_results(app->scan);
   unsigned long long ntot = v.count <= (size_t)ULLONG_MAX ? (unsigned long long)v.count : 0;
-  unsigned long long nshow =
-      app->filterActive ? (unsigned long long)app->filteredCount : ntot;
+  size_t pool = FileTree_SourcePoolCount(app);
+  size_t visible = FileTree_SourceCount(app);
+  unsigned long long nshow_tree = visible <= (size_t)ULLONG_MAX ? (unsigned long long)visible : 0;
+  unsigned long long npool_ll = pool <= (size_t)ULLONG_MAX ? (unsigned long long)pool : 0;
+  BOOL capped = pool > visible;
 
   uint32_t dgc = diskatlas_dup_max_group_id(app->scan);
 
@@ -770,20 +908,42 @@ static void SetScanDoneStatus(AppState *app) {
              pr.is_cancel_observed ? L", cancelled scan" : L"",
              (unsigned int)dgc);
   } else if (app->filterActive) {
-    swprintf(line, ARRAYSIZE(line),
-             L"Showing %llu of %llu (by size)%s — %llu bytes — dup groups %u.",
-             nshow,
-             ntot,
-             pr.is_cancel_observed ? L", cancelled" : L"",
-             (unsigned long long)pr.bytes_accounted,
-             (unsigned int)dgc);
+    if (capped) {
+      swprintf(line, ARRAYSIZE(line),
+               L"Showing %llu of %llu matches at root (sorted by size; list cap)%s — %llu bytes — dup "
+               L"groups %u.",
+               nshow_tree,
+               npool_ll,
+               pr.is_cancel_observed ? L", cancelled" : L"",
+               (unsigned long long)pr.bytes_accounted,
+               (unsigned int)dgc);
+    } else {
+      swprintf(line, ARRAYSIZE(line),
+               L"Showing %llu of %llu (by size)%s — %llu bytes — dup groups %u.",
+               nshow_tree,
+               ntot,
+               pr.is_cancel_observed ? L", cancelled" : L"",
+               (unsigned long long)pr.bytes_accounted,
+               (unsigned int)dgc);
+    }
   } else {
-    swprintf(line, ARRAYSIZE(line),
-             L"Done — %llu entries (by size)%s — %llu bytes accounted — dup groups %u.",
-             ntot,
-             pr.is_cancel_observed ? L", cancelled" : L"",
-             (unsigned long long)pr.bytes_accounted,
-             (unsigned int)dgc);
+    if (capped) {
+      swprintf(line, ARRAYSIZE(line),
+               L"Done — showing %llu of %llu entries at root (list cap)%s — %llu bytes accounted — dup "
+               L"groups %u.",
+               nshow_tree,
+               npool_ll,
+               pr.is_cancel_observed ? L", cancelled" : L"",
+               (unsigned long long)pr.bytes_accounted,
+               (unsigned int)dgc);
+    } else {
+      swprintf(line, ARRAYSIZE(line),
+               L"Done — %llu entries (by size)%s — %llu bytes accounted — dup groups %u.",
+               ntot,
+               pr.is_cancel_observed ? L", cancelled" : L"",
+               (unsigned long long)pr.bytes_accounted,
+               (unsigned int)dgc);
+    }
   }
   SendMessageW(app->hwndStatus, WM_SETTEXT, 0, (LPARAM)line);
 }
@@ -906,9 +1066,6 @@ static void FilterChunkTimer(HWND hwnd, AppState *app) {
     app->filteredCount = nf + 1;
   }
 
-  if (app->hwndFileTree != NULL) {
-    InvalidateRect(app->hwndFileTree, NULL, TRUE);
-  }
   SetScanDoneStatus(app);
 
   if (app->filterScanPos >= app->masterCount) {
@@ -926,6 +1083,7 @@ static void BeginPopulateList(HWND hwnd, AppState *app) {
   KillTimer(hwnd, DA_TIMER_FILL);
   KillTimer(hwnd, DA_TIMER_FILTER_CHUNK);
   KillTimer(hwnd, DA_TIMER_TREEINSERT);
+  FileTree_TreeInsertRedrawRelease(app);
   FileTree_Clear(app);
 
   free(app->masterIndices);
@@ -1065,6 +1223,7 @@ static BOOL StartScan(HWND hwnd, AppState *app) {
   KillTimer(hwnd, DA_TIMER_SEARCH_DEBOUNCE);
   KillTimer(hwnd, DA_TIMER_TREEINSERT);
 
+  FileTree_TreeInsertRedrawRelease(app);
   FileTree_Clear(app);
   if (app->hwndFileTree != NULL) {
     InvalidateRect(app->hwndFileTree, NULL, TRUE);
@@ -1123,7 +1282,8 @@ static AppState *AppFromHwnd(HWND hwnd) {
 static void LayoutClients(HWND hwnd) {
   AppState *app = AppFromHwnd(hwnd);
   if (!app || !app->hwndScan || !app->hwndChkDupMtime || !app->hwndSearch ||
-      !app->hwndColHeader || !app->hwndFileTree || !app->hwndStatus) {
+      !app->hwndColHeader || !app->hwndFileTree || !app->hwndStatus ||
+      !app->hwndLblDisplayMax || !app->hwndDisplayMaxCb) {
     return;
   }
 
@@ -1144,16 +1304,32 @@ static void LayoutClients(HWND hwnd) {
 
   const int btnX = margin;
   const int searchX = btnX + btnW + gap;
-  const int searchW =
-      cw - margin - searchX > 48 ? cw - margin - searchX : (cw > searchX + 48 ? 48 : 0);
+  int searchW = cw - margin - searchX - DA_DISPLAYMAX_ROW_W;
+  if (searchW < 96)
+    searchW = cw > searchX + margin ? cw - margin - searchX : 96;
 
   if (totalH < searchH + chkRowH + statusH + DA_COLHDR_H + 16) {
     MoveWindow(app->hwndScan, btnX, margin, btnW, searchH, TRUE);
     MoveWindow(app->hwndSearch, searchX, margin, searchW > 0 ? searchW : (cw - searchX),
                searchH, TRUE);
-    MoveWindow(app->hwndChkDupMtime, margin, margin + searchH + 2,
-               cw > 8 ? cw - margin * 2 : 120, chkRowH, TRUE);
-    int listTop = margin + searchH + 2 + chkRowH + 2;
+    int listTopBelowChk = margin + searchH + 2 + chkRowH + 2;
+    int chkW = cw - 2 * margin - DA_DISPLAYMAX_ROW_W - 8;
+    if (chkW < 80)
+      chkW = 80;
+    MoveWindow(app->hwndChkDupMtime, margin, margin + searchH + 2, chkW, chkRowH, TRUE);
+    int lblW = 50;
+    int panelLeft =
+        cw > margin + lblW + 80 ? cw - margin - DA_DISPLAYMAX_ROW_W : margin + chkW + 6;
+    if (panelLeft + DA_DISPLAYMAX_ROW_W > cw - margin)
+      panelLeft = (cw > margin + DA_DISPLAYMAX_ROW_W + 8)
+                      ? cw - margin - DA_DISPLAYMAX_ROW_W
+                      : margin;
+    MoveWindow(app->hwndLblDisplayMax, panelLeft, margin + searchH + 2, lblW, chkRowH, TRUE);
+    MoveWindow(app->hwndDisplayMaxCb, panelLeft + lblW, margin + searchH + 2,
+               cw > panelLeft + lblW + margin ? cw - margin - panelLeft - lblW
+                                              : cw - panelLeft - margin,
+               chkRowH + 140, TRUE);
+    int listTop = listTopBelowChk;
     int bodyH = totalH - listTop - statusH;
     if (bodyH < 0)
       bodyH = 0;
@@ -1173,7 +1349,25 @@ static void LayoutClients(HWND hwnd) {
   MoveWindow(app->hwndSearch, searchX, margin,
              searchW > 0 ? searchW : (cw > searchX + margin ? cw - searchX - margin : 48),
              searchH, TRUE);
-  MoveWindow(app->hwndChkDupMtime, margin, row1Y, cw - 2 * margin, chkRowH, TRUE);
+  int chkWfull = cw - 2 * margin - DA_DISPLAYMAX_ROW_W - 8;
+  if (chkWfull < 140)
+    chkWfull = 140;
+  MoveWindow(app->hwndChkDupMtime, margin, row1Y, chkWfull, chkRowH, TRUE);
+
+  const int lblW = 52;
+  const int cbWmin = DA_DISPLAYMAX_ROW_W - lblW - 4;
+  int panelLeft =
+      cw >= margin + lblW + cbWmin + DA_DISPLAYMAX_ROW_W / 4
+          ? cw - margin - DA_DISPLAYMAX_ROW_W
+          : margin + chkWfull + gap;
+  if (panelLeft + lblW + 70 > cw - margin)
+    panelLeft =
+        cw > DA_DISPLAYMAX_ROW_W + margin * 2 ? cw - margin - DA_DISPLAYMAX_ROW_W : margin;
+  MoveWindow(app->hwndLblDisplayMax, panelLeft, row1Y, lblW, chkRowH, TRUE);
+  MoveWindow(app->hwndDisplayMaxCb, panelLeft + lblW, row1Y,
+             cw >= panelLeft + lblW + cbWmin + margin ? cw - margin - panelLeft - lblW
+                                                      : cw - panelLeft - margin - 8,
+             chkRowH + 160, TRUE);
 
   int listTop = row1Y + chkRowH + gap;
   int bodyH = totalH - listTop - statusH;
@@ -1198,12 +1392,6 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     app->hwnd = hwnd;
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)(void *)app);
 
-    INITCOMMONCONTROLSEX icc;
-    icc.dwSize = sizeof(icc);
-    icc.dwICC =
-        ICC_STANDARD_CLASSES | ICC_TREEVIEW_CLASSES | ICC_HEADER_CLASS;
-    InitCommonControlsEx(&icc);
-
     RECT rc;
     GetClientRect(hwnd, &rc);
 
@@ -1223,7 +1411,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
     HWND hSearch =
         CreateWindowExW(
-            WS_EX_CLIENTEDGE, L"EDIT", L"",
+            WS_EX_STATICEDGE, L"EDIT", L"",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 96, 4,
             rc.right - rc.left - 96 - 4, 24, hwnd, (HMENU)(UINT_PTR)DA_IDC_SEARCH,
             GetModuleHandleW(NULL), NULL);
@@ -1231,8 +1419,22 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     HWND hChk = CreateWindowExW(
         0, L"BUTTON", L"Distinguish duplicates by file mtime",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-        8, 34, rc.right - rc.left - 16, 22, hwnd,
+        8, 34, rc.right - rc.left - 16 - DA_DISPLAYMAX_ROW_W, 22, hwnd,
         (HMENU)(UINT_PTR)DA_IDC_CHKMATCHMTIME, GetModuleHandleW(NULL), NULL);
+
+    HWND hLblMax =
+        CreateWindowExW(0, L"STATIC", L"Max list:",
+                        WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX, rc.right - 8 - DA_DISPLAYMAX_ROW_W,
+                        34, 52, 22, hwnd, (HMENU)(UINT_PTR)DA_IDC_LBLDISPLAYMAX,
+                        GetModuleHandleW(NULL), NULL);
+
+    HWND hMaxCb =
+        CreateWindowExW(0, L"COMBOBOX", L"",
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS |
+                            WS_VSCROLL,
+                        rc.right - 8 - DA_DISPLAYMAX_ROW_W + 54, 33,
+                        DA_DISPLAYMAX_ROW_W - 54 - 4, 200, hwnd,
+                        (HMENU)(UINT_PTR)DA_IDC_DISPLAYMAX, GetModuleHandleW(NULL), NULL);
 
     HWND hHdr =
         CreateWindowExW(0, WC_HEADERW, L"",
@@ -1241,9 +1443,10 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                         (HMENU)(UINT_PTR)DA_IDC_COLHDR, GetModuleHandleW(NULL), NULL);
 
     HWND hTree = CreateWindowExW(
-        WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"",
+        WS_EX_STATICEDGE, WC_TREEVIEWW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_LINESATROOT | TVS_HASLINES |
-            TVS_HASBUTTONS | TVS_SHOWSELALWAYS | TVS_INFOTIP,
+            TVS_HASBUTTONS | TVS_SHOWSELALWAYS | TVS_INFOTIP | TVS_FULLROWSELECT |
+            TVS_TRACKSELECT,
         margin0, listTop0 + DA_COLHDR_H + 2, innerW, 200, hwnd,
         (HMENU)(UINT_PTR)DA_IDC_FILETREE, GetModuleHandleW(NULL), NULL);
 
@@ -1259,12 +1462,25 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     app->hwndColHeader = hHdr;
     app->hwndFileTree = hTree;
     app->hwndStatus = hStat;
+    app->hwndLblDisplayMax = hLblMax;
+    app->hwndDisplayMaxCb = hMaxCb;
+
+    SendMessageW(hMaxCb, CB_ADDSTRING, 0, (LPARAM)L"All");
+    SendMessageW(hMaxCb, CB_ADDSTRING, 0, (LPARAM)L"100");
+    SendMessageW(hMaxCb, CB_ADDSTRING, 0, (LPARAM)L"1000");
+    SendMessageW(hMaxCb, CB_ADDSTRING, 0, (LPARAM)L"10000");
+    SendMessageW(hMaxCb, CB_ADDSTRING, 0, (LPARAM)L"100000");
+    SendMessageW(hMaxCb, CB_SETCURSEL, 3, 0);
+    SyncDisplayMaxCapFromCombo(app);
 
     int cw0[] = {360, 118, 94, 72};
     for (int ci = 0; ci < DA_COL_COUNT; ++ci) {
       app->colWidth[ci] = cw0[ci];
     }
     FileTree_HeaderInit(hHdr, app);
+
+    SendMessageW(hTree, TVM_SETEXTENDEDSTYLE, TVS_EX_DOUBLEBUFFER,
+                 TVS_EX_DOUBLEBUFFER);
 
     HFONT guiFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
     SendMessageW(hScan, WM_SETFONT, (WPARAM)guiFont, TRUE);
@@ -1273,6 +1489,8 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     SendMessageW(hHdr, WM_SETFONT, (WPARAM)guiFont, TRUE);
     SendMessageW(hTree, WM_SETFONT, (WPARAM)guiFont, TRUE);
     SendMessageW(hStat, WM_SETFONT, (WPARAM)guiFont, TRUE);
+    SendMessageW(hLblMax, WM_SETFONT, (WPARAM)guiFont, TRUE);
+    SendMessageW(hMaxCb, WM_SETFONT, (WPARAM)guiFont, TRUE);
 
     LayoutClients(hwnd);
 
@@ -1295,6 +1513,13 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         LOWORD(wParam) == DA_IDC_SEARCH) {
       KillTimer(hwnd, DA_TIMER_SEARCH_DEBOUNCE);
       SetTimer(hwnd, DA_TIMER_SEARCH_DEBOUNCE, DA_SEARCH_DEBOUNCE_MS, NULL);
+      return 0;
+    }
+    if (app != NULL && HIWORD(wParam) == CBN_SELCHANGE &&
+        LOWORD(wParam) == DA_IDC_DISPLAYMAX) {
+      SyncDisplayMaxCapFromCombo(app);
+      FileTree_RebuildRootsIfReady(hwnd, app);
+      SetScanDoneStatus(app);
       return 0;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
@@ -1423,7 +1648,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE prev, LPSTR cmd_line, int show) {
   (void)prev;
   (void)cmd_line;
 
-  SetProcessDPIAware();
+  DiskAtlas_ApplyDpiAndShell();
 
   if (diskatlas_init() != 0) {
     MessageBoxW(NULL, L"diskatlas_init failed", L"DiskAtlas", MB_ICONERROR);
@@ -1466,7 +1691,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE prev, LPSTR cmd_line, int show) {
   iccx.dwSize = sizeof(iccx);
   iccx.dwICC =
       ICC_LISTVIEW_CLASSES | ICC_STANDARD_CLASSES | ICC_TAB_CLASSES |
-      ICC_BAR_CLASSES | ICC_TREEVIEW_CLASSES;
+      ICC_BAR_CLASSES | ICC_TREEVIEW_CLASSES | ICC_HEADER_CLASS;
   InitCommonControlsEx(&iccx);
 
   WNDCLASSEXW wc;
@@ -1476,6 +1701,8 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE prev, LPSTR cmd_line, int show) {
   wc.lpfnWndProc = MainWndProc;
   wc.hInstance = hi;
   wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+  wc.hIcon = LoadIconW(NULL, IDI_APPLICATION);
+  wc.hIconSm = LoadIconW(NULL, IDI_APPLICATION);
   wc.hbrBackground = (HBRUSH)(ULONG_PTR)(COLOR_WINDOW + 1);
   wc.lpszClassName = L"DiskAtlasWndClass";
 

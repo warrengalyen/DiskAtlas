@@ -1,0 +1,5 @@
+/* Embeds COMCTL32 v6 dependency + DPI / compatibility from diskatlas.manifest. */
+
+#include <windows.h>
+
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "diskatlas.manifest"

@@ -75,7 +75,7 @@ if(WIN32)
 endif()
 
 if(WIN32)
-  add_executable(diskatlas_gui WIN32 app/main.c)
+  add_executable(diskatlas_gui WIN32 app/main.c app/diskatlas.rc)
   set_target_properties(diskatlas_gui PROPERTIES
     OUTPUT_NAME diskatlas
   )
