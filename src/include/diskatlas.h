@@ -29,7 +29,7 @@ DISKATLAS_API int diskatlas_init(void);
 /* -------------------------------------------------------------------------- */
 
 #define DISKATLAS_SCAN_OPTIONS_STRUCT_VERSION 1u
-#define DISKATLAS_FILE_NODE_STRUCT_VERSION 1u
+#define DISKATLAS_FILE_NODE_STRUCT_VERSION 2u
 #define DISKATLAS_SCAN_PROGRESS_STRUCT_VERSION 1u
 #define DISKATLAS_SCAN_RESULTS_VIEW_STRUCT_VERSION 1u
 
@@ -49,6 +49,8 @@ typedef struct scan_options {
 
 #define DISKATLAS_SCAN_OPTION_FOLLOW_SYMLINKS (1u << 0)
 #define DISKATLAS_SCAN_OPTION_INCLUDE_HIDDEN (1u << 1)
+/** Duplicate grouping includes exact mtime (nanoseconds); same size/name still split if mtimes differ. */
+#define DISKATLAS_SCAN_OPTION_DUPLICATE_USE_MTIME (1u << 2)
 
 /* -------------------------------------------------------------------------- */
 /* scan_result_t — incomplete / opaque; only scan_result_t* may appear in API. */
@@ -63,12 +65,17 @@ typedef struct diskatlas_scan_result scan_result_t;
 
 typedef struct file_node {
   uint32_t struct_version; /**< DISKATLAS_FILE_NODE_STRUCT_VERSION. */
-  uint32_t attributes;     /**< DISKATLAS_NODE_* bits. */
+  uint32_t attributes;      /**< DISKATLAS_NODE_* bits. */
   uint64_t size_bytes;
   uint64_t mtime_unix_ns; /**< UTC wall time if available; 0 if unknown. */
   const char *path;       /**< UTF-8, NUL-terminated; not owned by caller. */
-  uint64_t reserved_u64;
+  /** 0 = not in any multi-file duplicate cluster; otherwise shared id among same-cluster files. */
+  uint32_t duplicate_group_id;
+  uint32_t reserved_u32;
 } file_node_t;
+
+/** Sentinel: file is unique or unmatched for duplicate clustering. */
+#define DISKATLAS_DUPLICATE_GROUP_NONE (0u)
 
 #define DISKATLAS_NODE_KIND_MASK (7u << 0)
 #define DISKATLAS_NODE_KIND_UNKNOWN 0u
@@ -130,6 +137,18 @@ DISKATLAS_API scan_progress_t scan_get_progress(scan_result_t *result);
 DISKATLAS_API scan_results_view_t scan_get_results(scan_result_t *result);
 
 DISKATLAS_API void scan_result_free(scan_result_t *result);
+
+/** Highest assigned duplicate_group_id (>0); 0 when no duplicates. Valid after scan completes. */
+DISKATLAS_API uint32_t diskatlas_dup_max_group_id(const scan_result_t *result);
+
+/** Count of file_node indices stored for this group id (members >= 2 per group by construction). */
+DISKATLAS_API size_t diskatlas_dup_group_member_count(const scan_result_t *result,
+                                                      uint32_t group_id);
+
+/** Read-only contiguous member list: node indices into scan_get_results().nodes. NULL if invalid. */
+DISKATLAS_API const size_t *diskatlas_dup_group_members(const scan_result_t *result,
+                                                         uint32_t group_id,
+                                                         size_t *out_count);
 
 /* -------------------------------------------------------------------------- */
 /* Contiguous scan index — parent linkage by ID only (tree navigation TBD).  */
