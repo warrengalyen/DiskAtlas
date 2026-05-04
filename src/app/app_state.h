@@ -29,6 +29,9 @@ typedef struct AppState {
   GtkWidget *chk_dup_mtime;
   GtkWidget *combo_display_max;
   GtkWidget *tree;
+  /** Centered caption above treemap (“Top level: …”). */
+  GtkWidget *treemap_panel_title;
+  GtkWidget *treemap;
   GtkTreeStore *store;
   GtkWidget *status;
   GtkWidget *stat_sel_val;

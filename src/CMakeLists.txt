@@ -108,6 +108,7 @@ if(DISKATLAS_GTK3_FOUND)
     app/app.c
     app/ui_window.c
     app/file_tree_model.c
+    app/treemap_widget.c
     app/scan_controller.c
     app/format_text.c
     app/volumes.c

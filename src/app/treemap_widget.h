@@ -1,0 +1,35 @@
+#ifndef TREEMAP_WIDGET_H
+#define TREEMAP_WIDGET_H
+
+#include <gtk/gtk.h>
+
+#include "diskatlas.h"
+
+#define TREEMAP_TYPE_WIDGET (treemap_widget_get_type())
+G_DECLARE_FINAL_TYPE(TreemapWidget, treemap_widget, TREEMAP, WIDGET, GtkDrawingArea)
+
+/** One leaf tile (file or empty directory) packed with zero gap. */
+typedef struct {
+  double x, y, w, h;
+  size_t node_index;
+} treemap_rect_t;
+
+GtkWidget *treemap_widget_new(void);
+
+/**
+ * Rebuilds directory tree from paths under @p root_utf8, runs slice-and-dice layout into @p rects,
+ * then queues redraw. @p nodes is borrowed until the next set_data or widget destroy (same lifetime
+ * as scan_results_view_t from the scan).
+ */
+void treemap_widget_set_data(TreemapWidget *widget, const char *root_utf8, const file_node_t *nodes,
+                             size_t count);
+
+void treemap_widget_set_hover_callback(TreemapWidget *w,
+                                       void (*cb)(GtkWidget *widget, gint64 scan_index, gpointer data),
+                                       gpointer data);
+
+void treemap_widget_set_selected_callback(TreemapWidget *w,
+                                          void (*cb)(GtkWidget *widget, gint64 scan_index, gpointer data),
+                                          gpointer data);
+
+#endif

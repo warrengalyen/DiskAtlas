@@ -6,6 +6,7 @@
 #include <glib.h>
 #include <gtk/gtk.h>
 
+#include "treemap_widget.h"
 #include "diskatlas.h"
 #include "file_tree_model.h"
 #include "format_text.h"
@@ -31,6 +32,97 @@ static int cmp_index_by_size_desc(const void *pa, const void *pb) {
 static gboolean on_timer_fill_chunk(gpointer data);
 static gboolean on_timer_filter_chunk(gpointer data);
 static gboolean on_timer_tree_chunk(gpointer data);
+
+static void da_treemap_panel_sync_title(AppState *app) {
+  if (app == NULL || app->treemap_panel_title == NULL) {
+    return;
+  }
+  if (app->scan_root_utf8 != NULL && app->scan_root_utf8[0] != '\0') {
+    char buf[768];
+    snprintf(buf, sizeof buf, "Top level: %s", app->scan_root_utf8);
+    gtk_label_set_text(GTK_LABEL(app->treemap_panel_title), buf);
+    gtk_widget_set_tooltip_text(app->treemap_panel_title, app->scan_root_utf8);
+  } else {
+    gtk_label_set_text(GTK_LABEL(app->treemap_panel_title), "Top level: —");
+    gtk_widget_set_tooltip_text(app->treemap_panel_title, NULL);
+  }
+}
+
+static void da_refresh_treemap(AppState *app) {
+  da_treemap_panel_sync_title(app);
+  if (app != NULL && app->treemap != NULL && TREEMAP_IS_WIDGET(app->treemap)) {
+    scan_results_view_t v = {0};
+    if (app->scan != NULL) {
+      v = scan_get_results(app->scan);
+    }
+    treemap_widget_set_data(TREEMAP_WIDGET(app->treemap), app->scan_root_utf8 != NULL ? app->scan_root_utf8 : "",
+                            v.nodes, v.count);
+  }
+}
+
+static void on_treemap_selected(GtkWidget *treemap, gint64 scan_index, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  (void)treemap;
+  if (app == NULL || app->stat_sel_val == NULL) {
+    return;
+  }
+  if (scan_index == -2) {
+    gtk_label_set_text(GTK_LABEL(app->stat_sel_val), "Other (merged entries beyond treemap cap)");
+    return;
+  }
+  if (scan_index < 0 || app->scan == NULL) {
+    gtk_label_set_text(GTK_LABEL(app->stat_sel_val), "—");
+    return;
+  }
+  {
+    scan_results_view_t v = scan_get_results(app->scan);
+    size_t ix = (size_t)scan_index;
+    char line[1024];
+    char sz[80];
+    if (v.nodes == NULL || ix >= v.count) {
+      gtk_label_set_text(GTK_LABEL(app->stat_sel_val), "—");
+      return;
+    }
+    da_format_bytes(v.nodes[ix].size_bytes, sz, sizeof sz);
+    snprintf(line, sizeof line, "%s  (%s)", v.nodes[ix].path != NULL ? v.nodes[ix].path : "", sz);
+    gtk_label_set_text(GTK_LABEL(app->stat_sel_val), line);
+  }
+}
+
+static void on_treemap_hover(GtkWidget *treemap, gint64 scan_index, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  (void)treemap;
+  if (app == NULL || app->status == NULL) {
+    return;
+  }
+  if (scan_index == -1) {
+    scan_controller_restore_scan_status(app);
+    return;
+  }
+  if (scan_index == -2) {
+    gtk_label_set_text(GTK_LABEL(app->status),
+                       "Treemap: Other (merged entries beyond treemap tile cap)");
+    return;
+  }
+  if (scan_index < 0 || app->scan == NULL) {
+    scan_controller_restore_scan_status(app);
+    return;
+  }
+  {
+    scan_results_view_t v = scan_get_results(app->scan);
+    size_t ix = (size_t)scan_index;
+    char line[2048];
+    char sz[80];
+    if (v.nodes == NULL || ix >= v.count) {
+      scan_controller_restore_scan_status(app);
+      return;
+    }
+    da_format_bytes(v.nodes[ix].size_bytes, sz, sizeof sz);
+    snprintf(line, sizeof line, "Treemap hover: %s  (%s)",
+             v.nodes[ix].path != NULL ? v.nodes[ix].path : "", sz);
+    gtk_label_set_text(GTK_LABEL(app->status), line);
+  }
+}
 
 static void kill_timer(guint *id) {
   if (*id != 0) {
@@ -157,6 +249,10 @@ static void set_scan_done_status(AppState *app) {
     }
   }
   gtk_label_set_text(GTK_LABEL(app->status), line);
+}
+
+void scan_controller_restore_scan_status(AppState *app) {
+  set_scan_done_status(app);
 }
 
 static void apply_search_filter(AppState *app) {
@@ -316,6 +412,7 @@ static void begin_populate_list(AppState *app) {
   if (v.nodes == NULL || v.count == 0) {
     app->list_populated = TRUE;
     enable_scan_button(app, TRUE);
+    da_refresh_treemap(app);
     return;
   }
 
@@ -387,6 +484,8 @@ static gboolean on_timer_fill_chunk(gpointer data) {
   gboolean more = da_tree_begin_root_insert(app);
   if (more) {
     app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
+  } else {
+    da_refresh_treemap(app);
   }
 
   const gchar *peek = gtk_entry_get_text(GTK_ENTRY(app->search));
@@ -428,6 +527,7 @@ static gboolean on_timer_tree_chunk(gpointer data) {
     return G_SOURCE_CONTINUE;
   }
   kill_timer(&app->timer_tree);
+  da_refresh_treemap(app);
   return G_SOURCE_REMOVE;
 }
 
@@ -452,6 +552,7 @@ static void start_scan(AppState *app) {
 
   kill_all_timers(app);
   da_tree_clear(app);
+  da_refresh_treemap(app);
 
   free(app->master_indices);
   app->master_indices = NULL;
@@ -527,11 +628,14 @@ static void on_file_set(GtkFileChooserButton *b, gpointer user_data) {
   app->scan_root_utf8 = g_strdup(fn);
   g_free(fn);
   scan_controller_refresh_volume_labels(app);
+  da_refresh_treemap(app);
 }
 
 static void on_combo_display_changed(GtkComboBox *cb, gpointer user_data) {
   (void)cb;
-  scan_controller_sync_display_max_combo((AppState *)user_data);
+  AppState *app = (AppState *)user_data;
+  scan_controller_sync_display_max_combo(app);
+  da_refresh_treemap(app);
 }
 
 void scan_controller_sync_display_max_combo(AppState *app) {
@@ -548,6 +652,7 @@ void scan_controller_sync_display_max_combo(AppState *app) {
 }
 
 void scan_controller_refresh_volume_labels(AppState *app) {
+  da_treemap_panel_sync_title(app);
   if (app->scan_root_utf8 == NULL || app->scan_root_utf8[0] == '\0') {
     return;
   }
@@ -600,6 +705,10 @@ void scan_controller_attach(AppState *app) {
   g_signal_connect(app->combo_display_max, "changed", G_CALLBACK(on_combo_display_changed), app);
   g_signal_connect(app->search, "changed", G_CALLBACK(on_search_changed), app);
   g_signal_connect(app->tree, "row-expanded", G_CALLBACK(on_tree_row_expanded), app);
+  if (app->treemap != NULL && TREEMAP_IS_WIDGET(app->treemap)) {
+    treemap_widget_set_selected_callback(TREEMAP_WIDGET(app->treemap), on_treemap_selected, app);
+    treemap_widget_set_hover_callback(TREEMAP_WIDGET(app->treemap), on_treemap_hover, app);
+  }
 }
 
 void scan_controller_detach(AppState *app) {

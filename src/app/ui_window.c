@@ -2,6 +2,7 @@
 
 #include <gtk/gtk.h>
 
+#include "treemap_widget.h"
 #include "file_tree_model.h"
 #include "scan_controller.h"
 #include "ui_window.h"
@@ -101,7 +102,26 @@ void da_ui_build(AppState *app) {
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
   gtk_container_add(GTK_CONTAINER(sw), app->tree);
   gtk_widget_set_vexpand(sw, TRUE);
+  gtk_widget_set_hexpand(sw, TRUE);
   gtk_box_pack_start(GTK_BOX(vbox), sw, TRUE, TRUE, 0);
+
+  GtkWidget *treemap_panel = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+  gtk_widget_set_size_request(treemap_panel, -1, 225);
+  gtk_widget_set_vexpand(treemap_panel, FALSE);
+  gtk_widget_set_hexpand(treemap_panel, TRUE);
+
+  app->treemap_panel_title = gtk_label_new("Top level: —");
+  gtk_label_set_xalign(GTK_LABEL(app->treemap_panel_title), 0.5);
+  gtk_label_set_ellipsize(GTK_LABEL(app->treemap_panel_title), PANGO_ELLIPSIZE_MIDDLE);
+  gtk_widget_set_hexpand(app->treemap_panel_title, TRUE);
+  gtk_box_pack_start(GTK_BOX(treemap_panel), app->treemap_panel_title, FALSE, FALSE, 0);
+
+  app->treemap = treemap_widget_new();
+  gtk_widget_set_vexpand(app->treemap, TRUE);
+  gtk_widget_set_hexpand(app->treemap, TRUE);
+  gtk_box_pack_start(GTK_BOX(treemap_panel), app->treemap, TRUE, TRUE, 0);
+
+  gtk_box_pack_start(GTK_BOX(vbox), treemap_panel, FALSE, FALSE, 0);
 
   app->status = gtk_label_new("");
   gtk_label_set_xalign(GTK_LABEL(app->status), 0.0);
