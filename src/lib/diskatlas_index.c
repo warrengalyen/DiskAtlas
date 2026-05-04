@@ -7,6 +7,18 @@
 #define DISKATLAS_INDEX_INITIAL_CAP ((size_t)256u)
 #endif
 
+static uint64_t diskatlas_index_leaf_bytes(const file_node_t *node) {
+  uint32_t kind;
+  if (!node) {
+    return 0;
+  }
+  kind = node->attributes & DISKATLAS_NODE_KIND_MASK;
+  if (kind == DISKATLAS_NODE_KIND_DIR) {
+    return 0;
+  }
+  return node->size_bytes;
+}
+
 DISKATLAS_API void diskatlas_index_init(diskatlas_index_t *idx) {
   if (!idx) {
     return;
@@ -85,6 +97,9 @@ DISKATLAS_API int diskatlas_index_add_node(diskatlas_index_t *idx, const file_no
   memset(slot, 0, sizeof(*slot));
   slot->node = *node;
   slot->parent_id = parent_id;
+  slot->first_child_id = DISKATLAS_INDEX_NO_CHILD;
+  slot->next_sibling_id = DISKATLAS_INDEX_NO_SIBLING;
+  slot->subtree_size_bytes = 0;
 
   idx->count = new_count;
   if (out_id) {
@@ -137,4 +152,66 @@ DISKATLAS_API int index_add_node(diskatlas_index_t *idx, const file_node_t *node
 
 DISKATLAS_API void index_finalize(diskatlas_index_t *idx) {
   diskatlas_index_finalize(idx);
+}
+
+DISKATLAS_API int diskatlas_index_build_tree(diskatlas_index_t *idx) {
+  diskatlas_index_entry_t *e;
+  size_t n;
+  size_t i;
+
+  if (!idx || idx->struct_version != DISKATLAS_INDEX_STRUCT_VERSION) {
+    return -1;
+  }
+
+  n = idx->count;
+  if (n == 0) {
+    return 0;
+  }
+
+  e = idx->entries;
+
+  for (i = 0; i < n; i++) {
+    uint32_t p = e[i].parent_id;
+    if (p != DISKATLAS_INDEX_NO_PARENT) {
+      if ((size_t)p >= n || (size_t)p >= i) {
+        return -1;
+      }
+    }
+    e[i].first_child_id = DISKATLAS_INDEX_NO_CHILD;
+    e[i].next_sibling_id = DISKATLAS_INDEX_NO_SIBLING;
+    e[i].subtree_size_bytes = diskatlas_index_leaf_bytes(&e[i].node);
+  }
+
+  i = n;
+  while (i > 0) {
+    uint32_t p;
+    --i;
+    p = e[i].parent_id;
+    if (p == DISKATLAS_INDEX_NO_PARENT) {
+      continue;
+    }
+    e[i].next_sibling_id = e[p].first_child_id;
+    e[p].first_child_id = (uint32_t)i;
+  }
+
+  i = n;
+  while (i > 0) {
+    uint32_t p;
+    --i;
+    p = e[i].parent_id;
+    if (p == DISKATLAS_INDEX_NO_PARENT) {
+      continue;
+    }
+    if (e[p].subtree_size_bytes > UINT64_MAX - e[i].subtree_size_bytes) {
+      e[p].subtree_size_bytes = UINT64_MAX;
+    } else {
+      e[p].subtree_size_bytes += e[i].subtree_size_bytes;
+    }
+  }
+
+  return 0;
+}
+
+DISKATLAS_API int index_build_tree(diskatlas_index_t *idx) {
+  return diskatlas_index_build_tree(idx);
 }

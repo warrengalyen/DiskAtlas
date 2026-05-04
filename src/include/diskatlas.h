@@ -161,11 +161,16 @@ DISKATLAS_API const size_t *diskatlas_dup_group_members(const scan_result_t *res
 #define DISKATLAS_INDEX_STRUCT_VERSION 1u
 /** Sentinel: node has no parent in this index (e.g., logical roots). */
 #define DISKATLAS_INDEX_NO_PARENT (UINT32_MAX)
+/** Sentinel: no child / no next sibling in the tree link fields (see diskatlas_index_build_tree). */
+#define DISKATLAS_INDEX_NO_CHILD (UINT32_MAX)
+#define DISKATLAS_INDEX_NO_SIBLING (UINT32_MAX)
 
 typedef struct diskatlas_index_entry {
   file_node_t node;
   uint32_t parent_id; /**< DISKATLAS_INDEX_NO_PARENT or index of parent. */
-  uint32_t reserved_u32;
+  uint32_t first_child_id;   /**< DISKATLAS_INDEX_NO_CHILD, or head of singly-linked child list. */
+  uint32_t next_sibling_id;  /**< DISKATLAS_INDEX_NO_SIBLING, or next child of same parent. */
+  uint64_t subtree_size_bytes; /**< After diskatlas_index_build_tree: aggregated size for treemap (dirs sum descendants). */
 } diskatlas_index_entry_t;
 
 typedef struct diskatlas_index {
@@ -196,6 +201,17 @@ DISKATLAS_API size_t diskatlas_index_count(const diskatlas_index_t *idx);
 DISKATLAS_API const diskatlas_index_entry_t *diskatlas_index_get(const diskatlas_index_t *idx,
                                                                  size_t i);
 
+/**
+ * Iterative post-pass: wires first_child_id / next_sibling_id from parent_id, then fills
+ * subtree_size_bytes bottom-up (non-directory leaves contribute node.size_bytes; directories sum children).
+ * Sibling order follows increasing child index along next_sibling_id (no recursion).
+ * Requires each non-root entry to have parent_id < its own index (parent inserted before child).
+ * Idempotent; safe to call again after further add_node (not allowed after finalize) — call before finalize
+ * or temporarily unfinalize is not supported; typical use: after last add_node, call build_tree then finalize.
+ * Returns 0 on success, -1 on NULL idx, malformed parent_id, or parent_id >= child index.
+ */
+DISKATLAS_API int diskatlas_index_build_tree(diskatlas_index_t *idx);
+
 /** Frees slab; leaves idx in reusable zero state (calls diskatlas_index_init semantics). */
 DISKATLAS_API void diskatlas_index_clear(diskatlas_index_t *idx);
 
@@ -207,6 +223,8 @@ DISKATLAS_API int index_add_node(diskatlas_index_t *idx, const file_node_t *node
                                  uint32_t parent_id, uint32_t *out_id);
 
 DISKATLAS_API void index_finalize(diskatlas_index_t *idx);
+
+DISKATLAS_API int index_build_tree(diskatlas_index_t *idx);
 
 #ifdef __cplusplus
 }
