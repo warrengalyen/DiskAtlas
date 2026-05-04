@@ -76,4 +76,17 @@ uint64_t diskatlas_basename_hash_ci_fold_utf8(const char *basename_utf8);
 void diskatlas_impl_join_worker(diskatlas_scan_result_t *r);
 void diskatlas_impl_free_heap(diskatlas_scan_result_t *r);
 
+#if defined(_WIN32)
+/** Append one scan node from explicit metadata (used by NTFS MFT scan path). */
+bool diskatlas_win32_record_entry_metadata(diskatlas_scan_result_t *r,
+                                           const wchar_t *full_path_w,
+                                           uint64_t size_bytes,
+                                           uint64_t mtime_unix_ns,
+                                           uint32_t win32_attributes,
+                                           bool is_dir);
+/** Try to populate \p r from raw NTFS MFT; returns true if successful (no directory walking). */
+bool diskatlas_scan_ntfs_mft(diskatlas_scan_result_t *r, wchar_t *root_path_wide,
+                             const scan_options_t *opts);
+#endif
+
 #endif /* DISKATLAS_INTERNAL_H */

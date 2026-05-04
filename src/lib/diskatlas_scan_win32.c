@@ -180,8 +180,12 @@ static uint64_t file_node_size_bytes(const WIN32_FIND_DATAW *fd, bool is_dir) {
   return uli.QuadPart;
 }
 
-static bool record_entry(diskatlas_scan_result_t *r, const wchar_t *full_path_w,
-                         const WIN32_FIND_DATAW *fd, bool is_dir) {
+bool diskatlas_win32_record_entry_metadata(diskatlas_scan_result_t *r,
+                                           const wchar_t *full_path_w,
+                                           uint64_t size_bytes,
+                                           uint64_t mtime_unix_ns,
+                                           uint32_t win32_attributes,
+                                           bool is_dir) {
   if (!diskatlas_nodes_ensure_capacity(r)) {
     return false;
   }
@@ -197,9 +201,9 @@ static bool record_entry(diskatlas_scan_result_t *r, const wchar_t *full_path_w,
   memset(&node, 0, sizeof(node));
   node.struct_version = DISKATLAS_FILE_NODE_STRUCT_VERSION;
   node.attributes = attr_field;
-  node.size_bytes = file_node_size_bytes(fd, is_dir);
-  node.mtime_unix_ns = filetime_to_unix_ns(&fd->ftLastWriteTime);
-  node.win32_attributes = fd->dwFileAttributes;
+  node.size_bytes = is_dir ? 0 : size_bytes;
+  node.mtime_unix_ns = mtime_unix_ns;
+  node.win32_attributes = win32_attributes;
   node.path = NULL;
   node.duplicate_group_id = DISKATLAS_DUPLICATE_GROUP_NONE;
   if (!is_dir) {
@@ -283,6 +287,9 @@ static bool should_descend(uint32_t child_depth_dir, uint32_t max_depth) {
 static void scan_drive_tree(diskatlas_scan_result_t *r, wchar_t *root_path,
                             const scan_options_t *opts) {
   init_volume_cluster_from_path(r, root_path);
+  if (diskatlas_scan_ntfs_mft(r, root_path, opts)) {
+    goto scan_done;
+  }
   wchar_t *root_owned = root_path;
   if (!stk_push(r, root_owned, 0)) {
     free(root_owned);
