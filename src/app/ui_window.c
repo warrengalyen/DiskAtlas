@@ -7,13 +7,86 @@
 #include "file_tree_model.h"
 #include "scan_controller.h"
 #include "ui_window.h"
+#include "volumes.h"
+#include "da_cell_renderer_progress.h"
 
 #define DISKATLAS_WINDOW_UI_RESOURCE "/ui/diskatlas_window.ui"
+/** gtk_widget_set_name for CSS; targets percent column progress rendering only on this tree. */
+#define DISKATLAS_FILE_TREE_CSS_NAME "diskatlas_file_view_tree"
 
-static void append_text_column(GtkTreeView *tv, const char *title, int model_col, int width_px) {
+static void da_install_file_tree_progress_css(GtkWidget *tree) {
+  GtkCssProvider *provider = gtk_css_provider_new();
+  /* GtkCellRendererProgress: trough = full cell; progressbar = filled segment only (gtkcellrendererprogress.c). */
+  const char *css =
+      "#" DISKATLAS_FILE_TREE_CSS_NAME ".view.trough {\n"
+      "  background-color: transparent;\n"
+      "  border: 1px solid alpha(@theme_fg_color, 0.35);\n"
+      "}\n"
+      "#" DISKATLAS_FILE_TREE_CSS_NAME ".view.progressbar {\n"
+      "  background-color: #3584e4;\n"
+      "  background-image: none;\n"
+      "  border: none;\n"
+      "  box-shadow: none;\n"
+      "  color: @theme_fg_color;\n"
+      "}\n"
+      "#" DISKATLAS_FILE_TREE_CSS_NAME ".view.progressbar:selected {\n"
+      "  color: @theme_selected_fg_color;\n"
+      "}\n";
+  GError *css_err = NULL;
+  if (!gtk_css_provider_load_from_data(provider, css, -1, &css_err)) {
+    g_warning("DiskAtlas file tree CSS: %s", css_err != NULL ? css_err->message : "unknown");
+    g_clear_error(&css_err);
+    g_object_unref(provider);
+    return;
+  }
+  gtk_style_context_add_provider(gtk_widget_get_style_context(tree), GTK_STYLE_PROVIDER(provider),
+                                 GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+  g_object_unref(provider);
+}
+
+static void on_search_clear_clicked(GtkButton *btn, gpointer user_data) {
+  (void)btn;
+  AppState *app = (AppState *)user_data;
+  if (app->search != NULL) {
+    gtk_entry_set_text(GTK_ENTRY(app->search), "");
+  }
+}
+
+static void pct_of_drive_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell, GtkTreeModel *model,
+                                   GtkTreeIter *iter, gpointer user_data) {
+  (void)column;
+  (void)user_data;
+  gint pv = -1;
+  gchar *txt = NULL;
+  gtk_tree_model_get(model, iter, DA_COL_PCT, &pv, 2, &txt, -1);
+  gint v = 0;
+  if (pv >= 0) {
+    v = pv > 100 ? 100 : pv;
+  }
+  g_object_set(GTK_CELL_RENDERER_PROGRESS(cell), "value", v, "text", txt != NULL ? txt : "", "text-xalign",
+               0.92f, NULL);
+  g_free(txt);
+}
+
+static void append_pct_of_drive_column(GtkTreeView *tv, const char *title, int width_px) {
+  GtkCellRenderer *r = da_cell_renderer_progress_new();
+  g_object_set(r, "xpad", 10, NULL);
+  GtkTreeViewColumn *c = gtk_tree_view_column_new();
+  gtk_tree_view_column_set_title(c, title);
+  gtk_tree_view_column_pack_start(c, r, TRUE);
+  gtk_tree_view_column_set_cell_data_func(c, r, pct_of_drive_cell_data, NULL, NULL);
+  gtk_tree_view_column_set_alignment(c, 1.0f);
+  gtk_tree_view_column_set_resizable(c, TRUE);
+  gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
+  gtk_tree_view_column_set_fixed_width(c, width_px);
+  gtk_tree_view_append_column(tv, c);
+}
+
+static void append_text_column(GtkTreeView *tv, const char *title, int model_col, int width_px, gfloat xalign) {
   GtkCellRenderer *r = gtk_cell_renderer_text_new();
-  g_object_set(r, "ellipsize", PANGO_ELLIPSIZE_END, NULL);
+  g_object_set(r, "ellipsize", PANGO_ELLIPSIZE_END, "xalign", xalign, NULL);
   GtkTreeViewColumn *c = gtk_tree_view_column_new_with_attributes(title, r, "text", model_col, NULL);
+  gtk_tree_view_column_set_alignment(c, xalign);
   gtk_tree_view_column_set_resizable(c, TRUE);
   gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
   gtk_tree_view_column_set_fixed_width(c, width_px);
@@ -31,28 +104,64 @@ void da_ui_build(AppState *app) {
   gtk_window_set_application(GTK_WINDOW(app->window), app->gtk_app);
 
   app->file_chooser_btn = GTK_WIDGET(gtk_builder_get_object(builder, "file_chooser_btn"));
+
+#if defined(_WIN32)
+  {
+    GtkWidget *old_btn = app->file_chooser_btn;
+    gchar *prev = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(old_btn));
+    GtkWidget *grid = gtk_widget_get_parent(old_btn);
+    gtk_container_remove(GTK_CONTAINER(grid), old_btn);
+
+    GtkWidget *dlg =
+        gtk_file_chooser_dialog_new("Scan folder…", GTK_WINDOW(app->window), GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
+                                    "_Cancel", GTK_RESPONSE_CANCEL, "_Select", GTK_RESPONSE_ACCEPT, NULL);
+    da_win32_file_chooser_set_drive_places_only(GTK_FILE_CHOOSER(dlg));
+
+    GtkWidget *new_btn = gtk_file_chooser_button_new_with_dialog(dlg);
+    gtk_widget_set_hexpand(new_btn, TRUE);
+    gtk_widget_set_can_focus(new_btn, FALSE);
+    gtk_file_chooser_button_set_title(GTK_FILE_CHOOSER_BUTTON(new_btn), "Scan folder…");
+
+    gtk_grid_attach(GTK_GRID(grid), new_btn, 1, 0, 1, 1);
+    gtk_widget_show(new_btn);
+
+    if (prev != NULL) {
+      gtk_file_chooser_set_filename(GTK_FILE_CHOOSER(new_btn), prev);
+      g_free(prev);
+    }
+
+    gtk_widget_destroy(old_btn);
+    app->file_chooser_btn = new_btn;
+  }
+#endif
+
   app->scan_btn = GTK_WIDGET(gtk_builder_get_object(builder, "scan_btn"));
   app->panel_scan_label = GTK_WIDGET(gtk_builder_get_object(builder, "panel_scan_label"));
   app->progress = GTK_WIDGET(gtk_builder_get_object(builder, "progress"));
   app->search = GTK_WIDGET(gtk_builder_get_object(builder, "search"));
   app->chk_dup_mtime = GTK_WIDGET(gtk_builder_get_object(builder, "chk_dup_mtime"));
   app->combo_display_max = GTK_WIDGET(gtk_builder_get_object(builder, "combo_display_max"));
-  app->tree = GTK_WIDGET(gtk_builder_get_object(builder, "tree"));
+  app->tree = GTK_WIDGET(gtk_builder_get_object(builder, "file_view_tree"));
+  gtk_widget_set_name(app->tree, DISKATLAS_FILE_TREE_CSS_NAME);
   app->treemap_panel_title = GTK_WIDGET(gtk_builder_get_object(builder, "treemap_panel_title"));
-  app->status = GTK_WIDGET(gtk_builder_get_object(builder, "status"));
+  app->status = GTK_WIDGET(gtk_builder_get_object(builder, "main_statusbar"));
+
   app->stat_sel_val = GTK_WIDGET(gtk_builder_get_object(builder, "stat_sel_val"));
   app->stat_tot_val = GTK_WIDGET(gtk_builder_get_object(builder, "stat_tot_val"));
   app->stat_use_val = GTK_WIDGET(gtk_builder_get_object(builder, "stat_use_val"));
   app->stat_free_val = GTK_WIDGET(gtk_builder_get_object(builder, "stat_free_val"));
 
-  GtkWidget *tree_scrolled = GTK_WIDGET(gtk_builder_get_object(builder, "tree_scrolled"));
+  GtkWidget *tree_scrolled = GTK_WIDGET(gtk_builder_get_object(builder, "file_view_scrolled"));
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(tree_scrolled), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+
+  GtkWidget *search_clear_btn = GTK_WIDGET(gtk_builder_get_object(builder, "search_clear_btn"));
+  if (search_clear_btn != NULL) {
+    g_signal_connect(search_clear_btn, "clicked", G_CALLBACK(on_search_clear_clicked), app);
+  }
 
   GtkWidget *treemap_slot = GTK_WIDGET(gtk_builder_get_object(builder, "treemap_slot"));
   app->treemap = treemap_widget_new();
   gtk_box_pack_start(GTK_BOX(treemap_slot), app->treemap, TRUE, TRUE, 0);
-
-  gtk_label_set_line_wrap(GTK_LABEL(app->status), TRUE);
 
   gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(app->combo_display_max), "All");
   gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(app->combo_display_max), "100");
@@ -65,12 +174,22 @@ void da_ui_build(AppState *app) {
   gtk_tree_view_set_model(GTK_TREE_VIEW(app->tree), GTK_TREE_MODEL(app->store));
   g_object_unref(app->store);
 
-  const char *titles[] = {"File Name", "Path", "% of Drive", "Size", "Allocated", "Modified",
+  const char *titles[] = {"File Name", "Path", "Percent of Drive", "Size", "Allocated", "Modified",
                           "Dup Count", "Dup Size", "Attributes"};
   const int col_w[] = {220, 480, 110, 100, 100, 140, 80, 100, 68};
   for (int i = 0; i < DA_COL_COUNT; i++) {
-    append_text_column(GTK_TREE_VIEW(app->tree), titles[i], i, col_w[i]);
+    if (i == 2) {
+      append_pct_of_drive_column(GTK_TREE_VIEW(app->tree), titles[i], col_w[i]);
+      continue;
+    }
+    gfloat xalign = 0.0f;
+    if (i == 3 || i == 4 || i == 6 || i == 7) {
+      xalign = 1.0f;
+    }
+    append_text_column(GTK_TREE_VIEW(app->tree), titles[i], i, col_w[i], xalign);
   }
+
+  da_install_file_tree_progress_css(app->tree);
 
   g_object_unref(builder);
 

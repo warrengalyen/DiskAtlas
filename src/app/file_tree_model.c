@@ -93,9 +93,9 @@ gboolean da_utf8_basename_matches_filter(const char *path_utf8, const char *filt
 }
 
 GtkTreeStore *da_tree_store_new(void) {
-  return gtk_tree_store_new(
-      DA_N_MODEL_COLS, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING,
-      G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_INT64);
+  return gtk_tree_store_new(DA_N_MODEL_COLS, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING,
+                            G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING,
+                            G_TYPE_STRING, G_TYPE_INT, G_TYPE_INT64);
 }
 
 static uint64_t dup_group_total_size(scan_result_t *scan, const scan_results_view_t *v,
@@ -114,9 +114,12 @@ static uint64_t dup_group_total_size(scan_result_t *scan, const scan_results_vie
   return sum;
 }
 
-static void fill_row_strings(AppState *app, size_t nid, char col[DA_COL_COUNT][512]) {
+static void fill_row_strings(AppState *app, size_t nid, char col[DA_COL_COUNT][512], gint *pct_bar) {
   for (int i = 0; i < DA_COL_COUNT; i++) {
     col[i][0] = '\0';
+  }
+  if (pct_bar != NULL) {
+    *pct_bar = -1;
   }
   scan_results_view_t v = scan_get_results(app->scan);
   if (app->scan == NULL || v.nodes == NULL || nid >= v.count) {
@@ -126,7 +129,14 @@ static void fill_row_strings(AppState *app, size_t nid, char col[DA_COL_COUNT][5
   const char *bn = utf8_basename_ptr(n->path);
   g_strlcpy(col[0], bn, sizeof(col[0]));
   g_strlcpy(col[1], n->path, sizeof(col[1]));
-  da_format_pct_of_volume(n->size_bytes, app->volume_total_bytes, col[2], sizeof(col[2]));
+  da_format_pct_progress_label(n->size_bytes, app->volume_total_bytes, col[2], sizeof(col[2]));
+  if (pct_bar != NULL && app->volume_total_bytes > 0u) {
+    double p = 100.0 * (double)n->size_bytes / (double)app->volume_total_bytes;
+    if (p > 100.0) {
+      p = 100.0;
+    }
+    *pct_bar = (gint)(p + 0.5);
+  }
   da_format_bytes(n->size_bytes, col[3], sizeof(col[3]));
   da_format_bytes(n->allocated_bytes, col[4], sizeof(col[4]));
   da_format_mtime_local(n->mtime_unix_ns, col[5], sizeof(col[5]));
@@ -244,24 +254,25 @@ gboolean da_tree_insert_roots_chunk(AppState *app) {
 
     GtkTreeIter iter;
     char col[DA_COL_COUNT][512];
+    gint pct = -1;
     gint64 lp;
 
     if (app->filter_active || n->duplicate_group_id == DISKATLAS_DUPLICATE_GROUP_NONE) {
-      fill_row_strings(app, nid, col);
+      fill_row_strings(app, nid, col, &pct);
       lp = (gint64)(nid + 1u);
       gtk_tree_store_insert_with_values(
           store, &iter, NULL, -1, 0, col[0], 1, col[1], 2, col[2], 3, col[3], 4, col[4], 5,
-          col[5], 6, col[6], 7, col[7], 8, col[8], DA_COL_LP, lp, -1);
+          col[5], 6, col[6], 7, col[7], 8, col[8], DA_COL_PCT, pct, DA_COL_LP, lp, -1);
       continue;
     }
 
     uint32_t gid = n->duplicate_group_id;
     if (gid >= app->dup_group_seen_cap) {
-      fill_row_strings(app, nid, col);
+      fill_row_strings(app, nid, col, &pct);
       lp = (gint64)(nid + 1u);
       gtk_tree_store_insert_with_values(
           store, &iter, NULL, -1, 0, col[0], 1, col[1], 2, col[2], 3, col[3], 4, col[4], 5,
-          col[5], 6, col[6], 7, col[7], 8, col[8], DA_COL_LP, lp, -1);
+          col[5], 6, col[6], 7, col[7], 8, col[8], DA_COL_PCT, pct, DA_COL_LP, lp, -1);
       continue;
     }
     if (app->dup_group_seen[gid]) {
@@ -270,11 +281,11 @@ gboolean da_tree_insert_roots_chunk(AppState *app) {
 
     size_t mc = diskatlas_dup_group_member_count(app->scan, gid);
     if (mc < 2) {
-      fill_row_strings(app, nid, col);
+      fill_row_strings(app, nid, col, &pct);
       lp = (gint64)(nid + 1u);
       gtk_tree_store_insert_with_values(
           store, &iter, NULL, -1, 0, col[0], 1, col[1], 2, col[2], 3, col[3], 4, col[4], 5,
-          col[5], 6, col[6], 7, col[7], 8, col[8], DA_COL_LP, lp, -1);
+          col[5], 6, col[6], 7, col[7], 8, col[8], DA_COL_PCT, pct, DA_COL_LP, lp, -1);
       continue;
     }
 
@@ -282,24 +293,24 @@ gboolean da_tree_insert_roots_chunk(AppState *app) {
     size_t nmem = 0;
     const size_t *mp = diskatlas_dup_group_members(app->scan, gid, &nmem);
     if (mp == NULL || nmem < 2 || mp[0] >= v.count) {
-      fill_row_strings(app, nid, col);
+      fill_row_strings(app, nid, col, &pct);
       lp = (gint64)(nid + 1u);
       gtk_tree_store_insert_with_values(
           store, &iter, NULL, -1, 0, col[0], 1, col[1], 2, col[2], 3, col[3], 4, col[4], 5,
-          col[5], 6, col[6], 7, col[7], 8, col[8], DA_COL_LP, lp, -1);
+          col[5], 6, col[6], 7, col[7], 8, col[8], DA_COL_PCT, pct, DA_COL_LP, lp, -1);
       continue;
     }
     /* Same as legacy UI: parent row shows the canonical member mp[0] in all columns; expand for others. */
-    fill_row_strings(app, mp[0], col);
+    fill_row_strings(app, mp[0], col, &pct);
     lp = -(gint64)gid;
     gtk_tree_store_insert_with_values(store, &iter, NULL, -1, 0, col[0], 1, col[1], 2, col[2], 3,
                                       col[3], 4, col[4], 5, col[5], 6, col[6], 7, col[7], 8, col[8],
-                                      DA_COL_LP, lp, -1);
+                                      DA_COL_PCT, pct, DA_COL_LP, lp, -1);
     if (nmem > 1) {
       GtkTreeIter ph;
       gtk_tree_store_insert_with_values(
           store, &ph, &iter, -1, 0, " ", 1, "", 2, "", 3, "", 4, "", 5, "", 6, "", 7, "", 8, "",
-          DA_COL_LP, DA_TREE_LP_CHILD_PLACEHOLDER, -1);
+          DA_COL_PCT, -1, DA_COL_LP, DA_TREE_LP_CHILD_PLACEHOLDER, -1);
     }
   }
 
@@ -348,11 +359,12 @@ void da_tree_on_row_expanded(GtkTreeView *tv, GtkTreeIter *iter, GtkTreePath *pa
     }
     GtkTreeIter ch;
     char col[DA_COL_COUNT][512];
-    fill_row_strings(app, ni, col);
+    gint pct = -1;
+    fill_row_strings(app, ni, col, &pct);
     /* Dup member: show full path in name column (legacy behavior). */
     g_strlcpy(col[0], v.nodes[ni].path, sizeof(col[0]));
     gtk_tree_store_insert_with_values(
         app->store, &ch, iter, -1, 0, col[0], 1, col[1], 2, col[2], 3, col[3], 4, col[4], 5,
-        col[5], 6, col[6], 7, col[7], 8, col[8], DA_COL_LP, (gint64)(ni + 1u), -1);
+        col[5], 6, col[6], 7, col[7], 8, col[8], DA_COL_PCT, pct, DA_COL_LP, (gint64)(ni + 1u), -1);
   }
 }

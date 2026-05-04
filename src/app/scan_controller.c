@@ -13,6 +13,26 @@
 #include "scan_controller.h"
 #include "volumes.h"
 
+static void app_status_set_text(AppState *app, const char *text) {
+  if (app == NULL || app->status == NULL) {
+    return;
+  }
+  const char *t = text != NULL ? text : "";
+  if (GTK_IS_STATUSBAR(app->status)) {
+    GtkStatusbar *sb = GTK_STATUSBAR(app->status);
+    guint ctx = gtk_statusbar_get_context_id(sb, "diskatlas");
+    if (app->statusbar_msg_id != 0u) {
+      gtk_statusbar_remove(sb, ctx, app->statusbar_msg_id);
+      app->statusbar_msg_id = 0;
+    }
+    if (t[0] != '\0') {
+      app->statusbar_msg_id = gtk_statusbar_push(sb, ctx, t);
+    }
+  } else {
+    gtk_label_set_text(GTK_LABEL(app->status), t);
+  }
+}
+
 static const file_node_t *da_qsort_nodes;
 
 static int cmp_index_by_size_desc(const void *pa, const void *pb) {
@@ -100,8 +120,7 @@ static void on_treemap_hover(GtkWidget *treemap, gint64 scan_index, gpointer use
     return;
   }
   if (scan_index == -2) {
-    gtk_label_set_text(GTK_LABEL(app->status),
-                       "Treemap: Other (merged entries beyond treemap tile cap)");
+    app_status_set_text(app, "Treemap: Other (merged entries beyond treemap tile cap)");
     return;
   }
   if (scan_index < 0 || app->scan == NULL) {
@@ -120,7 +139,7 @@ static void on_treemap_hover(GtkWidget *treemap, gint64 scan_index, gpointer use
     da_format_bytes(v.nodes[ix].size_bytes, sz, sizeof sz);
     snprintf(line, sizeof line, "Treemap hover: %s  (%s)",
              v.nodes[ix].path != NULL ? v.nodes[ix].path : "", sz);
-    gtk_label_set_text(GTK_LABEL(app->status), line);
+    app_status_set_text(app, line);
   }
 }
 
@@ -248,7 +267,7 @@ static void set_scan_done_status(AppState *app) {
                (unsigned int)dgc);
     }
   }
-  gtk_label_set_text(GTK_LABEL(app->status), line);
+  app_status_set_text(app, line);
 }
 
 void scan_controller_restore_scan_status(AppState *app) {
@@ -674,24 +693,26 @@ void scan_controller_refresh_volume_labels(AppState *app) {
     return;
   }
   app->volume_total_bytes = tot;
-  char a[64], b[64], c[64], d[64];
+  char a[64];
+  char use_line[160];
+  char free_line[160];
   da_format_bytes(tot, a, sizeof(a));
-  da_format_bytes(used_b, b, sizeof(b));
-  da_format_bytes(free_b, c, sizeof(c));
-  da_format_bytes(tot, d, sizeof(d));
+  da_format_bytes_with_pct(used_b, tot, use_line, sizeof(use_line));
+  da_format_bytes_with_pct(free_b, tot, free_line, sizeof(free_line));
+  char sel_line[640];
+  da_volume_selection_label(app->scan_root_utf8, sel_line, sizeof(sel_line));
   if (app->stat_sel_val) {
-    gtk_label_set_text(GTK_LABEL(app->stat_sel_val), app->scan_root_utf8);
+    gtk_label_set_text(GTK_LABEL(app->stat_sel_val), sel_line[0] != '\0' ? sel_line : app->scan_root_utf8);
   }
   if (app->stat_tot_val) {
     gtk_label_set_text(GTK_LABEL(app->stat_tot_val), a);
   }
   if (app->stat_use_val) {
-    gtk_label_set_text(GTK_LABEL(app->stat_use_val), b);
+    gtk_label_set_text(GTK_LABEL(app->stat_use_val), use_line);
   }
   if (app->stat_free_val) {
-    gtk_label_set_text(GTK_LABEL(app->stat_free_val), c);
+    gtk_label_set_text(GTK_LABEL(app->stat_free_val), free_line);
   }
-  (void)d;
 }
 
 static void on_tree_row_expanded(GtkTreeView *tv, GtkTreeIter *iter, GtkTreePath *path,

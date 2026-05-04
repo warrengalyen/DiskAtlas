@@ -14,9 +14,11 @@
 #define DA_FILTER_BATCH 4000
 #define DA_SEARCH_DEBOUNCE_MS 200
 
-/** GtkTreeStore: string columns 0..DA_COL_COUNT-1, then COL_LP (node index + 1, or negative dup group id). */
-#define DA_COL_LP DA_COL_COUNT
-#define DA_N_MODEL_COLS (DA_COL_COUNT + 1)
+/** GtkTreeStore: string cols 0..DA_COL_COUNT-1; DA_COL_PCT bar value (gint -1 = N/A, else 0–100); DA_COL_LP
+ *  (node index + 1, or negative dup group id). */
+#define DA_COL_PCT DA_COL_COUNT
+#define DA_COL_LP (DA_COL_COUNT + 1)
+#define DA_N_MODEL_COLS (DA_COL_COUNT + 2)
 
 typedef struct AppState {
   GtkApplication *gtk_app;
@@ -33,7 +35,10 @@ typedef struct AppState {
   GtkWidget *treemap_panel_title;
   GtkWidget *treemap;
   GtkTreeStore *store;
+  /** GtkStatusbar for scan/filter summary (see ui_window + scan_controller). */
   GtkWidget *status;
+  /** Last gtk_statusbar_push id for context "diskatlas"; 0 if none. */
+  guint statusbar_msg_id;
   GtkWidget *stat_sel_val;
   GtkWidget *stat_tot_val;
   GtkWidget *stat_use_val;

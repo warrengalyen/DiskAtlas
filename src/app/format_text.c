@@ -30,6 +30,20 @@ void da_format_bytes(uint64_t n, char *dst, size_t dstsz) {
            (double)n / (1024.0 * 1024.0 * 1024.0 * 1024.0));
 }
 
+void da_format_bytes_with_pct(uint64_t bytes, uint64_t vol_total, char *dst, size_t dstsz) {
+  if (!dst || dstsz == 0) {
+    return;
+  }
+  char sz[80];
+  da_format_bytes(bytes, sz, sizeof(sz));
+  if (vol_total == 0u) {
+    snprintf(dst, dstsz, "%s", sz);
+    return;
+  }
+  double pct = 100.0 * (double)bytes / (double)vol_total;
+  snprintf(dst, dstsz, "%s (%.1f%%)", sz, pct);
+}
+
 void da_format_pct_of_volume(uint64_t file_bytes, uint64_t vol_total, char *dst,
                              size_t dstsz) {
   if (!dst || dstsz == 0) {
@@ -41,6 +55,18 @@ void da_format_pct_of_volume(uint64_t file_bytes, uint64_t vol_total, char *dst,
   }
   double pct = 100.0 * (double)file_bytes / (double)vol_total;
   snprintf(dst, dstsz, "%.2f%%", pct);
+}
+
+void da_format_pct_progress_label(uint64_t file_bytes, uint64_t vol_total, char *dst, size_t dstsz) {
+  if (!dst || dstsz == 0) {
+    return;
+  }
+  if (vol_total == 0) {
+    snprintf(dst, dstsz, "—");
+    return;
+  }
+  double pct = 100.0 * (double)file_bytes / (double)vol_total;
+  snprintf(dst, dstsz, "%.1f %%", pct);
 }
 
 void da_format_mtime_local(uint64_t unix_ns, char *dst, size_t dstsz) {
