@@ -79,7 +79,18 @@ static void scan_progress_reset_idle(AppState *app) {
 static void enable_scan_button(AppState *app, gboolean enable) {
   if (app != NULL && app->scan_btn != NULL) {
     gtk_widget_set_sensitive(app->scan_btn, enable);
+    if (enable) {
+      gtk_button_set_label(GTK_BUTTON(app->scan_btn), "Scan");
+    }
   }
+}
+
+static void scan_button_set_cancelling_mode(AppState *app) {
+  if (app == NULL || app->scan_btn == NULL) {
+    return;
+  }
+  gtk_button_set_label(GTK_BUTTON(app->scan_btn), "Cancel");
+  gtk_widget_set_sensitive(app->scan_btn, TRUE);
 }
 
 static gboolean ensure_filtered_capacity(AppState *app) {
@@ -403,6 +414,8 @@ static gboolean on_timer_scan_tick(gpointer data) {
     gint64 now = g_get_monotonic_time();
     app->last_scan_elapsed_s = (double)(now - app->scan_start_us) / 1000000.0;
     scan_progress_set_full(app);
+    gtk_button_set_label(GTK_BUTTON(app->scan_btn), "Scan");
+    enable_scan_button(app, FALSE);
     begin_populate_list(app);
     return G_SOURCE_REMOVE;
   }
@@ -435,18 +448,6 @@ static void on_search_changed(GtkEditable *editable, gpointer user_data) {
 static void start_scan(AppState *app) {
   if (app == NULL || app->scan_root_utf8 == NULL) {
     return;
-  }
-
-  if (app->scan != NULL) {
-    scan_progress_t prev = scan_get_progress(app->scan);
-    if (!prev.is_complete) {
-      GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
-                                            GTK_MESSAGE_INFO, GTK_BUTTONS_OK,
-                                            "A scan is already in progress.");
-      gtk_dialog_run(GTK_DIALOG(d));
-      gtk_widget_destroy(d);
-      return;
-    }
   }
 
   kill_all_timers(app);
@@ -495,7 +496,7 @@ static void start_scan(AppState *app) {
   }
 
   app->scan_start_us = g_get_monotonic_time();
-  enable_scan_button(app, FALSE);
+  scan_button_set_cancelling_mode(app);
   scan_progress_set_indeterminate(app, TRUE);
   app->timer_scan = g_timeout_add(120, on_timer_scan_tick, app);
   panel_scan_set_text(app, "Starting scan…");
@@ -503,7 +504,16 @@ static void start_scan(AppState *app) {
 
 static void on_scan_clicked(GtkButton *btn, gpointer user_data) {
   (void)btn;
-  start_scan((AppState *)user_data);
+  AppState *app = (AppState *)user_data;
+  if (app->scan != NULL) {
+    scan_progress_t pr = scan_get_progress(app->scan);
+    if (!pr.is_complete) {
+      scan_cancel(app->scan);
+      panel_scan_set_text(app, "Cancelling…");
+      return;
+    }
+  }
+  start_scan(app);
 }
 
 static void on_file_set(GtkFileChooserButton *b, gpointer user_data) {
