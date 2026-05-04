@@ -226,6 +226,41 @@ DISKATLAS_API void index_finalize(diskatlas_index_t *idx);
 
 DISKATLAS_API int index_build_tree(diskatlas_index_t *idx);
 
+#if defined(_WIN32)
+/* -------------------------------------------------------------------------- */
+/* Raw NTFS volume — VBR / $MFT location (no MFT record parsing).             */
+/* -------------------------------------------------------------------------- */
+
+#define DISKATLAS_NTFS_MFT_LOCATION_STRUCT_VERSION 1u
+
+typedef struct diskatlas_ntfs_mft_location {
+  uint32_t struct_version; /**< DISKATLAS_NTFS_MFT_LOCATION_STRUCT_VERSION. */
+  uint32_t win32_error;    /**< GetLastError() on failure; 0 when return value is 0. */
+  uint64_t mft_start_lcn;
+  uint64_t mft_mirror_start_lcn;
+  uint32_t bytes_per_sector;
+  uint32_t sectors_per_cluster;
+  uint64_t cluster_size_bytes;
+  /** Byte offset of $MFT from the start of the volume (cluster × size). */
+  uint64_t mft_byte_offset;
+  uint64_t mft_mirror_byte_offset;
+  /** Decoded from VBR clusters-per-MFT-record field; 0 if indeterminate. */
+  uint32_t mft_record_size_bytes;
+  uint32_t reserved_u32;
+  uint64_t reserved_u64[2];
+} diskatlas_ntfs_mft_location_t;
+
+/**
+ * Open a raw volume/device (e.g. UTF-8 "\\\\.\\C:"), read the NTFS boot sector,
+ * and return $MFT / $MFTMirr starting LCNs and byte offsets. Administrator rights
+ * are often required. Does not read or parse MFT file records.
+ *
+ * \return 0 on success, -1 on failure (\p out->win32_error set; ERROR_BAD_FORMAT if not NTFS).
+ */
+DISKATLAS_API int diskatlas_ntfs_get_mft_location(const char *volume_device_path_utf8,
+                                                  diskatlas_ntfs_mft_location_t *out);
+#endif /* _WIN32 */
+
 #ifdef __cplusplus
 }
 #endif

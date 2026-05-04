@@ -66,6 +66,7 @@ set(DISKATLAS_CORE_SRCS
 )
 if(WIN32)
   list(APPEND DISKATLAS_CORE_SRCS "${DISKATLAS_SRC}/lib/diskatlas_scan_win32.c")
+  list(APPEND DISKATLAS_CORE_SRCS "${DISKATLAS_SRC}/lib/diskatlas_ntfs_raw.c")
 else()
   list(APPEND DISKATLAS_CORE_SRCS "${DISKATLAS_SRC}/lib/diskatlas_scan_posix.c")
 endif()
