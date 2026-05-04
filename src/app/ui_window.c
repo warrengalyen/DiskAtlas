@@ -68,7 +68,7 @@ static void pct_of_drive_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *c
   g_free(txt);
 }
 
-static void append_pct_of_drive_column(GtkTreeView *tv, const char *title, int width_px) {
+static void append_pct_of_drive_column(GtkTreeView *tv, const char *title, int width_px, int min_width_px) {
   GtkCellRenderer *r = da_cell_renderer_progress_new();
   g_object_set(r, "xpad", 10, NULL);
   GtkTreeViewColumn *c = gtk_tree_view_column_new();
@@ -78,17 +78,20 @@ static void append_pct_of_drive_column(GtkTreeView *tv, const char *title, int w
   gtk_tree_view_column_set_alignment(c, 1.0f);
   gtk_tree_view_column_set_resizable(c, TRUE);
   gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
+  gtk_tree_view_column_set_min_width(c, min_width_px);
   gtk_tree_view_column_set_fixed_width(c, width_px);
   gtk_tree_view_append_column(tv, c);
 }
 
-static void append_text_column(GtkTreeView *tv, const char *title, int model_col, int width_px, gfloat xalign) {
+static void append_text_column(GtkTreeView *tv, const char *title, int model_col, int width_px, int min_width_px,
+                               gfloat xalign) {
   GtkCellRenderer *r = gtk_cell_renderer_text_new();
   g_object_set(r, "ellipsize", PANGO_ELLIPSIZE_END, "xalign", xalign, NULL);
   GtkTreeViewColumn *c = gtk_tree_view_column_new_with_attributes(title, r, "text", model_col, NULL);
   gtk_tree_view_column_set_alignment(c, xalign);
   gtk_tree_view_column_set_resizable(c, TRUE);
   gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
+  gtk_tree_view_column_set_min_width(c, min_width_px);
   gtk_tree_view_column_set_fixed_width(c, width_px);
   gtk_tree_view_append_column(tv, c);
 }
@@ -175,18 +178,19 @@ void da_ui_build(AppState *app) {
   g_object_unref(app->store);
 
   const char *titles[] = {"File Name", "Path", "Percent of Drive", "Size", "Allocated", "Modified",
-                          "Dup Count", "Dup Size", "Attributes"};
+                            "Dup Count", "Dup Size", "Attributes"};
   const int col_w[] = {220, 480, 110, 100, 100, 140, 80, 100, 68};
+  const int col_min_w[] = {120, 200, 88, 72, 72, 100, 56, 72, 48};
   for (int i = 0; i < DA_COL_COUNT; i++) {
     if (i == 2) {
-      append_pct_of_drive_column(GTK_TREE_VIEW(app->tree), titles[i], col_w[i]);
+      append_pct_of_drive_column(GTK_TREE_VIEW(app->tree), titles[i], col_w[i], col_min_w[i]);
       continue;
     }
     gfloat xalign = 0.0f;
     if (i == 3 || i == 4 || i == 6 || i == 7) {
       xalign = 1.0f;
     }
-    append_text_column(GTK_TREE_VIEW(app->tree), titles[i], i, col_w[i], xalign);
+    append_text_column(GTK_TREE_VIEW(app->tree), titles[i], i, col_w[i], col_min_w[i], xalign);
   }
 
   da_install_file_tree_progress_css(app->tree);
