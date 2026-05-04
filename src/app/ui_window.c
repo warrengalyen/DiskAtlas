@@ -1,7 +1,11 @@
 #include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
 
 #include <glib.h>
 #include <gtk/gtk.h>
+
+#include "diskatlas.h"
 
 #include "treemap_widget.h"
 #include "file_tree_model.h"
@@ -10,6 +14,7 @@
 #include "volumes.h"
 #include "da_cell_renderer_progress.h"
 #include "file_tree_sort.h"
+#include "shell_icon.h"
 
 #define DISKATLAS_WINDOW_UI_RESOURCE "/ui/diskatlas_window.ui"
 /** gtk_widget_set_name for CSS; targets percent column progress rendering only on this tree. */
@@ -43,6 +48,108 @@ static void da_install_file_tree_progress_css(GtkWidget *tree) {
   gtk_style_context_add_provider(gtk_widget_get_style_context(tree), GTK_STYLE_PROVIDER(provider),
                                  GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
   g_object_unref(provider);
+}
+
+/** Matches file_tree_model.c placeholder row LP. */
+#define DA_TREE_LP_PLACEHOLDER ((gint64)INT64_MIN)
+
+static gboolean da_lp_to_nid(gint64 lp, AppState *app, size_t *out_nid) {
+  if (lp == DA_TREE_LP_PLACEHOLDER) {
+    *out_nid = SIZE_MAX;
+    return TRUE;
+  }
+  if (app == NULL || app->scan == NULL) {
+    return FALSE;
+  }
+  if (lp < 0) {
+    uint32_t gid = (uint32_t)(-lp);
+    size_t nmem = 0;
+    const size_t *mp = diskatlas_dup_group_members(app->scan, gid, &nmem);
+    scan_results_view_t v = scan_get_results(app->scan);
+    if (mp != NULL && nmem > 0 && mp[0] < v.count) {
+      *out_nid = mp[0];
+      return TRUE;
+    }
+    return FALSE;
+  }
+  if (lp > 0) {
+    *out_nid = (size_t)(lp - 1);
+    return TRUE;
+  }
+  return FALSE;
+}
+
+static void file_name_icon_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell, GtkTreeModel *model,
+                                     GtkTreeIter *iter, gpointer user_data) {
+  (void)column;
+  AppState *app = user_data;
+  const char *icon_name = "text-x-generic";
+  gint64 lp = 0;
+  gchar *path_utf8 = NULL;
+  gtk_tree_model_get(model, iter, DA_COL_LP, &lp, 1, &path_utf8, -1);
+
+  if (app != NULL && app->scan != NULL) {
+    if (lp == DA_TREE_LP_PLACEHOLDER) {
+      icon_name = NULL;
+    } else {
+      size_t nid = 0;
+      if (da_lp_to_nid(lp, app, &nid) && nid != SIZE_MAX) {
+        scan_results_view_t v = scan_get_results(app->scan);
+        if (v.nodes != NULL && nid < v.count) {
+          uint32_t kind = v.nodes[nid].attributes & DISKATLAS_NODE_KIND_MASK;
+          if (kind == DISKATLAS_NODE_KIND_DIR) {
+            icon_name = "folder";
+          } else if (kind == DISKATLAS_NODE_KIND_SYMLINK) {
+            icon_name = "inode-symlink";
+          } else {
+            icon_name = "text-x-generic";
+          }
+        }
+      }
+    }
+  }
+
+  GdkPixbuf *pb = NULL;
+  if (path_utf8 != NULL && path_utf8[0] != '\0') {
+    pb = da_shell_icon_for_path(path_utf8, 16);
+  }
+
+  if (pb == NULL && icon_name != NULL) {
+    GtkIconTheme *theme = gtk_icon_theme_get_default();
+    pb = gtk_icon_theme_load_icon(theme, icon_name, 16, GTK_ICON_LOOKUP_FORCE_SIZE, NULL);
+    if (pb == NULL && strcmp(icon_name, "inode-symlink") == 0) {
+      pb = gtk_icon_theme_load_icon(theme, "text-x-generic", 16, GTK_ICON_LOOKUP_FORCE_SIZE, NULL);
+    }
+  }
+
+  g_free(path_utf8);
+
+  g_object_set(GTK_CELL_RENDERER_PIXBUF(cell), "pixbuf", pb, NULL);
+  if (pb != NULL) {
+    g_object_unref(pb);
+  }
+}
+
+static void append_file_name_column(GtkTreeView *tv, AppState *app, const char *title, int sort_model_id, int width_px,
+                                    int min_width_px) {
+  GtkCellRenderer *pix = gtk_cell_renderer_pixbuf_new();
+  GtkCellRenderer *txt = gtk_cell_renderer_text_new();
+  g_object_set(txt, "ellipsize", PANGO_ELLIPSIZE_END, "xalign", 0.0f, NULL);
+
+  GtkTreeViewColumn *c = gtk_tree_view_column_new();
+  gtk_tree_view_column_set_title(c, title);
+  gtk_tree_view_column_pack_start(c, pix, FALSE);
+  gtk_tree_view_column_set_cell_data_func(c, pix, file_name_icon_cell_data, app, NULL);
+  gtk_tree_view_column_pack_start(c, txt, TRUE);
+  gtk_tree_view_column_add_attribute(c, txt, "text", 0);
+
+  gtk_tree_view_column_set_alignment(c, 0.0f);
+  gtk_tree_view_column_set_resizable(c, TRUE);
+  gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
+  gtk_tree_view_column_set_min_width(c, min_width_px);
+  gtk_tree_view_column_set_fixed_width(c, width_px);
+  gtk_tree_view_column_set_sort_column_id(c, sort_model_id);
+  gtk_tree_view_append_column(tv, c);
 }
 
 static void on_search_clear_clicked(GtkButton *btn, gpointer user_data) {
@@ -183,10 +290,14 @@ void da_ui_build(AppState *app) {
 
   const char *titles[] = {"File Name", "Path", "Percent of Drive", "Size", "Allocated", "Modified",
                           "Dup Count", "Dup Size", "Attributes"};
-  const int col_w[] = {220, 480, 110, 100, 100, 140, 80, 100, 68};
-  const int col_min_w[] = {120, 200, 88, 72, 72, 100, 56, 72, 48};
+  const int col_w[] = {248, 480, 110, 100, 100, 140, 80, 100, 68};
+  const int col_min_w[] = {140, 200, 88, 72, 72, 100, 56, 72, 48};
   const int col_sort_id[] = {0, 1, DA_COL_PCT, 3, 4, 5, 6, 7, 8};
   for (int i = 0; i < DA_COL_COUNT; i++) {
+    if (i == 0) {
+      append_file_name_column(GTK_TREE_VIEW(app->tree), app, titles[i], col_sort_id[i], col_w[i], col_min_w[i]);
+      continue;
+    }
     if (i == 2) {
       append_pct_of_drive_column(GTK_TREE_VIEW(app->tree), titles[i], col_sort_id[i], col_w[i], col_min_w[i]);
       continue;

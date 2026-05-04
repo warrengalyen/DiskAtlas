@@ -106,6 +106,9 @@ if(DISKATLAS_BUILD_GUI)
 endif()
 
 if(DISKATLAS_GTK3_FOUND)
+  if(APPLE)
+    enable_language(OBJC)
+  endif()
   find_program(GLIB_COMPILE_RESOURCES glib-compile-resources REQUIRED)
 
   set(DISKATLAS_GRESOURCE_XML "${DISKATLAS_RES_DIR}/gresources.xml")
@@ -135,6 +138,7 @@ if(DISKATLAS_GTK3_FOUND)
     "${DISKATLAS_SRC}/app/file_tree_model.c"
     "${DISKATLAS_SRC}/app/treemap_widget.c"
     "${DISKATLAS_SRC}/app/scan_controller.c"
+    "${DISKATLAS_SRC}/app/shell_icon.c"
     "${DISKATLAS_SRC}/app/format_text.c"
     "${DISKATLAS_SRC}/app/volumes.c"
     ${DISKATLAS_GRESOURCE_C}
@@ -146,7 +150,12 @@ if(DISKATLAS_GTK3_FOUND)
   target_include_directories(diskatlas_app PRIVATE ${GTK3_INCLUDE_DIRS})
   target_link_directories(diskatlas_app PRIVATE ${GTK3_LIBRARY_DIRS})
   target_link_libraries(diskatlas_app PRIVATE diskatlas_core ${GTK3_LIBRARIES})
+  if(APPLE)
+    target_sources(diskatlas_app PRIVATE "${DISKATLAS_SRC}/app/shell_icon_apple.m")
+    target_link_libraries(diskatlas_app PRIVATE "-framework" "AppKit")
+  endif()
   if(WIN32)
+    target_link_libraries(diskatlas_app PRIVATE shell32)
     set_target_properties(diskatlas_app PROPERTIES ENABLE_EXPORTS OFF)
   endif()
   if(WIN32 AND MINGW)
