@@ -29,7 +29,7 @@ DISKATLAS_API int diskatlas_init(void);
 /* -------------------------------------------------------------------------- */
 
 #define DISKATLAS_SCAN_OPTIONS_STRUCT_VERSION 1u
-#define DISKATLAS_FILE_NODE_STRUCT_VERSION 2u
+#define DISKATLAS_FILE_NODE_STRUCT_VERSION 3u
 #define DISKATLAS_SCAN_PROGRESS_STRUCT_VERSION 1u
 #define DISKATLAS_SCAN_RESULTS_VIEW_STRUCT_VERSION 1u
 
@@ -65,13 +65,15 @@ typedef struct diskatlas_scan_result scan_result_t;
 
 typedef struct file_node {
   uint32_t struct_version; /**< DISKATLAS_FILE_NODE_STRUCT_VERSION. */
-  uint32_t attributes;      /**< DISKATLAS_NODE_* bits. */
-  uint64_t size_bytes;
-  uint64_t mtime_unix_ns; /**< UTC wall time if available; 0 if unknown. */
-  const char *path;       /**< UTF-8, NUL-terminated; not owned by caller. */
+  uint32_t attributes;      /**< DISKATLAS_NODE_* bits (kind). */
+  uint64_t size_bytes;      /**< Logical file size. */
+  uint64_t allocated_bytes; /**< Best-effort on-disk allocation (e.g. cluster-rounded on Windows). */
+  uint64_t mtime_unix_ns;   /**< UTC wall time if available; 0 if unknown. */
+  const char *path;         /**< UTF-8, NUL-terminated; not owned by caller. */
   /** 0 = not in any multi-file duplicate cluster; otherwise shared id among same-cluster files. */
   uint32_t duplicate_group_id;
-  uint32_t reserved_u32;
+  /** Windows FILE_ATTRIBUTE_* from FindFirstFile when scanning on Win32; 0 if unset. */
+  uint32_t win32_attributes;
 } file_node_t;
 
 /** Sentinel: file is unique or unmatched for duplicate clustering. */
@@ -116,13 +118,13 @@ typedef struct scan_results_view {
 
 /* -------------------------------------------------------------------------- */
 /* Lifecycle & threading contract (informative)                                */
-/* - scan_start: allocates a scan_result_t; launches a Win32 worker via CreateThread
- *   and returns immediately while the filesystem scan runs on that thread.
+/* - scan_start: allocates a scan_result_t and starts a background worker
+ *   (native OS thread). Returns immediately while the filesystem scan runs.
  * - scan_cancel: thread-safe cancellation request; idempotent when complete.
  * - scan_get_progress / scan_get_results: observable from UI threads via atomics
- *   and minimal barriers; callers must not tear down buffers until joined in
+ *   and memory ordering; callers must not tear down buffers until joined in
  *   scan_result_free.
- * - scan_result_free: WaitForSingleObject on the worker, then frees result —
+ * - scan_result_free: joins the worker thread, then frees the result —
  *   not concurrent with other uses of this pointer after you begin freeing.
  * - path: UTF-8; native path separators per OS conventions. */
 /* -------------------------------------------------------------------------- */
