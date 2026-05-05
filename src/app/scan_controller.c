@@ -109,6 +109,21 @@ static void da_treemap_panel_sync_title(AppState *app) {
   }
 }
 
+/** Main window title: "{path} - DiskAtlas" when a folder/volume is selected (matches UI default title). */
+static void da_main_window_sync_title(AppState *app) {
+  static const char k_app_name[] = "DiskAtlas";
+  if (app == NULL || app->window == NULL || !GTK_IS_WINDOW(app->window)) {
+    return;
+  }
+  if (app->scan_root_utf8 == NULL || app->scan_root_utf8[0] == '\0') {
+    gtk_window_set_title(GTK_WINDOW(app->window), k_app_name);
+    return;
+  }
+  char title[4096];
+  snprintf(title, sizeof(title), "[%s] - %s", app->scan_root_utf8, k_app_name);
+  gtk_window_set_title(GTK_WINDOW(app->window), title);
+}
+
 static void da_refresh_treemap(AppState *app) {
   da_treemap_panel_sync_title(app);
   if (app != NULL && app->treemap != NULL && TREEMAP_IS_WIDGET(app->treemap)) {
@@ -800,6 +815,7 @@ void scan_controller_sync_display_max_combo(AppState *app) {
 
 void scan_controller_refresh_volume_labels(AppState *app) {
   da_treemap_panel_sync_title(app);
+  da_main_window_sync_title(app);
   if (app->scan_root_utf8 == NULL || app->scan_root_utf8[0] == '\0') {
     return;
   }
