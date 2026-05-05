@@ -73,6 +73,9 @@
                 <property name="position">3</property>
               </packing>
             </child>
+            <style>
+              <class name="global-panel"/>
+            </style>
           </object>
           <packing>
             <property name="expand">False</property>
@@ -84,8 +87,10 @@
           <object class="GtkBox" id="top_panel">
             <property name="visible">True</property>
             <property name="can-focus">False</property>
-            <property name="halign">start</property>
-            <property name="hexpand">False</property>
+            <property name="orientation">horizontal</property>
+            <property name="spacing">0</property>
+            <property name="halign">fill</property>
+            <property name="hexpand">True</property>
             <child>
               <!-- n-columns=3 n-rows=3 -->
               <object class="GtkGrid" id="volume_progress_grid">
@@ -160,7 +165,7 @@
               </object>
               <packing>
                 <property name="expand">False</property>
-                <property name="fill">False</property>
+                <property name="fill">True</property>
                 <property name="position">0</property>
               </packing>
             </child>
@@ -288,10 +293,25 @@
                 <property name="position">1</property>
               </packing>
             </child>
+            <child>
+              <object class="GtkBox" id="top_panel_tail_spacer">
+                <property name="visible">True</property>
+                <property name="can-focus">False</property>
+                <property name="orientation">horizontal</property>
+              </object>
+              <packing>
+                <property name="expand">True</property>
+                <property name="fill">True</property>
+                <property name="position">2</property>
+              </packing>
+            </child>
+            <style>
+              <class name="global-panel"/>
+            </style>
           </object>
           <packing>
             <property name="expand">False</property>
-            <property name="fill">False</property>
+            <property name="fill">True</property>
             <property name="position">1</property>
           </packing>
         </child>

@@ -44,36 +44,21 @@ static void on_restart_admin_clicked(GtkButton *btn, gpointer user_data) {
 #endif
 
 #define DISKATLAS_WINDOW_UI_RESOURCE "/ui/diskatlas_window.ui"
-/** gtk_widget_set_name for CSS; targets percent column progress rendering only on this tree. */
+#define DISKATLAS_APP_CSS_RESOURCE "/app.css"
+/** gtk_widget_set_name for CSS; targets percent column progress rendering on the file tree. */
 #define DISKATLAS_FILE_TREE_CSS_NAME "diskatlas_file_view_tree"
 
-static void da_install_file_tree_progress_css(GtkWidget *tree) {
-  GtkCssProvider *provider = gtk_css_provider_new();
-  /* GtkCellRendererProgress: trough = full cell; progressbar = filled segment only (gtkcellrendererprogress.c). */
-  const char *css =
-      "#" DISKATLAS_FILE_TREE_CSS_NAME ".view.trough {\n"
-      "  background-color: transparent;\n"
-      "  border: 1px solid alpha(@theme_fg_color, 0.35);\n"
-      "}\n"
-      "#" DISKATLAS_FILE_TREE_CSS_NAME ".view.progressbar {\n"
-      "  background-color: #3584e4;\n"
-      "  background-image: none;\n"
-      "  border: none;\n"
-      "  box-shadow: none;\n"
-      "  color: @theme_fg_color;\n"
-      "}\n"
-      "#" DISKATLAS_FILE_TREE_CSS_NAME ".view.progressbar:selected {\n"
-      "  color: @theme_selected_fg_color;\n"
-      "}\n";
-  GError *css_err = NULL;
-  if (!gtk_css_provider_load_from_data(provider, css, -1, &css_err)) {
-    g_warning("DiskAtlas file tree CSS: %s", css_err != NULL ? css_err->message : "unknown");
-    g_clear_error(&css_err);
-    g_object_unref(provider);
+static void da_load_global_app_css(void) {
+  static gboolean installed = FALSE;
+  if (installed) {
     return;
   }
-  gtk_style_context_add_provider(gtk_widget_get_style_context(tree), GTK_STYLE_PROVIDER(provider),
-                                 GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+  installed = TRUE;
+
+  GtkCssProvider *provider = gtk_css_provider_new();
+  gtk_css_provider_load_from_resource(provider, DISKATLAS_APP_CSS_RESOURCE);
+  gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(provider),
+                                            GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
   g_object_unref(provider);
 }
 
@@ -245,6 +230,8 @@ static void append_text_column(GtkTreeView *tv, const char *title, int model_col
 }
 
 void da_ui_build(AppState *app) {
+  da_load_global_app_css();
+
   GtkBuilder *builder = gtk_builder_new();
   GError *err = NULL;
   if (!gtk_builder_add_from_resource(builder, DISKATLAS_WINDOW_UI_RESOURCE, &err)) {
@@ -351,8 +338,6 @@ void da_ui_build(AppState *app) {
   }
 
   da_file_tree_install_sorting(GTK_TREE_VIEW(app->tree), app->store, app);
-
-  da_install_file_tree_progress_css(app->tree);
 
 #if defined(G_OS_WIN32)
   app->admin_ntfs_notice_panel = GTK_WIDGET(gtk_builder_get_object(builder, "admin_ntfs_notice_panel"));

@@ -1,0 +1,40 @@
+/* DiskAtlas - global application stylesheet */
+
+/* Top panel + similar boxed regions (class set on widgets in UI). */
+.global-panel {
+  border: 1px solid @borders;
+  border-radius: 1px;
+  padding: 6px;
+}
+
+/* Default GtkProgressBar */
+progressbar {
+  min-height: 12px;
+}
+
+progressbar trough {
+  min-height: 0;
+  padding: 0;
+}
+
+progressbar progress {
+  min-height: 0;
+}
+
+/* File list percent column */
+#diskatlas_file_view_tree.view.trough {
+  background-color: transparent;
+  border: 1px solid alpha(@theme_fg_color, 0.35);
+}
+
+#diskatlas_file_view_tree.view.progressbar {
+  background-color: #3584e4;
+  background-image: none;
+  border: none;
+  box-shadow: none;
+  color: @theme_fg_color;
+}
+
+#diskatlas_file_view_tree.view.progressbar:selected {
+  color: @theme_selected_fg_color;
+}

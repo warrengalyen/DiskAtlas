@@ -129,6 +129,7 @@ if(DISKATLAS_GTK3_FOUND)
     DEPENDS
       ${DISKATLAS_GRESOURCE_XML}
       ${DISKATLAS_RES_DIR}/ui/diskatlas_window.ui
+      ${DISKATLAS_RES_DIR}/app.css
     COMMENT "glib-compile-resources diskatlas"
     VERBATIM
   )

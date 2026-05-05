@@ -2,5 +2,6 @@
 <gresources>
   <gresource prefix="">
     <file compressed="true" preprocess="xml-stripblanks">ui/diskatlas_window.ui</file>
+    <file compressed="true">app.css</file>
   </gresource>
 </gresources>
