@@ -56,6 +56,10 @@ typedef struct scan_options {
  * FIXME(ntfs-mft): Implementation is still WIP — enable only after diskatlas_ntfs_mft.c is ready.
  */
 #define DISKATLAS_SCAN_OPTION_WIN32_NTFS_MFT (1u << 3)
+/** Skip duplicate clustering entirely (no duplicate_group_id assignments). */
+#define DISKATLAS_SCAN_OPTION_SKIP_DUPLICATE_CLUSTERING (1u << 4)
+/** Duplicate grouping matches full UTF-8 path (case-folded); default is basename-only. */
+#define DISKATLAS_SCAN_OPTION_DUPLICATE_MATCH_FULL_PATH (1u << 5)
 
 /* -------------------------------------------------------------------------- */
 /* scan_result_t — incomplete / opaque; only scan_result_t* may appear in API. */

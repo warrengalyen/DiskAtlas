@@ -1,8 +1,8 @@
 /*
  * DiskAtlas — Win32 GUI: column header + TreeView (duplicate groups expand in-place).
  */
-#ifndef MAIN_H
-#define MAIN_H
+#ifndef LEGACY_WIN32_MAIN_H
+#define LEGACY_WIN32_MAIN_H
 #endif
 #include <windows.h>
 #include <shellapi.h>
@@ -72,7 +72,7 @@
 
 #ifndef ARRAYSIZE
 #define ARRAYSIZE(a) ((int)(sizeof(a) / sizeof((a)[0])))
-#endif  /* MAIN_H */
+#endif  /* LEGACY_WIN32_MAIN_H */
 
 typedef struct {
   HWND hwnd;
@@ -1097,7 +1097,8 @@ static void FileTree_DrawRowColumns(AppState *app, HDC hdc, LONG_PTR lp, RECT *r
     FormatSizeW(n->size_bytes, sz, ARRAYSIZE(sz));
     FormatSizeW(n->allocated_bytes, alc, ARRAYSIZE(alc));
     FormatMtimeLocalW(n->mtime_unix_ns, mtime, ARRAYSIZE(mtime));
-    swprintf(dpc, ARRAYSIZE(dpc), L"%llu", (unsigned long long)nmem);
+    unsigned long long peers = nmem > 0 ? (unsigned long long)(nmem - 1u) : 0ull;
+    swprintf(dpc, ARRAYSIZE(dpc), L"%llu", peers);
     uint64_t dtot = DupGroupTotalSize(app->scan, &v, gid);
     FormatSizeW(dtot, dpsz, ARRAYSIZE(dpsz));
     FormatWin32AttrLetters(n->win32_attributes, att, ARRAYSIZE(att));
@@ -1132,7 +1133,8 @@ static void FileTree_DrawRowColumns(AppState *app, HDC hdc, LONG_PTR lp, RECT *r
 
   if (n->duplicate_group_id != DISKATLAS_DUPLICATE_GROUP_NONE) {
     size_t dc = diskatlas_dup_group_member_count(app->scan, n->duplicate_group_id);
-    swprintf(dpc, ARRAYSIZE(dpc), L"%llu", (unsigned long long)dc);
+    unsigned long long peers = dc > 0 ? dc - 1ull : 0ull;
+    swprintf(dpc, ARRAYSIZE(dpc), L"%llu", peers);
     uint64_t dtot = DupGroupTotalSize(app->scan, &v, n->duplicate_group_id);
     FormatSizeW(dtot, dpsz, ARRAYSIZE(dpsz));
   } else {

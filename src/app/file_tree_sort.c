@@ -248,10 +248,12 @@ static gint da_sort_col_dup_count(GtkTreeModel *model, GtkTreeIter *a, GtkTreeIt
   }
   size_t ca = 0, cb = 0;
   if (na->duplicate_group_id != DISKATLAS_DUPLICATE_GROUP_NONE) {
-    ca = diskatlas_dup_group_member_count(app->scan, na->duplicate_group_id);
+    size_t mc = diskatlas_dup_group_member_count(app->scan, na->duplicate_group_id);
+    ca = mc > 0 ? mc - 1u : 0u;
   }
   if (nb->duplicate_group_id != DISKATLAS_DUPLICATE_GROUP_NONE) {
-    cb = diskatlas_dup_group_member_count(app->scan, nb->duplicate_group_id);
+    size_t mc = diskatlas_dup_group_member_count(app->scan, nb->duplicate_group_id);
+    cb = mc > 0 ? mc - 1u : 0u;
   }
   if (ca < cb) {
     return -1;

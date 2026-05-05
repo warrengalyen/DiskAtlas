@@ -18,7 +18,6 @@
         <property name="spacing">6</property>
         <child>
           <object class="GtkBox" id="admin_ntfs_notice_panel">
-            <property name="visible">False</property>
             <property name="can-focus">False</property>
             <property name="spacing">10</property>
             <child>
@@ -313,7 +312,36 @@
                     <property name="halign">center</property>
                     <property name="margin-start">5</property>
                     <property name="margin-top">10</property>
-                    <property name="homogeneous">True</property>
+                    <property name="spacing">20</property>
+                    <child>
+                      <object class="GtkRadioButton" id="match_filename_only_radio">
+                        <property name="label" translatable="yes">Match file name only</property>
+                        <property name="visible">True</property>
+                        <property name="can-focus">True</property>
+                        <property name="receives-default">False</property>
+                        <property name="active">True</property>
+                        <property name="draw-indicator">True</property>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">True</property>
+                        <property name="position">0</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkRadioButton" id="match_entire_path_radio">
+                        <property name="label" translatable="yes">Match entire path</property>
+                        <property name="visible">True</property>
+                        <property name="can-focus">True</property>
+                        <property name="receives-default">False</property>
+                        <property name="draw-indicator">True</property>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">True</property>
+                        <property name="position">1</property>
+                      </packing>
+                    </child>
                     <child>
                       <object class="GtkBox" id="max_files_box">
                         <property name="visible">True</property>
@@ -346,21 +374,76 @@
                       <packing>
                         <property name="expand">False</property>
                         <property name="fill">True</property>
-                        <property name="position">0</property>
+                        <property name="position">2</property>
                       </packing>
                     </child>
                     <child>
-                      <object class="GtkCheckButton" id="chk_dup_mtime">
-                        <property name="label" translatable="yes">Dup clustering uses mtime</property>
+                      <object class="GtkCheckButton" id="show_folders_check">
+                        <property name="label" translatable="yes">Folders</property>
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
                         <property name="receives-default">False</property>
-                        <property name="draw-indicator">False</property>
+                        <property name="draw-indicator">True</property>
                       </object>
                       <packing>
                         <property name="expand">False</property>
                         <property name="fill">False</property>
                         <property name="position">3</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkBox" id="duplicate_files_box">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="spacing">5</property>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="visible">True</property>
+                            <property name="can-focus">False</property>
+                            <property name="label" translatable="yes">Duplicate Files:</property>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">0</property>
+                          </packing>
+                        </child>
+                        <child>
+                          <object class="GtkComboBoxText" id="duplicates_file_combo">
+                            <property name="visible">True</property>
+                            <property name="can-focus">False</property>
+                            <property name="active">2</property>
+                            <items>
+                              <item translatable="yes">Don't locate duplicates.</item>
+                              <item translatable="yes">Locate by Name and Size</item>
+                              <item translatable="yes">Locate by Name, Size and Date</item>
+                            </items>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">1</property>
+                          </packing>
+                        </child>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">True</property>
+                        <property name="position">4</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkCheckButton" id="duplicates_only_check">
+                        <property name="label" translatable="yes">Duplicates only</property>
+                        <property name="visible">True</property>
+                        <property name="can-focus">True</property>
+                        <property name="receives-default">False</property>
+                        <property name="draw-indicator">True</property>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">True</property>
+                        <property name="position">5</property>
                       </packing>
                     </child>
                   </object>

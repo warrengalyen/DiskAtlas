@@ -71,12 +71,13 @@ static void fnv1a64_fold_wchar(uint64_t *h, wchar_t c) {
   *h *= 1099511628211ULL;
 }
 
-uint64_t diskatlas_basename_hash_ci_fold_utf8(const char *basename_utf8) {
+/** Case-folded UTF-8 FNV-1a hash (basename or full path). */
+static uint64_t utf8_fold_hash_fnv1a(const char *utf8) {
   uint64_t h = 14695981039346656037ULL;
-  if (basename_utf8 == NULL || basename_utf8[0] == '\0') {
+  if (utf8 == NULL || utf8[0] == '\0') {
     return h;
   }
-  const char *p = basename_utf8;
+  const char *p = utf8;
   mbstate_t st;
   memset(&st, 0, sizeof(st));
   while (*p) {
@@ -97,6 +98,10 @@ uint64_t diskatlas_basename_hash_ci_fold_utf8(const char *basename_utf8) {
     p += n;
   }
   return h;
+}
+
+uint64_t diskatlas_basename_hash_ci_fold_utf8(const char *basename_utf8) {
+  return utf8_fold_hash_fnv1a(basename_utf8);
 }
 
 typedef struct {
@@ -215,7 +220,12 @@ int diskatlas_compute_duplicate_clusters(diskatlas_scan_result_t *r, uint32_t sc
     return 0;
   }
 
+  if ((scan_flags & DISKATLAS_SCAN_OPTION_SKIP_DUPLICATE_CLUSTERING) != 0) {
+    return 0;
+  }
+
   const bool use_mtime = (scan_flags & DISKATLAS_SCAN_OPTION_DUPLICATE_USE_MTIME) != 0;
+  const bool match_full_path = (scan_flags & DISKATLAS_SCAN_OPTION_DUPLICATE_MATCH_FULL_PATH) != 0;
 
   size_t nf = 0;
   for (size_t i = 0; i < r->node_count; i++) {
@@ -237,10 +247,12 @@ int diskatlas_compute_duplicate_clusters(diskatlas_scan_result_t *r, uint32_t sc
     if (!NodeIsEligibleFileEntry(r, i)) {
       continue;
     }
-    const char *bn = utf8_basename_ptr(r->nodes[i].path);
+    const char *path = r->nodes[i].path;
     rec[wi].node_index = i;
     rec[wi].size_bytes = r->nodes[i].size_bytes;
-    rec[wi].name_hash = diskatlas_basename_hash_ci_fold_utf8(bn);
+    rec[wi].name_hash =
+        match_full_path ? utf8_fold_hash_fnv1a(path != NULL ? path : "")
+                        : diskatlas_basename_hash_ci_fold_utf8(utf8_basename_ptr(path));
     rec[wi].mtime_key = use_mtime ? r->nodes[i].mtime_unix_ns : 0;
     wi++;
   }

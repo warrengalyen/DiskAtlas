@@ -35,6 +35,8 @@ static void app_status_set_text(AppState *app, const char *text) {
 
 static const file_node_t *da_qsort_nodes;
 
+static int cmp_index_by_size_desc(const void *pa, const void *pb);
+
 static int cmp_index_by_size_desc(const void *pa, const void *pb) {
   size_t ia = *(const size_t *)pa;
   size_t ib = *(const size_t *)pb;
@@ -47,6 +49,45 @@ static int cmp_index_by_size_desc(const void *pa, const void *pb) {
     return 1;
   }
   return (ia > ib) - (ia < ib);
+}
+
+static int rebuild_master_index_list(AppState *app) {
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (app == NULL || app->scan == NULL || v.nodes == NULL || v.count == 0) {
+    free(app->master_indices);
+    app->master_indices = NULL;
+    app->master_count = 0;
+    return 0;
+  }
+  size_t n_vis = 0;
+  for (size_t i = 0; i < v.count; ++i) {
+    if (da_node_shown_in_file_view(app, &v, i)) {
+      n_vis++;
+    }
+  }
+  if (n_vis == 0) {
+    free(app->master_indices);
+    app->master_indices = NULL;
+    app->master_count = 0;
+    return 0;
+  }
+  size_t *indices = (size_t *)calloc(n_vis, sizeof(size_t));
+  if (!indices) {
+    return -1;
+  }
+  size_t j = 0;
+  for (size_t i = 0; i < v.count; ++i) {
+    if (da_node_shown_in_file_view(app, &v, i)) {
+      indices[j++] = i;
+    }
+  }
+  da_qsort_nodes = v.nodes;
+  qsort(indices, n_vis, sizeof(size_t), cmp_index_by_size_desc);
+  da_qsort_nodes = NULL;
+  free(app->master_indices);
+  app->master_indices = indices;
+  app->master_count = n_vis;
+  return 0;
 }
 
 static gboolean on_timer_fill_chunk(gpointer data);
@@ -231,9 +272,10 @@ static void set_scan_done_status(AppState *app) {
   unsigned long long npool_ll = (unsigned long long)pool;
   gboolean capped = pool > visible;
   uint32_t dgc = diskatlas_dup_max_group_id(app->scan);
+  gboolean view_pool = da_view_uses_filtered_pool(app);
 
   char line[2048];
-  if (app->filter_active && app->filter_build_running) {
+  if (view_pool && app->filter_build_running) {
     snprintf(line, sizeof(line),
              "Filtering… showing %llu (scan %llu)%s — dup groups %u.",
              (unsigned long long)app->filtered_count,
@@ -251,6 +293,19 @@ static void set_scan_done_status(AppState *app) {
       snprintf(line, sizeof(line),
                "Showing %llu of %llu (by size)%s — %" PRIu64 " bytes — dup groups %u.", nshow_tree,
                ntot, pr.is_cancel_observed ? ", cancelled" : "", (uint64_t)pr.bytes_accounted,
+               (unsigned int)dgc);
+    }
+  } else if (da_duplicates_only(app)) {
+    if (capped) {
+      snprintf(line, sizeof(line),
+               "Showing %llu of %llu duplicate files at root (list cap)%s — %" PRIu64
+               " bytes — dup groups %u.",
+               nshow_tree, npool_ll, pr.is_cancel_observed ? ", cancelled" : "",
+               (uint64_t)pr.bytes_accounted, (unsigned int)dgc);
+    } else {
+      snprintf(line, sizeof(line),
+               "Showing %llu duplicate files (by size)%s — %" PRIu64 " bytes — dup groups %u.",
+               nshow_tree, pr.is_cancel_observed ? ", cancelled" : "", (uint64_t)pr.bytes_accounted,
                (unsigned int)dgc);
     }
   } else {
@@ -277,14 +332,20 @@ void scan_controller_restore_scan_status(AppState *app) {
 static void apply_search_filter(AppState *app) {
   kill_timer(&app->timer_search);
 
-  if (app->search == NULL || app->scan == NULL) {
+  if (app == NULL || app->scan == NULL) {
     return;
   }
 
-  const gchar *t = gtk_entry_get_text(GTK_ENTRY(app->search));
-  g_strlcpy(app->filter_text, t ? t : "", sizeof(app->filter_text));
+  if (app->search != NULL) {
+    const gchar *t = gtk_entry_get_text(GTK_ENTRY(app->search));
+    g_strlcpy(app->filter_text, t ? t : "", sizeof(app->filter_text));
+  } else {
+    app->filter_text[0] = '\0';
+  }
 
-  gboolean want = (app->filter_text[0] != '\0');
+  gboolean want_search = (app->filter_text[0] != '\0');
+  gboolean dup_only = da_duplicates_only(app);
+  gboolean need_aux_pool = want_search || dup_only;
 
   kill_timer(&app->timer_filter);
   app->filter_build_running = FALSE;
@@ -293,9 +354,9 @@ static void apply_search_filter(AppState *app) {
     return;
   }
 
-  app->filter_active = want;
+  app->filter_active = want_search;
 
-  if (!want) {
+  if (!need_aux_pool) {
     app->filtered_count = 0;
     app->filter_scan_pos = 0;
     gboolean more = da_tree_begin_root_insert(app);
@@ -313,10 +374,14 @@ static void apply_search_filter(AppState *app) {
     gtk_dialog_run(GTK_DIALOG(d));
     gtk_widget_destroy(d);
     app->filter_active = FALSE;
+    if (app->duplicates_only_check != NULL) {
+      gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app->duplicates_only_check), FALSE);
+    }
     gboolean more = da_tree_begin_root_insert(app);
     if (more) {
       app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
     }
+    set_scan_done_status(app);
     return;
   }
 
@@ -330,7 +395,7 @@ static void apply_search_filter(AppState *app) {
 
 static gboolean on_timer_filter_chunk(gpointer data) {
   AppState *app = (AppState *)data;
-  if (!app->filter_active || !app->filter_build_running || app->scan == NULL ||
+  if (!da_view_uses_filtered_pool(app) || !app->filter_build_running || app->scan == NULL ||
       app->master_indices == NULL || app->master_count == 0 || app->filtered_indices == NULL) {
     kill_timer(&app->timer_filter);
     app->filter_build_running = FALSE;
@@ -358,7 +423,11 @@ static gboolean on_timer_filter_chunk(gpointer data) {
   for (; app->filter_scan_pos < app->master_count && scanned < (size_t)DA_FILTER_BATCH;
        ++scanned, ++app->filter_scan_pos) {
     size_t nid = app->master_indices[app->filter_scan_pos];
-    if (!da_utf8_basename_matches_filter(v.nodes[nid].path, app->filter_text)) {
+    if (da_duplicates_only(app) &&
+        v.nodes[nid].duplicate_group_id == DISKATLAS_DUPLICATE_GROUP_NONE) {
+      continue;
+    }
+    if (app->filter_active && !da_utf8_basename_matches_filter(v.nodes[nid].path, app->filter_text)) {
       continue;
     }
 
@@ -372,16 +441,20 @@ static gboolean on_timer_filter_chunk(gpointer data) {
       if (nb == NULL) {
         kill_timer(&app->timer_filter);
         app->filter_build_running = FALSE;
-        gboolean more = da_tree_begin_root_insert(app);
-        if (more) {
-          app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
+        app->filter_active = FALSE;
+        if (app->duplicates_only_check != NULL) {
+          gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app->duplicates_only_check), FALSE);
         }
-        set_scan_done_status(app);
         GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
                                               GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
                                               "Out of memory while filtering.");
         gtk_dialog_run(GTK_DIALOG(d));
         gtk_widget_destroy(d);
+        gboolean more = da_tree_begin_root_insert(app);
+        if (more) {
+          app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
+        }
+        set_scan_done_status(app);
         return G_SOURCE_REMOVE;
       }
       app->filtered_indices = nb;
@@ -456,8 +529,7 @@ static gboolean on_timer_fill_chunk(gpointer data) {
       return G_SOURCE_REMOVE;
     }
     panel_scan_set_text(app, "Sorting entries by size…");
-    size_t *indices = (size_t *)calloc(v.count, sizeof(size_t));
-    if (!indices) {
+    if (rebuild_master_index_list(app) != 0) {
       kill_timer(&app->timer_fill);
       panel_scan_set_text(app, "Could not allocate sort index.");
       app->list_populated = TRUE;
@@ -469,14 +541,6 @@ static gboolean on_timer_fill_chunk(gpointer data) {
       gtk_widget_destroy(d);
       return G_SOURCE_REMOVE;
     }
-    for (size_t i = 0; i < v.count; ++i) {
-      indices[i] = i;
-    }
-    da_qsort_nodes = v.nodes;
-    qsort(indices, v.count, sizeof(size_t), cmp_index_by_size_desc);
-    da_qsort_nodes = NULL;
-    app->master_indices = indices;
-    app->master_count = v.count;
     return G_SOURCE_CONTINUE;
   }
 
@@ -508,7 +572,8 @@ static gboolean on_timer_fill_chunk(gpointer data) {
   }
 
   const gchar *peek = gtk_entry_get_text(GTK_ENTRY(app->search));
-  if (peek != NULL && peek[0] != '\0') {
+  gboolean search_nonempty = (peek != NULL && peek[0] != '\0');
+  if (search_nonempty || da_duplicates_only(app)) {
     apply_search_filter(app);
   }
   return G_SOURCE_REMOVE;
@@ -597,9 +662,28 @@ static void start_scan(AppState *app) {
   opt.flags = 0;
   opt.max_depth = 0;
   opt.io_threads = 0;
-  if (app->chk_dup_mtime != NULL &&
-      gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app->chk_dup_mtime))) {
+  if (app->duplicates_file_combo != NULL) {
+    gint dup_mode = gtk_combo_box_get_active(GTK_COMBO_BOX(app->duplicates_file_combo));
+    if (dup_mode < 0) {
+      dup_mode = 2;
+    }
+    switch (dup_mode) {
+    case 0:
+      opt.flags |= DISKATLAS_SCAN_OPTION_SKIP_DUPLICATE_CLUSTERING;
+      break;
+    case 1:
+      break;
+    case 2:
+    default:
+      opt.flags |= DISKATLAS_SCAN_OPTION_DUPLICATE_USE_MTIME;
+      break;
+    }
+  } else {
     opt.flags |= DISKATLAS_SCAN_OPTION_DUPLICATE_USE_MTIME;
+  }
+  if ((opt.flags & DISKATLAS_SCAN_OPTION_SKIP_DUPLICATE_CLUSTERING) == 0 && app->match_entire_path_radio != NULL &&
+      gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app->match_entire_path_radio))) {
+    opt.flags |= DISKATLAS_SCAN_OPTION_DUPLICATE_MATCH_FULL_PATH;
   }
 /* FIXME(ntfs-mft): Set to 1 to use raw $MFT scan when elevated; 0 = FindFirst tree until MFT is fixed. */
 #ifndef DISKATLAS_APP_ENABLE_NTFS_MFT
@@ -657,6 +741,36 @@ static void on_file_set(GtkFileChooserButton *b, gpointer user_data) {
   g_free(fn);
   scan_controller_refresh_volume_labels(app);
   da_refresh_treemap(app);
+}
+
+static void on_show_folders_toggled(GtkToggleButton *btn, gpointer user_data) {
+  (void)btn;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || !app->list_populated || app->scan == NULL) {
+    return;
+  }
+
+  kill_timer(&app->timer_fill);
+  kill_timer(&app->timer_filter);
+  kill_timer(&app->timer_tree);
+
+  panel_scan_set_text(app, "Sorting entries by size…");
+  if (rebuild_master_index_list(app) != 0) {
+    GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
+                                          GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
+                                          "Out of memory while rebuilding the file list.");
+    gtk_dialog_run(GTK_DIALOG(d));
+    gtk_widget_destroy(d);
+    return;
+  }
+
+  apply_search_filter(app);
+}
+
+static void on_duplicates_only_toggled(GtkToggleButton *btn, gpointer user_data) {
+  (void)btn;
+  AppState *app = (AppState *)user_data;
+  apply_search_filter(app);
 }
 
 static void on_combo_display_changed(GtkComboBox *cb, gpointer user_data) {
@@ -733,6 +847,12 @@ void scan_controller_attach(AppState *app) {
   g_signal_connect(app->scan_btn, "clicked", G_CALLBACK(on_scan_clicked), app);
   g_signal_connect(app->file_chooser_btn, "file-set", G_CALLBACK(on_file_set), app);
   g_signal_connect(app->combo_display_max, "changed", G_CALLBACK(on_combo_display_changed), app);
+  if (app->duplicates_only_check != NULL) {
+    g_signal_connect(app->duplicates_only_check, "toggled", G_CALLBACK(on_duplicates_only_toggled), app);
+  }
+  if (app->show_folders_check != NULL) {
+    g_signal_connect(app->show_folders_check, "toggled", G_CALLBACK(on_show_folders_toggled), app);
+  }
   g_signal_connect(app->search, "changed", G_CALLBACK(on_search_changed), app);
   g_signal_connect(app->tree, "row-expanded", G_CALLBACK(on_tree_row_expanded), app);
   if (app->treemap != NULL && TREEMAP_IS_WIDGET(app->treemap)) {

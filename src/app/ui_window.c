@@ -280,7 +280,11 @@ void da_ui_build(AppState *app) {
   app->panel_scan_label = GTK_WIDGET(gtk_builder_get_object(builder, "panel_scan_label"));
   app->progress = GTK_WIDGET(gtk_builder_get_object(builder, "progress"));
   app->search = GTK_WIDGET(gtk_builder_get_object(builder, "search"));
-  app->chk_dup_mtime = GTK_WIDGET(gtk_builder_get_object(builder, "chk_dup_mtime"));
+  app->duplicates_file_combo = GTK_WIDGET(gtk_builder_get_object(builder, "duplicates_file_combo"));
+  app->match_filename_only_radio = GTK_WIDGET(gtk_builder_get_object(builder, "match_filename_only_radio"));
+  app->match_entire_path_radio = GTK_WIDGET(gtk_builder_get_object(builder, "match_entire_path_radio"));
+  app->duplicates_only_check = GTK_WIDGET(gtk_builder_get_object(builder, "duplicates_only_check"));
+  app->show_folders_check = GTK_WIDGET(gtk_builder_get_object(builder, "show_folders_check"));
   app->combo_display_max = GTK_WIDGET(gtk_builder_get_object(builder, "combo_display_max"));
   app->tree = GTK_WIDGET(gtk_builder_get_object(builder, "file_view_tree"));
   gtk_widget_set_name(app->tree, DISKATLAS_FILE_TREE_CSS_NAME);

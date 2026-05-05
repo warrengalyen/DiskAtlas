@@ -74,6 +74,38 @@ static gboolean wild_match_ci_folded_recursive(const char *pat, const char *str,
   return wild_match_ci_folded_recursive(pat + 1, str + 1, depth);
 }
 
+gboolean da_duplicates_only(const AppState *app) {
+  if (app == NULL || app->duplicates_only_check == NULL) {
+    return FALSE;
+  }
+  return gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app->duplicates_only_check));
+}
+
+gboolean da_view_uses_filtered_pool(const AppState *app) {
+  if (app == NULL) {
+    return FALSE;
+  }
+  return app->filter_active || da_duplicates_only(app);
+}
+
+gboolean da_show_folders_in_file_list(const AppState *app) {
+  if (app == NULL || app->show_folders_check == NULL) {
+    return FALSE;
+  }
+  return gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app->show_folders_check));
+}
+
+gboolean da_node_shown_in_file_view(const AppState *app, const scan_results_view_t *v, size_t nid) {
+  if (v == NULL || v->nodes == NULL || nid >= v->count) {
+    return FALSE;
+  }
+  uint32_t kind = v->nodes[nid].attributes & DISKATLAS_NODE_KIND_MASK;
+  if (kind == DISKATLAS_NODE_KIND_DIR && !da_show_folders_in_file_list(app)) {
+    return FALSE;
+  }
+  return TRUE;
+}
+
 gboolean da_utf8_basename_matches_filter(const char *path_utf8, const char *filter_utf8) {
   if (!filter_utf8 || !filter_utf8[0]) {
     return TRUE;
@@ -144,7 +176,8 @@ static void fill_row_strings(AppState *app, size_t nid, char col[DA_COL_COUNT][5
   uint32_t gid = n->duplicate_group_id;
   if (gid != DISKATLAS_DUPLICATE_GROUP_NONE) {
     size_t mc = diskatlas_dup_group_member_count(app->scan, gid);
-    snprintf(col[6], sizeof(col[6]), "%zu", mc);
+    size_t peers = mc > 0 ? mc - 1u : 0u;
+    snprintf(col[6], sizeof(col[6]), "%zu", peers);
     uint64_t dsum = dup_group_total_size(app->scan, &v, gid);
     da_format_bytes(dsum, col[7], sizeof(col[7]));
   } else {
@@ -188,7 +221,7 @@ size_t da_source_pool_count(const AppState *app) {
   if (app == NULL) {
     return 0;
   }
-  return app->filter_active ? app->filtered_count : app->master_count;
+  return da_view_uses_filtered_pool(app) ? app->filtered_count : app->master_count;
 }
 
 size_t da_source_count(const AppState *app) {
@@ -204,7 +237,7 @@ size_t da_source_count(const AppState *app) {
 }
 
 size_t da_source_at(const AppState *app, size_t i) {
-  if (app->filter_active) {
+  if (da_view_uses_filtered_pool(app)) {
     return app->filtered_indices[i];
   }
   return app->master_indices[i];
@@ -218,6 +251,7 @@ gboolean da_tree_begin_root_insert(AppState *app) {
   if (app->master_count == 0) {
     return FALSE;
   }
+  /* Flatten roots only when filtering by name; "Duplicates only" still uses grouped dup rows. */
   if (!app->filter_active) {
     uint32_t mg = diskatlas_dup_max_group_id(app->scan);
     if (ensure_dup_group_seen(app, mg) != 0) {

@@ -28,7 +28,11 @@ typedef struct AppState {
   GtkWidget *panel_scan_label;
   GtkWidget *progress;
   GtkWidget *search;
-  GtkWidget *chk_dup_mtime;
+  GtkWidget *duplicates_file_combo;
+  GtkWidget *match_filename_only_radio;
+  GtkWidget *match_entire_path_radio;
+  GtkWidget *duplicates_only_check;
+  GtkWidget *show_folders_check;
   GtkWidget *combo_display_max;
   GtkWidget *tree;
   /** Centered caption above treemap (“Top level: …”). */
