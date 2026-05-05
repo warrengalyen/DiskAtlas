@@ -1,4 +1,6 @@
 #include <inttypes.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,24 +15,195 @@
 #include "scan_controller.h"
 #include "volumes.h"
 
-static void app_status_set_text(AppState *app, const char *text) {
-  if (app == NULL || app->status == NULL) {
+#define DA_FILE_VIEW_NOTEBOOK_PAGE 0
+
+static gboolean scan_controller_is_file_view_tab(const AppState *app) {
+  if (app == NULL || app->main_notebook == NULL) {
+    return TRUE;
+  }
+  return gtk_notebook_get_current_page(GTK_NOTEBOOK(app->main_notebook)) == DA_FILE_VIEW_NOTEBOOK_PAGE;
+}
+
+static void scan_controller_clear_file_view_status(AppState *app) {
+  if (app == NULL) {
     return;
   }
-  const char *t = text != NULL ? text : "";
-  if (GTK_IS_STATUSBAR(app->status)) {
-    GtkStatusbar *sb = GTK_STATUSBAR(app->status);
-    guint ctx = gtk_statusbar_get_context_id(sb, "diskatlas");
-    if (app->statusbar_msg_id != 0u) {
-      gtk_statusbar_remove(sb, ctx, app->statusbar_msg_id);
-      app->statusbar_msg_id = 0;
-    }
-    if (t[0] != '\0') {
-      app->statusbar_msg_id = gtk_statusbar_push(sb, ctx, t);
-    }
-  } else {
-    gtk_label_set_text(GTK_LABEL(app->status), t);
+  if (app->status_label_left != NULL) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_left), "");
   }
+  if (app->status_label_center != NULL) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_center), "");
+  }
+  if (app->status_label_right != NULL) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_right), "");
+  }
+}
+
+static void scan_controller_update_status_left_from_selection(AppState *app) {
+  if (app == NULL || app->status_label_left == NULL || app->tree == NULL) {
+    return;
+  }
+  if (app->scan == NULL) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_left), "");
+    return;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (v.nodes == NULL) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_left), "");
+    return;
+  }
+  GtkTreeSelection *sel = gtk_tree_view_get_selection(GTK_TREE_VIEW(app->tree));
+  GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(app->tree));
+  GList *rows = gtk_tree_selection_get_selected_rows(sel, &model);
+  if (rows == NULL) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_left), "");
+    return;
+  }
+  size_t n_files_sel = 0;
+  uint64_t sum_sz = 0;
+  uint64_t sum_alloc = 0;
+  for (GList *l = rows; l != NULL; l = l->next) {
+    GtkTreePath *path = (GtkTreePath *)l->data;
+    GtkTreeIter iter;
+    if (!gtk_tree_model_get_iter(model, &iter, path)) {
+      continue;
+    }
+    gint64 lp = 0;
+    gtk_tree_model_get(model, &iter, DA_COL_LP, &lp, -1);
+    size_t nid = 0;
+    if (!da_tree_lp_to_scan_nid(app, lp, &nid) || nid == SIZE_MAX || nid >= v.count) {
+      continue;
+    }
+    const file_node_t *node = &v.nodes[nid];
+    uint32_t kind = node->attributes & DISKATLAS_NODE_KIND_MASK;
+    if (kind == DISKATLAS_NODE_KIND_FILE) {
+      n_files_sel++;
+    }
+    sum_sz += node->size_bytes;
+    sum_alloc += node->allocated_bytes;
+  }
+  g_list_free_full(rows, (GDestroyNotify)gtk_tree_path_free);
+
+  char nfs[48];
+  char tsz[72];
+  char asz[72];
+  char buf[512];
+  da_format_uint64_locale((uint64_t)n_files_sel, nfs, sizeof(nfs));
+  da_format_bytes(sum_sz, tsz, sizeof(tsz));
+  da_format_bytes(sum_alloc, asz, sizeof(asz));
+  snprintf(buf, sizeof(buf), "Selected Files: %s, Total Size: %s, Allocated: %s", nfs, tsz, asz);
+  gtk_label_set_text(GTK_LABEL(app->status_label_left), buf);
+}
+
+static void scan_controller_update_status_right_totals(AppState *app) {
+  if (app == NULL || app->status_label_right == NULL) {
+    return;
+  }
+  if (app->scan == NULL) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_right), "");
+    return;
+  }
+  scan_progress_t pr = scan_get_progress(app->scan);
+  if (!pr.is_complete) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_right), "—");
+    return;
+  }
+  if (!app->list_populated || !app->file_view_tree_ready) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_right), "Loading file list...");
+    return;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (v.nodes == NULL) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_right), "");
+    return;
+  }
+  size_t n_list = da_source_count(app);
+  uint64_t sum_sz = 0;
+  uint64_t sum_alloc = 0;
+  size_t n_files = 0;
+  for (size_t i = 0; i < n_list; i++) {
+    size_t nid = da_source_at(app, i);
+    if (nid >= v.count) {
+      continue;
+    }
+    const file_node_t *node = &v.nodes[nid];
+    uint32_t kind = node->attributes & DISKATLAS_NODE_KIND_MASK;
+    if (kind == DISKATLAS_NODE_KIND_FILE) {
+      n_files++;
+    }
+    sum_sz += node->size_bytes;
+    sum_alloc += node->allocated_bytes;
+  }
+  char nf[48];
+  char tsz[72];
+  char asz[72];
+  char buf[384];
+  da_format_uint64_locale((uint64_t)n_files, nf, sizeof(nf));
+  da_format_bytes(sum_sz, tsz, sizeof(tsz));
+  da_format_bytes(sum_alloc, asz, sizeof(asz));
+  snprintf(buf, sizeof(buf), "(%s files, Total Size: %s, Allocated: %s)", nf, tsz, asz);
+  gtk_label_set_text(GTK_LABEL(app->status_label_right), buf);
+}
+
+void scan_controller_sync_file_view_status(AppState *app) {
+  if (app == NULL || app->status_label_left == NULL) {
+    return;
+  }
+  if (!scan_controller_is_file_view_tab(app)) {
+    scan_controller_clear_file_view_status(app);
+    return;
+  }
+  scan_controller_update_status_left_from_selection(app);
+  scan_controller_update_status_right_totals(app);
+}
+
+static void on_tree_selection_changed(GtkTreeSelection *sel, gpointer user_data) {
+  (void)sel;
+  AppState *app = (AppState *)user_data;
+  if (app != NULL && scan_controller_is_file_view_tab(app)) {
+    scan_controller_update_status_left_from_selection(app);
+  }
+}
+
+static gboolean on_tree_motion(GtkWidget *tv, GdkEventMotion *ev, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->status_label_center == NULL || !scan_controller_is_file_view_tab(app)) {
+    return FALSE;
+  }
+  GtkTreePath *path = NULL;
+  if (!gtk_tree_view_get_path_at_pos(GTK_TREE_VIEW(tv), (gint)ev->x, (gint)ev->y, &path, NULL, NULL,
+                                     NULL)) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_center), "");
+    return FALSE;
+  }
+  GtkTreeIter iter;
+  GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(tv));
+  gchar *pstr = NULL;
+  if (gtk_tree_model_get_iter(model, &iter, path)) {
+    gtk_tree_model_get(model, &iter, 1, &pstr, -1);
+  }
+  gtk_tree_path_free(path);
+  gtk_label_set_text(GTK_LABEL(app->status_label_center), pstr != NULL ? pstr : "");
+  g_free(pstr);
+  return FALSE;
+}
+
+static gboolean on_tree_leave(GtkWidget *tv, GdkEventCrossing *ev, gpointer user_data) {
+  (void)tv;
+  (void)ev;
+  AppState *app = (AppState *)user_data;
+  if (app != NULL && app->status_label_center != NULL && scan_controller_is_file_view_tab(app)) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_center), "");
+  }
+  return FALSE;
+}
+
+static void on_notebook_switch_page(GtkNotebook *nb, GtkWidget *page, guint page_num,
+                                    gpointer user_data) {
+  (void)nb;
+  (void)page;
+  (void)page_num;
+  scan_controller_sync_file_view_status((AppState *)user_data);
 }
 
 static const file_node_t *da_qsort_nodes;
@@ -120,7 +293,7 @@ static void da_main_window_sync_title(AppState *app) {
     return;
   }
   char title[4096];
-  snprintf(title, sizeof(title), "[%s] - %s", app->scan_root_utf8, k_app_name);
+  snprintf(title, sizeof(title), "%s - %s", app->scan_root_utf8, k_app_name);
   gtk_window_set_title(GTK_WINDOW(app->window), title);
 }
 
@@ -168,35 +341,30 @@ static void on_treemap_selected(GtkWidget *treemap, gint64 scan_index, gpointer 
 static void on_treemap_hover(GtkWidget *treemap, gint64 scan_index, gpointer user_data) {
   AppState *app = (AppState *)user_data;
   (void)treemap;
-  if (app == NULL || app->status == NULL) {
+  if (app == NULL || app->status_label_center == NULL || !scan_controller_is_file_view_tab(app)) {
     return;
   }
   if (scan_index == -1) {
-    scan_controller_restore_scan_status(app);
+    gtk_label_set_text(GTK_LABEL(app->status_label_center), "");
     return;
   }
   if (scan_index == -2) {
-    app_status_set_text(app, "Treemap: Other (merged entries beyond treemap tile cap)");
+    gtk_label_set_text(GTK_LABEL(app->status_label_center),
+                       "Other (merged entries beyond treemap tile cap)");
     return;
   }
   if (scan_index < 0 || app->scan == NULL) {
-    scan_controller_restore_scan_status(app);
+    gtk_label_set_text(GTK_LABEL(app->status_label_center), "");
     return;
   }
-  {
-    scan_results_view_t v = scan_get_results(app->scan);
-    size_t ix = (size_t)scan_index;
-    char line[2048];
-    char sz[80];
-    if (v.nodes == NULL || ix >= v.count) {
-      scan_controller_restore_scan_status(app);
-      return;
-    }
-    da_format_bytes(v.nodes[ix].size_bytes, sz, sizeof sz);
-    snprintf(line, sizeof line, "Treemap hover: %s  (%s)",
-             v.nodes[ix].path != NULL ? v.nodes[ix].path : "", sz);
-    app_status_set_text(app, line);
+  scan_results_view_t v = scan_get_results(app->scan);
+  size_t ix = (size_t)scan_index;
+  if (v.nodes == NULL || ix >= v.count) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_center), "");
+    return;
   }
+  const char *p = v.nodes[ix].path;
+  gtk_label_set_text(GTK_LABEL(app->status_label_center), p != NULL ? p : "");
 }
 
 static void kill_timer(guint *id) {
@@ -274,76 +442,6 @@ static gboolean ensure_filtered_capacity(AppState *app) {
   return TRUE;
 }
 
-static void set_scan_done_status(AppState *app) {
-  if (app->status == NULL || app->scan == NULL) {
-    return;
-  }
-  scan_progress_t pr = scan_get_progress(app->scan);
-  scan_results_view_t v = scan_get_results(app->scan);
-  unsigned long long ntot = (unsigned long long)v.count;
-  size_t pool = da_source_pool_count(app);
-  size_t visible = da_source_count(app);
-  unsigned long long nshow_tree = (unsigned long long)visible;
-  unsigned long long npool_ll = (unsigned long long)pool;
-  gboolean capped = pool > visible;
-  uint32_t dgc = diskatlas_dup_max_group_id(app->scan);
-  gboolean view_pool = da_view_uses_filtered_pool(app);
-
-  char line[2048];
-  if (view_pool && app->filter_build_running) {
-    snprintf(line, sizeof(line),
-             "Filtering… showing %llu (scan %llu)%s — dup groups %u.",
-             (unsigned long long)app->filtered_count,
-             (unsigned long long)(app->filter_scan_pos <= app->master_count ? app->filter_scan_pos
-                                                                            : app->master_count),
-             pr.is_cancel_observed ? ", cancelled scan" : "", (unsigned int)dgc);
-  } else if (app->filter_active) {
-    if (capped) {
-      snprintf(line, sizeof(line),
-               "Showing %llu of %llu matches at root (sorted by size; list cap)%s — %" PRIu64
-               " bytes — dup groups %u.",
-               nshow_tree, npool_ll, pr.is_cancel_observed ? ", cancelled" : "",
-               (uint64_t)pr.bytes_accounted, (unsigned int)dgc);
-    } else {
-      snprintf(line, sizeof(line),
-               "Showing %llu of %llu (by size)%s — %" PRIu64 " bytes — dup groups %u.", nshow_tree,
-               ntot, pr.is_cancel_observed ? ", cancelled" : "", (uint64_t)pr.bytes_accounted,
-               (unsigned int)dgc);
-    }
-  } else if (da_duplicates_only(app)) {
-    if (capped) {
-      snprintf(line, sizeof(line),
-               "Showing %llu of %llu duplicate files at root (list cap)%s — %" PRIu64
-               " bytes — dup groups %u.",
-               nshow_tree, npool_ll, pr.is_cancel_observed ? ", cancelled" : "",
-               (uint64_t)pr.bytes_accounted, (unsigned int)dgc);
-    } else {
-      snprintf(line, sizeof(line),
-               "Showing %llu duplicate files (by size)%s — %" PRIu64 " bytes — dup groups %u.",
-               nshow_tree, pr.is_cancel_observed ? ", cancelled" : "", (uint64_t)pr.bytes_accounted,
-               (unsigned int)dgc);
-    }
-  } else {
-    if (capped) {
-      snprintf(line, sizeof(line),
-               "Done — showing %llu of %llu entries at root (list cap)%s — %" PRIu64
-               " bytes accounted — dup groups %u.",
-               nshow_tree, npool_ll, pr.is_cancel_observed ? ", cancelled" : "",
-               (uint64_t)pr.bytes_accounted, (unsigned int)dgc);
-    } else {
-      snprintf(line, sizeof(line),
-               "Done — %llu entries (by size)%s — %" PRIu64 " bytes accounted — dup groups %u.",
-               ntot, pr.is_cancel_observed ? ", cancelled" : "", (uint64_t)pr.bytes_accounted,
-               (unsigned int)dgc);
-    }
-  }
-  app_status_set_text(app, line);
-}
-
-void scan_controller_restore_scan_status(AppState *app) {
-  set_scan_done_status(app);
-}
-
 static void apply_search_filter(AppState *app) {
   kill_timer(&app->timer_search);
 
@@ -376,9 +474,13 @@ static void apply_search_filter(AppState *app) {
     app->filter_scan_pos = 0;
     gboolean more = da_tree_begin_root_insert(app);
     if (more) {
+      app->file_view_tree_ready = FALSE;
       app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
+    } else {
+      app->file_view_tree_ready = TRUE;
+      da_refresh_treemap(app);
     }
-    set_scan_done_status(app);
+    scan_controller_sync_file_view_status(app);
     return;
   }
 
@@ -394,9 +496,13 @@ static void apply_search_filter(AppState *app) {
     }
     gboolean more = da_tree_begin_root_insert(app);
     if (more) {
+      app->file_view_tree_ready = FALSE;
       app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
+    } else {
+      app->file_view_tree_ready = TRUE;
+      da_refresh_treemap(app);
     }
-    set_scan_done_status(app);
+    scan_controller_sync_file_view_status(app);
     return;
   }
 
@@ -404,7 +510,8 @@ static void apply_search_filter(AppState *app) {
   app->filter_scan_pos = 0;
   app->filter_build_running = TRUE;
   da_tree_clear(app);
-  set_scan_done_status(app);
+  app->file_view_tree_ready = FALSE;
+  scan_controller_sync_file_view_status(app);
   app->timer_filter = g_timeout_add(12, on_timer_filter_chunk, app);
 }
 
@@ -416,9 +523,13 @@ static gboolean on_timer_filter_chunk(gpointer data) {
     app->filter_build_running = FALSE;
     gboolean more = da_tree_begin_root_insert(app);
     if (more) {
+      app->file_view_tree_ready = FALSE;
       app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
+    } else {
+      app->file_view_tree_ready = TRUE;
+      da_refresh_treemap(app);
     }
-    set_scan_done_status(app);
+    scan_controller_sync_file_view_status(app);
     return G_SOURCE_REMOVE;
   }
 
@@ -426,11 +537,15 @@ static gboolean on_timer_filter_chunk(gpointer data) {
   if (v.nodes == NULL || v.count != app->master_count) {
     kill_timer(&app->timer_filter);
     app->filter_build_running = FALSE;
-    set_scan_done_status(app);
     gboolean more = da_tree_begin_root_insert(app);
     if (more) {
+      app->file_view_tree_ready = FALSE;
       app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
+    } else {
+      app->file_view_tree_ready = TRUE;
+      da_refresh_treemap(app);
     }
+    scan_controller_sync_file_view_status(app);
     return G_SOURCE_REMOVE;
   }
 
@@ -467,9 +582,13 @@ static gboolean on_timer_filter_chunk(gpointer data) {
         gtk_widget_destroy(d);
         gboolean more = da_tree_begin_root_insert(app);
         if (more) {
+          app->file_view_tree_ready = FALSE;
           app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
+        } else {
+          app->file_view_tree_ready = TRUE;
+          da_refresh_treemap(app);
         }
-        set_scan_done_status(app);
+        scan_controller_sync_file_view_status(app);
         return G_SOURCE_REMOVE;
       }
       app->filtered_indices = nb;
@@ -479,16 +598,20 @@ static gboolean on_timer_filter_chunk(gpointer data) {
     app->filtered_count = nf + 1;
   }
 
-  set_scan_done_status(app);
+  scan_controller_sync_file_view_status(app);
 
   if (app->filter_scan_pos >= app->master_count) {
     kill_timer(&app->timer_filter);
     app->filter_build_running = FALSE;
-    set_scan_done_status(app);
     gboolean more = da_tree_begin_root_insert(app);
     if (more) {
+      app->file_view_tree_ready = FALSE;
       app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
+    } else {
+      app->file_view_tree_ready = TRUE;
+      da_refresh_treemap(app);
     }
+    scan_controller_sync_file_view_status(app);
     return G_SOURCE_REMOVE;
   }
   return G_SOURCE_CONTINUE;
@@ -501,6 +624,7 @@ static void begin_populate_list(AppState *app) {
   kill_timer(&app->timer_filter);
   kill_timer(&app->timer_tree);
   da_tree_clear(app);
+  app->file_view_tree_ready = FALSE;
 
   free(app->master_indices);
   app->master_indices = NULL;
@@ -518,8 +642,10 @@ static void begin_populate_list(AppState *app) {
 
   if (v.nodes == NULL || v.count == 0) {
     app->list_populated = TRUE;
+    app->file_view_tree_ready = TRUE;
     enable_scan_button(app, TRUE);
     da_refresh_treemap(app);
+    scan_controller_sync_file_view_status(app);
     return;
   }
 
@@ -540,7 +666,9 @@ static gboolean on_timer_fill_chunk(gpointer data) {
     if (v.nodes == NULL || v.count != app->populate_total) {
       kill_timer(&app->timer_fill);
       app->list_populated = TRUE;
+      app->file_view_tree_ready = TRUE;
       enable_scan_button(app, TRUE);
+      scan_controller_sync_file_view_status(app);
       return G_SOURCE_REMOVE;
     }
     panel_scan_set_text(app, "Sorting entries by size…");
@@ -548,7 +676,9 @@ static gboolean on_timer_fill_chunk(gpointer data) {
       kill_timer(&app->timer_fill);
       panel_scan_set_text(app, "Could not allocate sort index.");
       app->list_populated = TRUE;
+      app->file_view_tree_ready = TRUE;
       enable_scan_button(app, TRUE);
+      scan_controller_sync_file_view_status(app);
       GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
                                             GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
                                             "Out of memory while preparing the sorted file list.");
@@ -566,7 +696,9 @@ static gboolean on_timer_fill_chunk(gpointer data) {
     app->master_count = 0;
     panel_scan_set_text(app, "Scan results changed during list build; list partial or empty.");
     app->list_populated = TRUE;
+    app->file_view_tree_ready = TRUE;
     enable_scan_button(app, TRUE);
+    scan_controller_sync_file_view_status(app);
     return G_SOURCE_REMOVE;
   }
 
@@ -578,15 +710,17 @@ static gboolean on_timer_fill_chunk(gpointer data) {
   snprintf(finish_pan, sizeof(finish_pan), "Scan complete in %.2f seconds%s", app->last_scan_elapsed_s,
            pr_done.is_cancel_observed ? " (cancelled)" : "");
   panel_scan_set_text(app, finish_pan);
-  set_scan_done_status(app);
   enable_scan_button(app, TRUE);
 
   gboolean more = da_tree_begin_root_insert(app);
   if (more) {
+    app->file_view_tree_ready = FALSE;
     app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
   } else {
+    app->file_view_tree_ready = TRUE;
     da_refresh_treemap(app);
   }
+  scan_controller_sync_file_view_status(app);
 
   const gchar *peek = gtk_entry_get_text(GTK_ENTRY(app->search));
   gboolean search_nonempty = (peek != NULL && peek[0] != '\0');
@@ -631,7 +765,9 @@ static gboolean on_timer_tree_chunk(gpointer data) {
     return G_SOURCE_CONTINUE;
   }
   kill_timer(&app->timer_tree);
+  app->file_view_tree_ready = TRUE;
   da_refresh_treemap(app);
+  scan_controller_sync_file_view_status(app);
   return G_SOURCE_REMOVE;
 }
 
@@ -670,6 +806,7 @@ static void start_scan(AppState *app) {
   app->filter_build_running = FALSE;
   app->populate_total = 0;
   app->list_populated = FALSE;
+  app->file_view_tree_ready = FALSE;
 
   if (app->scan != NULL) {
     scan_result_free(app->scan);
@@ -798,6 +935,7 @@ static void on_combo_display_changed(GtkComboBox *cb, gpointer user_data) {
   AppState *app = (AppState *)user_data;
   scan_controller_sync_display_max_combo(app);
   da_refresh_treemap(app);
+  scan_controller_sync_file_view_status(app);
 }
 
 void scan_controller_sync_display_max_combo(AppState *app) {
@@ -817,6 +955,7 @@ void scan_controller_refresh_volume_labels(AppState *app) {
   da_treemap_panel_sync_title(app);
   da_main_window_sync_title(app);
   if (app->scan_root_utf8 == NULL || app->scan_root_utf8[0] == '\0') {
+    scan_controller_sync_file_view_status(app);
     return;
   }
   uint64_t tot = 0, free_b = 0, used_b = 0;
@@ -835,6 +974,7 @@ void scan_controller_refresh_volume_labels(AppState *app) {
     }
     app->volume_total_bytes = 0;
     app->volume_pct_denominator_bytes = 0;
+    scan_controller_sync_file_view_status(app);
     return;
   }
   app->volume_total_bytes = tot;
@@ -859,6 +999,7 @@ void scan_controller_refresh_volume_labels(AppState *app) {
   if (app->stat_free_val) {
     gtk_label_set_text(GTK_LABEL(app->stat_free_val), free_line);
   }
+  scan_controller_sync_file_view_status(app);
 }
 
 static void on_tree_row_expanded(GtkTreeView *tv, GtkTreeIter *iter, GtkTreePath *path,
@@ -878,6 +1019,15 @@ void scan_controller_attach(AppState *app) {
   }
   g_signal_connect(app->search, "changed", G_CALLBACK(on_search_changed), app);
   g_signal_connect(app->tree, "row-expanded", G_CALLBACK(on_tree_row_expanded), app);
+  if (app->main_notebook != NULL) {
+    g_signal_connect(app->main_notebook, "switch-page", G_CALLBACK(on_notebook_switch_page), app);
+  }
+  {
+    GtkTreeSelection *sel = gtk_tree_view_get_selection(GTK_TREE_VIEW(app->tree));
+    g_signal_connect(sel, "changed", G_CALLBACK(on_tree_selection_changed), app);
+  }
+  g_signal_connect(app->tree, "motion-notify-event", G_CALLBACK(on_tree_motion), app);
+  g_signal_connect(app->tree, "leave-notify-event", G_CALLBACK(on_tree_leave), app);
   if (app->treemap != NULL && TREEMAP_IS_WIDGET(app->treemap)) {
     treemap_widget_set_selected_callback(TREEMAP_WIDGET(app->treemap), on_treemap_selected, app);
     treemap_widget_set_hover_callback(TREEMAP_WIDGET(app->treemap), on_treemap_hover, app);

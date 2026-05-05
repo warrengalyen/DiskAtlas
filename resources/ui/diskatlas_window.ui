@@ -316,7 +316,7 @@
           </packing>
         </child>
         <child>
-          <object class="GtkNotebook">
+          <object class="GtkNotebook" id="main_notebook">
             <property name="visible">True</property>
             <property name="can-focus">True</property>
             <property name="vexpand">True</property>
@@ -638,10 +638,57 @@
           </packing>
         </child>
         <child>
-          <object class="GtkStatusbar" id="main_statusbar">
+          <object class="GtkBox" id="main_status_bar_box">
             <property name="visible">True</property>
             <property name="can-focus">False</property>
+            <property name="orientation">horizontal</property>
+            <property name="spacing">12</property>
             <property name="margin-top">4</property>
+            <child>
+              <object class="GtkLabel" id="status_label_left">
+                <property name="visible">True</property>
+                <property name="can-focus">False</property>
+                <property name="hexpand">True</property>
+                <property name="halign">start</property>
+                <property name="xalign">0</property>
+                <property name="ellipsize">end</property>
+              </object>
+              <packing>
+                <property name="expand">True</property>
+                <property name="fill">True</property>
+                <property name="position">0</property>
+              </packing>
+            </child>
+            <child>
+              <object class="GtkLabel" id="status_label_center">
+                <property name="visible">True</property>
+                <property name="can-focus">False</property>
+                <property name="hexpand">True</property>
+                <property name="halign">center</property>
+                <property name="xalign">0.5</property>
+                <property name="ellipsize">middle</property>
+              </object>
+              <packing>
+                <property name="expand">True</property>
+                <property name="fill">True</property>
+                <property name="position">1</property>
+              </packing>
+            </child>
+            <child>
+              <object class="GtkLabel" id="status_label_right">
+                <property name="visible">True</property>
+                <property name="can-focus">False</property>
+                <property name="hexpand">True</property>
+                <property name="halign">end</property>
+                <property name="xalign">1</property>
+                <property name="ellipsize">start</property>
+              </object>
+              <packing>
+                <property name="expand">True</property>
+                <property name="fill">True</property>
+                <property name="position">2</property>
+              </packing>
+            </child>
           </object>
           <packing>
             <property name="expand">False</property>

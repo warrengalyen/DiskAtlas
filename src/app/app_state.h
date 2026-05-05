@@ -39,10 +39,10 @@ typedef struct AppState {
   GtkWidget *treemap_panel_title;
   GtkWidget *treemap;
   GtkTreeStore *store;
-  /** GtkStatusbar for scan/filter summary (see ui_window + scan_controller). */
-  GtkWidget *status;
-  /** Last gtk_statusbar_push id for context "diskatlas"; 0 if none. */
-  guint statusbar_msg_id;
+  GtkWidget *main_notebook;
+  GtkWidget *status_label_left;
+  GtkWidget *status_label_center;
+  GtkWidget *status_label_right;
   GtkWidget *stat_sel_val;
   GtkWidget *stat_tot_val;
   GtkWidget *stat_use_val;
@@ -79,6 +79,8 @@ typedef struct AppState {
   gboolean filter_build_running;
   size_t populate_total;
   gboolean list_populated;
+  /** TRUE when chunked GtkTreeView root insert is not running (see da_tree_begin_root_insert / timer_tree). */
+  gboolean file_view_tree_ready;
   size_t tree_insert_pos;
   guint8 *dup_group_seen;
   size_t dup_group_seen_cap;

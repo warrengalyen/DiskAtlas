@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include <glib.h>
+#include <gdk/gdk.h>
 #include <gtk/gtk.h>
 
 #include "diskatlas.h"
@@ -142,33 +143,6 @@ static void da_load_global_app_css(void) {
 }
 
 /** Matches file_tree_model.c placeholder row LP. */
-#define DA_TREE_LP_PLACEHOLDER ((gint64)INT64_MIN)
-
-static gboolean da_lp_to_nid(gint64 lp, AppState *app, size_t *out_nid) {
-  if (lp == DA_TREE_LP_PLACEHOLDER) {
-    *out_nid = SIZE_MAX;
-    return TRUE;
-  }
-  if (app == NULL || app->scan == NULL) {
-    return FALSE;
-  }
-  if (lp < 0) {
-    uint32_t gid = (uint32_t)(-lp);
-    size_t nmem = 0;
-    const size_t *mp = diskatlas_dup_group_members(app->scan, gid, &nmem);
-    scan_results_view_t v = scan_get_results(app->scan);
-    if (mp != NULL && nmem > 0 && mp[0] < v.count) {
-      *out_nid = mp[0];
-      return TRUE;
-    }
-    return FALSE;
-  }
-  if (lp > 0) {
-    *out_nid = (size_t)(lp - 1);
-    return TRUE;
-  }
-  return FALSE;
-}
 
 static void file_name_icon_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell, GtkTreeModel *model,
                                      GtkTreeIter *iter, gpointer user_data) {
@@ -184,7 +158,7 @@ static void file_name_icon_cell_data(GtkTreeViewColumn *column, GtkCellRenderer 
       icon_name = NULL;
     } else {
       size_t nid = 0;
-      if (da_lp_to_nid(lp, app, &nid) && nid != SIZE_MAX) {
+      if (da_tree_lp_to_scan_nid(app, lp, &nid) && nid != SIZE_MAX) {
         scan_results_view_t v = scan_get_results(app->scan);
         if (v.nodes != NULL && nid < v.count) {
           uint32_t kind = v.nodes[nid].attributes & DISKATLAS_NODE_KIND_MASK;
@@ -364,8 +338,12 @@ void da_ui_build(AppState *app) {
   app->combo_display_max = GTK_WIDGET(gtk_builder_get_object(builder, "combo_display_max"));
   app->tree = GTK_WIDGET(gtk_builder_get_object(builder, "file_view_tree"));
   gtk_widget_set_name(app->tree, DISKATLAS_FILE_TREE_CSS_NAME);
+  gtk_widget_add_events(app->tree, GDK_POINTER_MOTION_MASK | GDK_LEAVE_NOTIFY_MASK);
   app->treemap_panel_title = GTK_WIDGET(gtk_builder_get_object(builder, "treemap_panel_title"));
-  app->status = GTK_WIDGET(gtk_builder_get_object(builder, "main_statusbar"));
+  app->main_notebook = GTK_WIDGET(gtk_builder_get_object(builder, "main_notebook"));
+  app->status_label_left = GTK_WIDGET(gtk_builder_get_object(builder, "status_label_left"));
+  app->status_label_center = GTK_WIDGET(gtk_builder_get_object(builder, "status_label_center"));
+  app->status_label_right = GTK_WIDGET(gtk_builder_get_object(builder, "status_label_right"));
 
   app->stat_sel_val = GTK_WIDGET(gtk_builder_get_object(builder, "stat_sel_val"));
   app->stat_tot_val = GTK_WIDGET(gtk_builder_get_object(builder, "stat_tot_val"));
@@ -403,6 +381,8 @@ void da_ui_build(AppState *app) {
 
   app->store = da_tree_store_new();
   gtk_tree_view_set_model(GTK_TREE_VIEW(app->tree), GTK_TREE_MODEL(app->store));
+  gtk_tree_selection_set_mode(gtk_tree_view_get_selection(GTK_TREE_VIEW(app->tree)),
+                              GTK_SELECTION_MULTIPLE);
   g_object_unref(app->store);
 
   const char *titles[] = {"File Name", "Path", "% of used space", "Size", "Allocated", "Modified",

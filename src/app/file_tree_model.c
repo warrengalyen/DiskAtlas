@@ -11,7 +11,7 @@
 
 /** Lazy-expand marker row under duplicate-group parents so GtkTreeView shows an expander (GtkTreeStore
  * has no Win32-style “has children” flag without actual child rows). */
-#define DA_TREE_LP_CHILD_PLACEHOLDER ((gint64)INT64_MIN)
+#define DA_TREE_LP_CHILD_PLACEHOLDER DA_TREE_LP_PLACEHOLDER
 
 static const char *utf8_basename_ptr(const char *path) {
   const char *base = path ? path : "";
@@ -401,4 +401,33 @@ void da_tree_on_row_expanded(GtkTreeView *tv, GtkTreeIter *iter, GtkTreePath *pa
         app->store, &ch, iter, -1, 0, col[0], 1, col[1], 2, col[2], 3, col[3], 4, col[4], 5,
         col[5], 6, col[6], 7, col[7], 8, col[8], DA_COL_PCT, pct, DA_COL_LP, (gint64)(ni + 1u), -1);
   }
+}
+
+gboolean da_tree_lp_to_scan_nid(AppState *app, gint64 lp, size_t *out_nid) {
+  if (out_nid == NULL) {
+    return FALSE;
+  }
+  if (lp == DA_TREE_LP_PLACEHOLDER) {
+    *out_nid = SIZE_MAX;
+    return TRUE;
+  }
+  if (app == NULL || app->scan == NULL) {
+    return FALSE;
+  }
+  if (lp < 0) {
+    uint32_t gid = (uint32_t)(-lp);
+    size_t nmem = 0;
+    const size_t *mp = diskatlas_dup_group_members(app->scan, gid, &nmem);
+    scan_results_view_t v = scan_get_results(app->scan);
+    if (mp != NULL && nmem > 0 && mp[0] < v.count) {
+      *out_nid = mp[0];
+      return TRUE;
+    }
+    return FALSE;
+  }
+  if (lp > 0) {
+    *out_nid = (size_t)(lp - 1);
+    return TRUE;
+  }
+  return FALSE;
 }
