@@ -319,12 +319,14 @@
           <object class="GtkNotebook">
             <property name="visible">True</property>
             <property name="can-focus">True</property>
+            <property name="vexpand">True</property>
             <child>
               <object class="GtkBox" id="file_view_content_vbox">
                 <property name="visible">True</property>
                 <property name="can-focus">False</property>
                 <property name="orientation">vertical</property>
                 <property name="spacing">5</property>
+                <property name="vexpand">True</property>
                 <child>
                   <object class="GtkBox" id="file_view_top_box">
                     <property name="visible">True</property>
@@ -530,13 +532,15 @@
                   <object class="GtkPaned" id="file_view_paned">
                     <property name="visible">True</property>
                     <property name="can-focus">True</property>
+                    <property name="vexpand">True</property>
                     <property name="margin-start">5</property>
                     <property name="margin-end">5</property>
                     <property name="margin-bottom">5</property>
                     <property name="orientation">vertical</property>
+                    <property name="position">500</property>
                     <child>
                       <object class="GtkScrolledWindow" id="file_view_scrolled">
-                        <property name="height-request">500</property>
+                        <property name="min-content-height">70</property>
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
                         <property name="hexpand">True</property>
@@ -553,7 +557,7 @@
                         </child>
                       </object>
                       <packing>
-                        <property name="resize">False</property>
+                        <property name="resize">True</property>
                         <property name="shrink">True</property>
                       </packing>
                     </child>
@@ -582,6 +586,7 @@
                         </child>
                         <child>
                           <object class="GtkBox" id="treemap_slot">
+                            <property name="height-request">70</property>
                             <property name="visible">True</property>
                             <property name="can-focus">False</property>
                             <property name="hexpand">True</property>
@@ -605,7 +610,7 @@
                     </child>
                   </object>
                   <packing>
-                    <property name="expand">False</property>
+                    <property name="expand">True</property>
                     <property name="fill">True</property>
                     <property name="position">2</property>
                   </packing>
@@ -627,7 +632,7 @@
             </child>
           </object>
           <packing>
-            <property name="expand">False</property>
+            <property name="expand">True</property>
             <property name="fill">True</property>
             <property name="position">2</property>
           </packing>

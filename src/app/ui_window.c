@@ -43,6 +43,85 @@ static void on_restart_admin_clicked(GtkButton *btn, gpointer user_data) {
 }
 #endif
 
+/** GtkPaned limits — align with diskatlas_window.ui (min-content-height, treemap_panel height-request). */
+#define DA_FILE_VIEW_PANED_MIN_TREE 70
+#define DA_FILE_VIEW_PANED_MIN_TREEMAP 225
+#define DA_FILE_VIEW_PANED_HANDLE_ROUGH 10
+/** Reserve a few px so paned allocation vs. shadow/border doesn’t sit exactly on the scroll min edge. */
+#define DA_FILE_VIEW_PANED_LAYOUT_SLACK 4
+
+static void da_tree_scrolled_clamp_vadjustment(GtkWidget *tree_scrolled) {
+  GtkWidget *child = gtk_bin_get_child(GTK_BIN(tree_scrolled));
+  if (child == NULL || !GTK_IS_SCROLLABLE(child)) {
+    return;
+  }
+  GtkAdjustment *v = gtk_scrollable_get_vadjustment(GTK_SCROLLABLE(child));
+  if (v == NULL) {
+    return;
+  }
+  gdouble lo = gtk_adjustment_get_lower(v);
+  gdouble upper = gtk_adjustment_get_upper(v);
+  gdouble page = gtk_adjustment_get_page_size(v);
+  gdouble max_val = upper - page;
+  if (max_val < lo) {
+    max_val = lo;
+  }
+  gdouble val = gtk_adjustment_get_value(v);
+  if (val > max_val) {
+    gtk_adjustment_set_value(v, max_val);
+  } else if (val < lo) {
+    gtk_adjustment_set_value(v, lo);
+  }
+}
+
+static void da_tree_scrolled_on_allocate(GtkWidget *widget, GdkRectangle *allocation, gpointer user_data) {
+  (void)allocation;
+  (void)user_data;
+  da_tree_scrolled_clamp_vadjustment(widget);
+}
+
+static void da_file_view_paned_clamp_position(GtkPaned *paned) {
+  GtkWidget *w = GTK_WIDGET(paned);
+  gint h = gtk_widget_get_allocated_height(w);
+  if (h <= 1) {
+    return;
+  }
+  gint pos = gtk_paned_get_position(paned);
+  gint min_top = DA_FILE_VIEW_PANED_MIN_TREE;
+  gint min_bottom = DA_FILE_VIEW_PANED_MIN_TREEMAP;
+  gint handle = DA_FILE_VIEW_PANED_HANDLE_ROUGH;
+  gint max_pos = h - min_bottom - handle - DA_FILE_VIEW_PANED_LAYOUT_SLACK;
+  if (max_pos < min_top) {
+    max_pos = min_top;
+  }
+  gint clamped = pos;
+  if (clamped < min_top) {
+    clamped = min_top;
+  }
+  if (clamped > max_pos) {
+    clamped = max_pos;
+  }
+  if (clamped != pos) {
+    gtk_paned_set_position(paned, clamped);
+  }
+}
+
+static void da_file_view_paned_on_notify_position(GObject *object, GParamSpec *pspec, gpointer user_data) {
+  (void)pspec;
+  da_file_view_paned_clamp_position(GTK_PANED(object));
+  if (user_data != NULL) {
+    da_tree_scrolled_clamp_vadjustment(GTK_WIDGET(user_data));
+  }
+}
+
+static void da_file_view_paned_on_allocate(GtkWidget *widget, GdkRectangle *allocation, gpointer user_data) {
+  (void)allocation;
+  da_file_view_paned_clamp_position(GTK_PANED(widget));
+  if (user_data != NULL) {
+    da_tree_scrolled_clamp_vadjustment(GTK_WIDGET(user_data));
+  }
+}
+
 #define DISKATLAS_WINDOW_UI_RESOURCE "/ui/diskatlas_window.ui"
 #define DISKATLAS_APP_CSS_RESOURCE "/app.css"
 /** gtk_widget_set_name for CSS; targets percent column progress rendering on the file tree. */
@@ -295,6 +374,16 @@ void da_ui_build(AppState *app) {
 
   GtkWidget *tree_scrolled = GTK_WIDGET(gtk_builder_get_object(builder, "file_view_scrolled"));
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(tree_scrolled), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+  gtk_widget_set_valign(tree_scrolled, GTK_ALIGN_FILL);
+  g_signal_connect(tree_scrolled, "size-allocate", G_CALLBACK(da_tree_scrolled_on_allocate), NULL);
+  {
+    GtkWidget *paned = gtk_widget_get_parent(tree_scrolled);
+    if (GTK_IS_PANED(paned)) {
+      g_signal_connect(paned, "notify::position", G_CALLBACK(da_file_view_paned_on_notify_position),
+                         tree_scrolled);
+      g_signal_connect(paned, "size-allocate", G_CALLBACK(da_file_view_paned_on_allocate), tree_scrolled);
+    }
+  }
 
   GtkWidget *search_clear_btn = GTK_WIDGET(gtk_builder_get_object(builder, "search_clear_btn"));
   if (search_clear_btn != NULL) {
