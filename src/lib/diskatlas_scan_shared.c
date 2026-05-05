@@ -22,17 +22,25 @@ bool diskatlas_nodes_ensure_capacity(diskatlas_scan_result_t *r) {
   }
   size_t nc =
       r->node_cap ? (r->node_cap + (r->node_cap >> 1u)) + 16u : 4096u;
-  file_node_t *nn = (file_node_t *)realloc(r->nodes, nc * sizeof(file_node_t));
-  if (!nn) {
-    return false;
-  }
+  size_t old_cap = r->node_cap;
+  /* Grow path_offs first so a nodes realloc failure cannot orphan a moved nodes buffer. */
   size_t *no = (size_t *)realloc(r->path_offs, nc * sizeof(size_t));
   if (!no) {
-    free(nn);
     return false;
   }
-  r->nodes = nn;
+  file_node_t *nn = (file_node_t *)realloc(r->nodes, nc * sizeof(file_node_t));
+  if (!nn) {
+    if (old_cap == 0) {
+      free(no);
+      r->path_offs = NULL;
+    } else {
+      size_t *po = (size_t *)realloc(no, old_cap * sizeof(size_t));
+      r->path_offs = po ? po : no;
+    }
+    return false;
+  }
   r->path_offs = no;
+  r->nodes = nn;
   r->node_cap = nc;
   return true;
 }

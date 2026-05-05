@@ -9,7 +9,9 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <shellapi.h>
 
+#include <glib.h>
 #include <gtk/gtk.h>
 
 static int utf8_to_wide(const char *utf8, WCHAR *out, int cchOut) {
@@ -159,6 +161,93 @@ void da_win32_file_chooser_set_drive_places_only(GtkFileChooser *chooser) {
     g_free(uri);
   }
   g_ptr_array_unref(paths);
+}
+
+gboolean da_win32_is_process_elevated(void) {
+  HANDLE tok = NULL;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) {
+    return FALSE;
+  }
+  TOKEN_ELEVATION el;
+  DWORD w = 0;
+  BOOL ok = GetTokenInformation(tok, TokenElevation, &el, sizeof(el), &w);
+  CloseHandle(tok);
+  return ok && el.TokenIsElevated;
+}
+
+static gchar *da_win32_settings_path(void) {
+  return g_build_filename(g_get_user_config_dir(), "diskatlas", "settings.ini", NULL);
+}
+
+gboolean da_win32_admin_ntfs_notice_saved_hidden(void) {
+  gchar *path = da_win32_settings_path();
+  GKeyFile *kf = g_key_file_new();
+  gboolean hide = FALSE;
+  if (g_key_file_load_from_file(kf, path, G_KEY_FILE_NONE, NULL)) {
+    if (g_key_file_has_key(kf, "ui", "hide_admin_ntfs_notice", NULL)) {
+      hide = g_key_file_get_boolean(kf, "ui", "hide_admin_ntfs_notice", NULL);
+    }
+  }
+  g_key_file_unref(kf);
+  g_free(path);
+  return hide;
+}
+
+void da_win32_set_admin_ntfs_notice_hidden(gboolean hide) {
+  gchar *path = da_win32_settings_path();
+  gchar *dir = g_path_get_dirname(path);
+  g_mkdir_with_parents(dir, 0700);
+  g_free(dir);
+
+  GKeyFile *kf = g_key_file_new();
+  (void)g_key_file_load_from_file(kf, path, G_KEY_FILE_NONE, NULL);
+  g_key_file_set_boolean(kf, "ui", "hide_admin_ntfs_notice", hide);
+  gsize len = 0;
+  gchar *data = g_key_file_to_data(kf, &len, NULL);
+  g_key_file_unref(kf);
+  if (data != NULL) {
+    GError *werr = NULL;
+    g_file_set_contents(path, data, (gssize)len, &werr);
+    g_clear_error(&werr);
+    g_free(data);
+  }
+  g_free(path);
+}
+
+static LPWSTR skip_first_command_line_arg(LPWSTR cmd) {
+  if (cmd == NULL || *cmd == L'\0') {
+    return cmd;
+  }
+  LPWSTR p = cmd;
+  if (*p == L'"') {
+    p++;
+    while (*p != L'\0' && *p != L'"') {
+      p++;
+    }
+    if (*p == L'"') {
+      p++;
+    }
+  } else {
+    while (*p != L'\0' && *p != L' ' && *p != L'\t') {
+      p++;
+    }
+  }
+  while (*p == L' ' || *p == L'\t') {
+    p++;
+  }
+  return p;
+}
+
+gboolean da_win32_restart_elevated_self(void) {
+  WCHAR exe[MAX_PATH];
+  DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
+  if (n == 0 || n >= MAX_PATH) {
+    return FALSE;
+  }
+  LPWSTR tail = skip_first_command_line_arg(GetCommandLineW());
+  HINSTANCE hi =
+      ShellExecuteW(NULL, L"runas", exe, (tail != NULL && tail[0] != L'\0') ? tail : NULL, NULL, SW_SHOW);
+  return (INT_PTR)hi > 32;
 }
 
 #else /* !_WIN32 */

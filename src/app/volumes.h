@@ -5,9 +5,15 @@
 #include <stdint.h>
 
 #if defined(_WIN32)
+#include <glib.h>
 #include <gtk/gtk.h>
 /** Clears GTK/GIO default sidebar places and adds only logical drives (A:\ …), sorted ascending. */
 void da_win32_file_chooser_set_drive_places_only(GtkFileChooser *chooser);
+
+gboolean da_win32_is_process_elevated(void);
+gboolean da_win32_restart_elevated_self(void);
+gboolean da_win32_admin_ntfs_notice_saved_hidden(void);
+void da_win32_set_admin_ntfs_notice_hidden(gboolean hide);
 #endif
 
 /** Returns 0 on success; fills totals in bytes (best effort). */

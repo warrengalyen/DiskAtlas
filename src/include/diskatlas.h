@@ -51,6 +51,11 @@ typedef struct scan_options {
 #define DISKATLAS_SCAN_OPTION_INCLUDE_HIDDEN (1u << 1)
 /** Duplicate grouping includes exact mtime (nanoseconds); same size/name still split if mtimes differ. */
 #define DISKATLAS_SCAN_OPTION_DUPLICATE_USE_MTIME (1u << 2)
+/**
+ * Windows only: raw NTFS $MFT scan (ignored on non-Windows). Intended for elevated processes.
+ * FIXME(ntfs-mft): Implementation is still WIP — enable only after diskatlas_ntfs_mft.c is ready.
+ */
+#define DISKATLAS_SCAN_OPTION_WIN32_NTFS_MFT (1u << 3)
 
 /* -------------------------------------------------------------------------- */
 /* scan_result_t — incomplete / opaque; only scan_result_t* may appear in API. */

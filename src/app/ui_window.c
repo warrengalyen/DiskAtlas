@@ -16,6 +16,33 @@
 #include "file_tree_sort.h"
 #include "shell_icon.h"
 
+#if defined(G_OS_WIN32)
+#include "volumes.h"
+
+static void on_dont_show_admin_ntfs_toggled(GtkToggleButton *tb, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  (void)tb;
+  if (gtk_toggle_button_get_active(tb)) {
+    da_win32_set_admin_ntfs_notice_hidden(TRUE);
+    if (app->admin_ntfs_notice_panel != NULL) {
+      gtk_widget_hide(app->admin_ntfs_notice_panel);
+    }
+  }
+}
+
+static void on_restart_admin_clicked(GtkButton *btn, gpointer user_data) {
+  (void)btn;
+  AppState *app = (AppState *)user_data;
+  if (app->dont_show_again_check != NULL &&
+      gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app->dont_show_again_check))) {
+    da_win32_set_admin_ntfs_notice_hidden(TRUE);
+  }
+  if (da_win32_restart_elevated_self() && app->gtk_app != NULL) {
+    g_application_quit(G_APPLICATION(app->gtk_app));
+  }
+}
+#endif
+
 #define DISKATLAS_WINDOW_UI_RESOURCE "/ui/diskatlas_window.ui"
 /** gtk_widget_set_name for CSS; targets percent column progress rendering only on this tree. */
 #define DISKATLAS_FILE_TREE_CSS_NAME "diskatlas_file_view_tree"
@@ -313,6 +340,29 @@ void da_ui_build(AppState *app) {
 
   da_install_file_tree_progress_css(app->tree);
 
+#if defined(G_OS_WIN32)
+  app->admin_ntfs_notice_panel = GTK_WIDGET(gtk_builder_get_object(builder, "admin_ntfs_notice_panel"));
+  app->restart_admin_btn = GTK_WIDGET(gtk_builder_get_object(builder, "restart_admin_btn"));
+  app->dont_show_again_check = GTK_WIDGET(gtk_builder_get_object(builder, "dont_show_again_check"));
+  if (app->restart_admin_btn != NULL) {
+    g_signal_connect(app->restart_admin_btn, "clicked", G_CALLBACK(on_restart_admin_clicked), app);
+  }
+  if (app->dont_show_again_check != NULL) {
+    g_signal_connect(app->dont_show_again_check, "toggled", G_CALLBACK(on_dont_show_admin_ntfs_toggled),
+                     app);
+  }
+#else
+  {
+    GtkWidget *admin_panel = GTK_WIDGET(gtk_builder_get_object(builder, "admin_ntfs_notice_panel"));
+    if (admin_panel != NULL) {
+      gtk_widget_hide(admin_panel);
+    }
+  }
+  app->admin_ntfs_notice_panel = NULL;
+  app->restart_admin_btn = NULL;
+  app->dont_show_again_check = NULL;
+#endif
+
   g_object_unref(builder);
 
   if (app->scan_root_utf8 != NULL) {
@@ -324,4 +374,15 @@ void da_ui_build(AppState *app) {
   scan_controller_refresh_volume_labels(app);
 
   gtk_widget_show_all(app->window);
+
+#if defined(G_OS_WIN32)
+  /* gtk_widget_show_all reveals hidden descendants — re-apply admin banner visibility last. */
+  if (da_win32_is_process_elevated() || da_win32_admin_ntfs_notice_saved_hidden()) {
+    if (app->admin_ntfs_notice_panel != NULL) {
+      gtk_widget_hide(app->admin_ntfs_notice_panel);
+    }
+  } else if (app->admin_ntfs_notice_panel != NULL) {
+    gtk_widget_show(app->admin_ntfs_notice_panel);
+  }
+#endif
 }

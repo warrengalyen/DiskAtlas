@@ -601,6 +601,15 @@ static void start_scan(AppState *app) {
       gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app->chk_dup_mtime))) {
     opt.flags |= DISKATLAS_SCAN_OPTION_DUPLICATE_USE_MTIME;
   }
+/* FIXME(ntfs-mft): Set to 1 to use raw $MFT scan when elevated; 0 = FindFirst tree until MFT is fixed. */
+#ifndef DISKATLAS_APP_ENABLE_NTFS_MFT
+#define DISKATLAS_APP_ENABLE_NTFS_MFT 0
+#endif
+#if defined(G_OS_WIN32) && DISKATLAS_APP_ENABLE_NTFS_MFT
+  if (da_win32_is_process_elevated()) {
+    opt.flags |= DISKATLAS_SCAN_OPTION_WIN32_NTFS_MFT;
+  }
+#endif
 
   app->scan = scan_start(app->scan_root_utf8, &opt);
   if (app->scan == NULL) {

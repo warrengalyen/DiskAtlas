@@ -105,7 +105,10 @@ static bool utf8_blob_append_wide(diskatlas_scan_result_t *r, const wchar_t *wpa
     r->path_blob = nb;
     r->path_blob_cap = nc;
   }
-  WideCharToMultiByte(CP_UTF8, 0, wpath, -1, r->path_blob + nl, need, NULL, NULL);
+  int wrote = WideCharToMultiByte(CP_UTF8, 0, wpath, -1, r->path_blob + nl, need, NULL, NULL);
+  if (wrote <= 0) {
+    return false;
+  }
   *out_utf8_anchor = nl;
   r->path_blob_len = need_total;
   return true;
@@ -224,6 +227,13 @@ bool diskatlas_win32_record_entry_metadata(diskatlas_scan_result_t *r,
   return true;
 }
 
+static bool record_entry(diskatlas_scan_result_t *r, const wchar_t *full_path_w,
+                         const WIN32_FIND_DATAW *fd, bool is_dir) {
+  return diskatlas_win32_record_entry_metadata(r, full_path_w, file_node_size_bytes(fd, is_dir),
+                                               filetime_to_unix_ns(&fd->ftLastWriteTime),
+                                               fd->dwFileAttributes, is_dir);
+}
+
 static HANDLE find_first_file(const wchar_t *pattern, WIN32_FIND_DATAW *fd) {
   HANDLE h =
       FindFirstFileExW(pattern, FindExInfoBasic, fd, FindExSearchNameMatch, NULL,
@@ -287,7 +297,9 @@ static bool should_descend(uint32_t child_depth_dir, uint32_t max_depth) {
 static void scan_drive_tree(diskatlas_scan_result_t *r, wchar_t *root_path,
                             const scan_options_t *opts) {
   init_volume_cluster_from_path(r, root_path);
-  if (diskatlas_scan_ntfs_mft(r, root_path, opts)) {
+  /* FIXME(ntfs-mft): Entry point for experimental MFT scan (see diskatlas_ntfs_mft.c). */
+  if ((opts->flags & DISKATLAS_SCAN_OPTION_WIN32_NTFS_MFT) != 0 &&
+      diskatlas_scan_ntfs_mft(r, root_path, opts)) {
     goto scan_done;
   }
   wchar_t *root_owned = root_path;
@@ -341,8 +353,15 @@ static void scan_drive_tree(diskatlas_scan_result_t *r, wchar_t *root_path,
 
       DWORD att = fd.dwFileAttributes;
       const bool include_hidden = (opts->flags & DISKATLAS_SCAN_OPTION_INCLUDE_HIDDEN) != 0;
-      if (!include_hidden && (att & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM))) {
-        continue;
+      if (!include_hidden) {
+        DWORD skip_mask = FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM;
+        if ((att & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+          /* Match Explorer: SYSTEM alone does not hide folders (only hidden dirs). */
+          skip_mask = FILE_ATTRIBUTE_HIDDEN;
+        }
+        if ((att & skip_mask) != 0) {
+          continue;
+        }
       }
 
       size_t name_len = wcslen(fd.cFileName);

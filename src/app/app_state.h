@@ -44,6 +44,11 @@ typedef struct AppState {
   GtkWidget *stat_use_val;
   GtkWidget *stat_free_val;
 
+  /** Windows: top banner prompting elevation for NTFS MFT scan; NULL if not loaded. */
+  GtkWidget *admin_ntfs_notice_panel;
+  GtkWidget *restart_admin_btn;
+  GtkWidget *dont_show_again_check;
+
   scan_result_t *scan;
   guint timer_scan;
   guint timer_fill;
