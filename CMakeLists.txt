@@ -11,7 +11,6 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
 option(DISKATLAS_BUILD_GUI "Build GTK graphical application" ON)
-option(DISKATLAS_LEGACY_WIN32_GUI "Build legacy Win32 GUI (requires GTK off or separate config)" OFF)
 
 set(DISKATLAS_SRC "${CMAKE_SOURCE_DIR}/src")
 set(DISKATLAS_BIN_DIR "${CMAKE_SOURCE_DIR}/bin")
@@ -165,27 +164,6 @@ if(DISKATLAS_GTK3_FOUND)
   endif()
   if(WIN32 AND MINGW)
     # Omit -mwindows so g_log/GTK errors can print to console when run from shell; remove if you want no console.
-  endif()
-elseif(WIN32 AND DISKATLAS_LEGACY_WIN32_GUI)
-  add_executable(diskatlas_gui WIN32
-    "${DISKATLAS_SRC}/app/legacy_win32_main.c"
-    "${DISKATLAS_SRC}/app/diskatlas.rc"
-  )
-  set_target_properties(diskatlas_gui PROPERTIES OUTPUT_NAME diskatlas)
-  diskatlas_set_exe_bin_output(diskatlas_gui)
-  target_include_directories(diskatlas_gui PRIVATE "${DISKATLAS_SRC}/include")
-  target_compile_definitions(diskatlas_gui PRIVATE UNICODE _UNICODE)
-  target_link_libraries(diskatlas_gui PRIVATE
-    diskatlas_core
-    comctl32
-    shell32
-    user32
-    gdi32
-    ole32
-    uuid
-  )
-  if(MINGW)
-    target_link_options(diskatlas_gui PRIVATE -mwindows)
   endif()
 else()
   if(DISKATLAS_BUILD_GUI)
