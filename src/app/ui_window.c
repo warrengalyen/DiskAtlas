@@ -319,7 +319,7 @@ void da_ui_build(AppState *app) {
   gtk_tree_view_set_model(GTK_TREE_VIEW(app->tree), GTK_TREE_MODEL(app->store));
   g_object_unref(app->store);
 
-  const char *titles[] = {"File Name", "Path", "Percent of Drive", "Size", "Allocated", "Modified",
+  const char *titles[] = {"File Name", "Path", "% of used space", "Size", "Allocated", "Modified",
                           "Dup Count", "Dup Size", "Attributes"};
   const int col_w[] = {248, 480, 110, 100, 100, 140, 80, 100, 68};
   const int col_min_w[] = {140, 200, 88, 72, 72, 100, 56, 72, 48};

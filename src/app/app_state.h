@@ -63,6 +63,9 @@ typedef struct AppState {
   gint64 scan_start_us;
   double last_scan_elapsed_s;
   uint64_t volume_total_bytes;
+  /** Denominator for file list "%" column: used bytes on volume (WizTree-style); equals
+   *  volume_total_bytes when used is unknown or zero. */
+  uint64_t volume_pct_denominator_bytes;
 
   char *scan_root_utf8;
   size_t *master_indices;

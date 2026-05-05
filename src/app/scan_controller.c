@@ -813,9 +813,11 @@ void scan_controller_refresh_volume_labels(AppState *app) {
       gtk_label_set_text(GTK_LABEL(app->stat_free_val), "—");
     }
     app->volume_total_bytes = 0;
+    app->volume_pct_denominator_bytes = 0;
     return;
   }
   app->volume_total_bytes = tot;
+  app->volume_pct_denominator_bytes = (used_b > 0u) ? used_b : tot;
   char a[64];
   char use_line[160];
   char free_line[160];

@@ -161,9 +161,9 @@ static void fill_row_strings(AppState *app, size_t nid, char col[DA_COL_COUNT][5
   const char *bn = utf8_basename_ptr(n->path);
   g_strlcpy(col[0], bn, sizeof(col[0]));
   g_strlcpy(col[1], n->path, sizeof(col[1]));
-  da_format_pct_progress_label(n->size_bytes, app->volume_total_bytes, col[2], sizeof(col[2]));
-  if (pct_bar != NULL && app->volume_total_bytes > 0u) {
-    double p = 100.0 * (double)n->size_bytes / (double)app->volume_total_bytes;
+  da_format_pct_progress_label(n->size_bytes, app->volume_pct_denominator_bytes, col[2], sizeof(col[2]));
+  if (pct_bar != NULL && app->volume_pct_denominator_bytes > 0u) {
+    double p = 100.0 * (double)n->size_bytes / (double)app->volume_pct_denominator_bytes;
     if (p > 100.0) {
       p = 100.0;
     }
