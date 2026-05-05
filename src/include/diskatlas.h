@@ -30,7 +30,7 @@ DISKATLAS_API int diskatlas_init(void);
 
 #define DISKATLAS_SCAN_OPTIONS_STRUCT_VERSION 1u
 #define DISKATLAS_FILE_NODE_STRUCT_VERSION 3u
-#define DISKATLAS_SCAN_PROGRESS_STRUCT_VERSION 1u
+#define DISKATLAS_SCAN_PROGRESS_STRUCT_VERSION 2u
 #define DISKATLAS_SCAN_RESULTS_VIEW_STRUCT_VERSION 1u
 
 /* -------------------------------------------------------------------------- */
@@ -109,6 +109,10 @@ typedef struct scan_progress {
   bool is_complete;
   bool is_cancel_requested;
   bool is_cancel_observed;
+  /** Directory nodes recorded so far (DISKATLAS_NODE_KIND_DIR). */
+  uint64_t folder_count;
+  /** Regular file nodes recorded so far (DISKATLAS_NODE_KIND_FILE). */
+  uint64_t file_count;
   uint64_t reserved_u64;
 } scan_progress_t;
 

@@ -190,6 +190,16 @@ static bool record_node(diskatlas_scan_result_t *r, const char *full_utf8, const
   r->path_offs[r->node_count] = anchor;
   r->nodes[r->node_count] = node;
   r->node_count++;
+
+  {
+    uint32_t k = kind_mask & DISKATLAS_NODE_KIND_MASK;
+    if (k == DISKATLAS_NODE_KIND_DIR) {
+      atomic_fetch_add_explicit(&r->folders_recorded, 1, memory_order_relaxed);
+    } else if (k == DISKATLAS_NODE_KIND_FILE) {
+      atomic_fetch_add_explicit(&r->files_recorded, 1, memory_order_relaxed);
+    }
+  }
+
   atomic_fetch_add_explicit(&r->bytes_accounted,
                             (uint_least64_t)node.size_bytes,
                             memory_order_relaxed);

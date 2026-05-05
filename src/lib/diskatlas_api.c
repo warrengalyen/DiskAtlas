@@ -21,6 +21,8 @@ DISKATLAS_API scan_progress_t scan_get_progress(scan_result_t *result) {
   p.bytes_accounted = (uint64_t)atomic_load_explicit(&r->bytes_accounted, memory_order_relaxed);
   p.entry_count_visits =
       (uint64_t)atomic_load_explicit(&r->entry_visits, memory_order_relaxed);
+  p.folder_count = (uint64_t)atomic_load_explicit(&r->folders_recorded, memory_order_relaxed);
+  p.file_count = (uint64_t)atomic_load_explicit(&r->files_recorded, memory_order_relaxed);
 
   uint32_t c = atomic_load_explicit(&r->complete, memory_order_acquire);
   p.is_complete = (c != 0);

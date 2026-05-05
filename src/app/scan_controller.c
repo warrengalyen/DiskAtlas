@@ -559,7 +559,9 @@ static gboolean on_timer_fill_chunk(gpointer data) {
 
   app->list_populated = TRUE;
   char finish_pan[256];
-  snprintf(finish_pan, sizeof(finish_pan), "Scan complete in %.2f seconds.", app->last_scan_elapsed_s);
+  scan_progress_t pr_done = scan_get_progress(app->scan);
+  snprintf(finish_pan, sizeof(finish_pan), "Scan complete in %.2f seconds%s", app->last_scan_elapsed_s,
+           pr_done.is_cancel_observed ? " (cancelled)" : "");
   panel_scan_set_text(app, finish_pan);
   set_scan_done_status(app);
   enable_scan_button(app, TRUE);
@@ -586,9 +588,12 @@ static gboolean on_timer_scan_tick(gpointer data) {
     return G_SOURCE_REMOVE;
   }
   scan_progress_t pr = scan_get_progress(app->scan);
+  char folders_buf[32];
+  char files_buf[32];
   char buf[512];
-  snprintf(buf, sizeof(buf), "Scanning… %" PRIu64 " bytes, %" PRIu64 " entries visited",
-           (uint64_t)pr.bytes_accounted, (uint64_t)pr.entry_count_visits);
+  da_format_uint64_locale(pr.folder_count, folders_buf, sizeof(folders_buf));
+  da_format_uint64_locale(pr.file_count, files_buf, sizeof(files_buf));
+  snprintf(buf, sizeof(buf), "Scanning… (Folders: %s  Files: %s)", folders_buf, files_buf);
   panel_scan_set_text(app, buf);
   scan_progress_set_indeterminate(app, TRUE);
 

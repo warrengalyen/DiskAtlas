@@ -221,6 +221,12 @@ bool diskatlas_win32_record_entry_metadata(diskatlas_scan_result_t *r,
   r->nodes[r->node_count] = node;
   r->node_count++;
 
+  if (is_dir) {
+    atomic_fetch_add_explicit(&r->folders_recorded, 1, memory_order_relaxed);
+  } else {
+    atomic_fetch_add_explicit(&r->files_recorded, 1, memory_order_relaxed);
+  }
+
   atomic_fetch_add_explicit(&r->bytes_accounted,
                             (uint_least64_t)node.size_bytes,
                             memory_order_relaxed);

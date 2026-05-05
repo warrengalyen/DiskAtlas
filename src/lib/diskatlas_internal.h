@@ -27,6 +27,8 @@ typedef struct diskatlas_scan_result {
   atomic_uint_fast32_t complete;
   atomic_uint_least64_t bytes_accounted;
   atomic_uint_least64_t entry_visits;
+  atomic_uint_least64_t folders_recorded;
+  atomic_uint_least64_t files_recorded;
 
 #if defined(_WIN32)
   HANDLE worker;

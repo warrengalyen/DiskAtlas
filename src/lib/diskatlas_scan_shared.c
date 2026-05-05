@@ -10,7 +10,10 @@
 #include "diskatlas_internal.h"
 
 DISKATLAS_API int diskatlas_init(void) {
-#if !defined(_WIN32)
+#if defined(_WIN32)
+  /* C runtime defaults to "C" on Windows; LC_NUMERIC enables localeconv() grouping for UI. */
+  setlocale(LC_NUMERIC, "");
+#else
   setlocale(LC_ALL, "");
 #endif
   return 0;
