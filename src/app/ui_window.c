@@ -189,7 +189,6 @@ static void on_search_clear_clicked(GtkButton *btn, gpointer user_data) {
 
 static void pct_of_drive_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell, GtkTreeModel *model,
                                    GtkTreeIter *iter, gpointer user_data) {
-  (void)column;
   (void)user_data;
   gint pv = -1;
   gchar *txt = NULL;
@@ -198,15 +197,26 @@ static void pct_of_drive_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *c
   if (pv >= 0) {
     v = pv > 100 ? 100 : pv;
   }
+
+  gint col_w = gtk_tree_view_column_get_width(column);
+  if (col_w <= 1) {
+    col_w = gtk_tree_view_column_get_fixed_width(column);
+  }
+  if (col_w > 4) {
+    gtk_cell_renderer_set_fixed_size(cell, col_w - 4, -1);
+  } else {
+    gtk_cell_renderer_set_fixed_size(cell, -1, -1);
+  }
+
   g_object_set(GTK_CELL_RENDERER_PROGRESS(cell), "value", v, "text", txt != NULL ? txt : "", "text-xalign",
-               0.92f, NULL);
+               0.98f, NULL);
   g_free(txt);
 }
 
 static void append_pct_of_drive_column(GtkTreeView *tv, const char *title, int sort_model_id, int width_px,
                                        int min_width_px) {
   GtkCellRenderer *r = da_cell_renderer_progress_new();
-  g_object_set(r, "xpad", 10, NULL);
+  g_object_set(r, "xpad", 0, "ypad", 0, "xalign", 0.0f, NULL);
   GtkTreeViewColumn *c = gtk_tree_view_column_new();
   gtk_tree_view_column_set_title(c, title);
   gtk_tree_view_column_pack_start(c, r, TRUE);

@@ -335,6 +335,7 @@
                         <property name="can-focus">True</property>
                         <property name="receives-default">False</property>
                         <property name="draw-indicator">True</property>
+                        <property name="group">match_filename_only_radio</property>
                       </object>
                       <packing>
                         <property name="expand">False</property>
