@@ -1348,6 +1348,12 @@ static DWORD WINAPI mft_parse_worker_main(LPVOID param) {
     s->mtimes[idx] = mtime_ns;
     s->dosattrs[idx] = dattr;
     s->is_dir[idx] = (unsigned char)((flags & FILE_RECORD_IS_DIRECTORY) != 0 ? 1 : 0);
+    /* Update live progress counters so the UI label reflects MFT worker activity. */
+    if (s->is_dir[idx]) {
+      atomic_fetch_add_explicit(&s->r->folders_recorded, 1, memory_order_relaxed);
+    } else {
+      atomic_fetch_add_explicit(&s->r->files_recorded, 1, memory_order_relaxed);
+    }
     if (fn.name_chars > 0) {
       wchar_t *nm = wcs_dup_range(fn.name_buf, fn.name_chars);
       if (nm != NULL) {
@@ -1696,13 +1702,15 @@ bool diskatlas_scan_ntfs_mft(diskatlas_scan_result_t *r, wchar_t *root_path_wide
   wchar_arena_t path_arena;
   memset(&path_arena, 0, sizeof(path_arena));
 
+  /* Workers updated the progress counters for live display; reset them so the
+   * emit loop's diskatlas_win32_record_entry_metadata writes accurate final values. */
+  atomic_store_explicit(&r->folders_recorded, 0, memory_order_relaxed);
+  atomic_store_explicit(&r->files_recorded, 0, memory_order_relaxed);
+
   const uint32_t max_depth_req = opts->max_depth;
   const bool include_hidden = (opts->flags & DISKATLAS_SCAN_OPTION_INCLUDE_HIDDEN) != 0;
 
   for (size_t idx = 0; idx < record_count; idx++) {
-    if (atomic_load_explicit(&r->cancel, memory_order_relaxed) != 0) {
-      break;
-    }
     if (!valid[idx]) {
       continue;
     }

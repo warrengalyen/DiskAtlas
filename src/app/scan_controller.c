@@ -641,6 +641,12 @@ static void begin_populate_list(AppState *app) {
   app->populate_total = 0;
 
   if (v.nodes == NULL || v.count == 0) {
+    char finish_pan[256];
+    scan_progress_t pr_done = scan_get_progress(app->scan);
+    snprintf(finish_pan, sizeof(finish_pan), "Scan complete in %.2f seconds%s",
+             app->last_scan_elapsed_s,
+             pr_done.is_cancel_observed ? " (cancelled)" : "");
+    panel_scan_set_text(app, finish_pan);
     app->list_populated = TRUE;
     app->file_view_tree_ready = TRUE;
     enable_scan_button(app, TRUE);
