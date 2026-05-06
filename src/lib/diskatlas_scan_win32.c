@@ -81,18 +81,7 @@ static bool wbuf_ensure(wchar_t **buf, size_t *wcap_chars, size_t min_chars) {
   return true;
 }
 
-static bool utf8_blob_append_wide(diskatlas_scan_result_t *r, const wchar_t *wpath,
-                                  size_t *out_utf8_anchor) {
-  int need = WideCharToMultiByte(CP_UTF8, 0, wpath, -1, NULL, 0, NULL, NULL);
-  if (need <= 0) {
-    return false;
-  }
-  size_t add = (size_t)need;
-  size_t nl = r->path_blob_len;
-  size_t need_total = nl + add;
-  if (need_total < nl) {
-    return false;
-  }
+static bool utf8_blob_grow(diskatlas_scan_result_t *r, size_t need_total) {
   while (need_total > r->path_blob_cap) {
     size_t nc = r->path_blob_cap ? r->path_blob_cap * 2u : (64u * 1024u);
     while (nc < need_total) {
@@ -105,12 +94,45 @@ static bool utf8_blob_append_wide(diskatlas_scan_result_t *r, const wchar_t *wpa
     r->path_blob = nb;
     r->path_blob_cap = nc;
   }
-  int wrote = WideCharToMultiByte(CP_UTF8, 0, wpath, -1, r->path_blob + nl, need, NULL, NULL);
+  return true;
+}
+
+static bool utf8_blob_append_wide(diskatlas_scan_result_t *r, const wchar_t *wpath,
+                                  size_t *out_utf8_anchor) {
+  /* Fast path: try a stack buffer — covers all realistic path lengths without
+   * a second WideCharToMultiByte probe call.  MAX_PATH*3 = 780 bytes; 4096 is
+   * generous headroom for extended-length (\\?\) paths up to ~1365 chars. */
+  char stack_buf[4096];
+  int wrote = WideCharToMultiByte(CP_UTF8, 0, wpath, -1, stack_buf, (int)sizeof(stack_buf),
+                                  NULL, NULL);
+  if (wrote > 0) {
+    size_t add = (size_t)wrote;
+    size_t nl = r->path_blob_len;
+    if (!utf8_blob_grow(r, nl + add)) {
+      return false;
+    }
+    memcpy(r->path_blob + nl, stack_buf, add);
+    *out_utf8_anchor = nl;
+    r->path_blob_len = nl + add;
+    return true;
+  }
+
+  /* Fallback: path longer than 4095 UTF-8 bytes — probe exact size first. */
+  int need = WideCharToMultiByte(CP_UTF8, 0, wpath, -1, NULL, 0, NULL, NULL);
+  if (need <= 0) {
+    return false;
+  }
+  size_t add = (size_t)need;
+  size_t nl = r->path_blob_len;
+  if (!utf8_blob_grow(r, nl + add)) {
+    return false;
+  }
+  wrote = WideCharToMultiByte(CP_UTF8, 0, wpath, -1, r->path_blob + nl, need, NULL, NULL);
   if (wrote <= 0) {
     return false;
   }
   *out_utf8_anchor = nl;
-  r->path_blob_len = need_total;
+  r->path_blob_len = nl + (size_t)wrote;
   return true;
 }
 

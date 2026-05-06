@@ -340,6 +340,67 @@ static bool vol_read_at(HANDLE vol, uint64_t off, void *buf, DWORD len) {
   return true;
 }
 
+/** Like vol_read_at but uses 4 MB chunks — suitable for large sequential reads. */
+static bool vol_read_large(HANDLE vol, uint64_t off, void *buf, uint64_t len) {
+  unsigned char *p = (unsigned char *)buf;
+  uint64_t cur_off = off;
+  while (len > 0) {
+    DWORD chunk = (DWORD)(len > (4ULL * 1024 * 1024) ? (4ULL * 1024 * 1024) : len);
+    DWORD got = 0;
+    OVERLAPPED ov;
+    memset(&ov, 0, sizeof(ov));
+    ov.Offset     = (DWORD)(cur_off & 0xFFFFFFFFu);
+    ov.OffsetHigh = (DWORD)(cur_off >> 32);
+    if (!ReadFile(vol, p, chunk, &got, &ov) || got == 0) {
+      return false;
+    }
+    p += got;
+    cur_off += (uint64_t)got;
+    len -= (uint64_t)got;
+  }
+  return true;
+}
+
+/**
+ * Read the entire MFT into one contiguous heap buffer — a single sequential pass
+ * through all runs.  Returns NULL if the MFT is too large (> 1 GiB) or malloc fails.
+ * Workers can then index directly into this buffer with zero system-call overhead.
+ */
+static unsigned char *bulk_read_mft(HANDLE vol, const ntfs_run_list_t *runs,
+                                    uint64_t cluster_bytes, size_t total_bytes) {
+  if (total_bytes > 1024ULL * 1024 * 1024) {
+    return NULL;
+  }
+  unsigned char *buf = (unsigned char *)malloc(total_bytes);
+  if (!buf) {
+    return NULL;
+  }
+  uint64_t dst_off = 0;
+  for (size_t ri = 0; ri < runs->len; ri++) {
+    uint64_t run_bytes = (runs->segs[ri].vcn_hi_excl - runs->segs[ri].vcn_lo) * cluster_bytes;
+    if (dst_off + run_bytes > (uint64_t)total_bytes) {
+      run_bytes = (uint64_t)total_bytes - dst_off;
+    }
+    if (run_bytes == 0) {
+      break;
+    }
+    if (runs->segs[ri].lcn_start < 0) {
+      memset(buf + dst_off, 0, (size_t)run_bytes);
+    } else {
+      uint64_t vol_off = (uint64_t)runs->segs[ri].lcn_start * cluster_bytes;
+      if (!vol_read_large(vol, vol_off, buf + dst_off, run_bytes)) {
+        free(buf);
+        return NULL;
+      }
+    }
+    dst_off += run_bytes;
+    if (dst_off >= (uint64_t)total_bytes) {
+      break;
+    }
+  }
+  return buf;
+}
+
 static bool ntfs_fixup_record(unsigned char *rec, size_t rec_len, uint16_t sector_size) {
   if (rec_len < (size_t)sector_size || sector_size < 512u) {
     return true;
@@ -801,6 +862,7 @@ typedef struct mft_parse_shared {
   ntfs_run_list_t *runs;
   mft_stream_mmap_t *mmap;
   int use_mmap;
+  unsigned char *mft_buf; /* non-NULL = entire MFT in one heap buffer; workers memcpy from here */
   uint64_t *parents;
   wchar_t **names;
   unsigned char *valid;
@@ -812,7 +874,9 @@ typedef struct mft_parse_shared {
 
 static bool mft_load_record_raw(mft_parse_shared_t *s, size_t idx, unsigned char *buf) {
   uint64_t off = (uint64_t)idx * (uint64_t)s->record_size;
-  if (s->use_mmap) {
+  if (s->mft_buf) {
+    memcpy(buf, s->mft_buf + off, (size_t)s->record_size);
+  } else if (s->use_mmap) {
     mft_mmap_read(s->mmap, off, buf, (size_t)s->record_size);
   } else if (!mft_stream_read(s->vol, s->cluster_bytes, s->runs, s->stream_base_vcn, off, buf,
                               (size_t)s->record_size)) {
@@ -1100,50 +1164,109 @@ static uint64_t ntfs_volume_root_mft_index(const wchar_t *vol_root_path) {
   return idx;
 }
 
-static wchar_t *path_for_index(uint64_t idx, wchar_t **cache, wchar_t **names,
-                               uint64_t *parents, unsigned char *valid, size_t record_count,
-                               const wchar_t *vol_root, uint64_t root_mft_idx, unsigned depth) {
-  if (idx >= record_count || depth > 128u) {
-    return NULL;
+/** Sentinel value for path_offs[] entries that have not been resolved yet. */
+#define PATH_OFFS_NONE ((size_t)(-1))
+
+/**
+ * Bump-allocator for wide-char path strings.  All paths are packed into one
+ * contiguous buffer; offsets remain valid across realloc because we store
+ * indices, not raw pointers.
+ */
+typedef struct wchar_arena {
+  wchar_t *buf;
+  size_t   len; /* used, in wchar_t units */
+  size_t   cap; /* allocated, in wchar_t units */
+} wchar_arena_t;
+
+static size_t wchar_arena_alloc(wchar_arena_t *a, size_t n) {
+  if (n == 0) {
+    n = 1;
   }
-  if (cache[idx]) {
-    return cache[idx];
+  if (a->len + n < a->len) { /* overflow */
+    return PATH_OFFS_NONE;
   }
-  if (idx == root_mft_idx) {
-    wchar_t *vr = wcs_dup_range(vol_root, wcslen(vol_root));
-    if (vr) {
-      cache[idx] = vr;
+  if (a->len + n > a->cap) {
+    size_t nc = a->cap ? a->cap : (512u * 1024u);
+    while (nc < a->len + n) {
+      nc *= 2u;
     }
-    return vr;
+    wchar_t *nb = (wchar_t *)realloc(a->buf, nc * sizeof(wchar_t));
+    if (!nb) {
+      return PATH_OFFS_NONE;
+    }
+    a->buf = nb;
+    a->cap = nc;
   }
+  size_t off = a->len;
+  a->len += n;
+  return off;
+}
+
+/**
+ * Recursively resolve the full path for MFT record `idx`, storing the result
+ * as a wchar_t string in the arena and caching its offset in path_offs[].
+ * Returns PATH_OFFS_NONE on failure.  All previously cached offsets remain
+ * valid even when the arena is grown (because they are offsets, not pointers).
+ */
+static size_t path_for_index(uint64_t idx, size_t *path_offs, wchar_arena_t *arena,
+                              wchar_t **names, uint64_t *parents, unsigned char *valid,
+                              size_t record_count, const wchar_t *vol_root,
+                              uint64_t root_mft_idx, unsigned depth) {
+  if (idx >= record_count || depth > 128u) {
+    return PATH_OFFS_NONE;
+  }
+  if (path_offs[idx] != PATH_OFFS_NONE) {
+    return path_offs[idx];
+  }
+
+  if (idx == root_mft_idx) {
+    size_t n = wcslen(vol_root) + 1u;
+    size_t off = wchar_arena_alloc(arena, n);
+    if (off == PATH_OFFS_NONE) {
+      return PATH_OFFS_NONE;
+    }
+    memcpy(arena->buf + off, vol_root, n * sizeof(wchar_t));
+    path_offs[idx] = off;
+    return off;
+  }
+
   if (!valid[idx] || !names[idx]) {
-    return NULL;
+    return PATH_OFFS_NONE;
   }
-
   uint64_t par = parents[idx];
-  if (par == idx) {
-    return NULL;
+  if (par == (uint64_t)idx) {
+    return PATH_OFFS_NONE;
   }
 
-  wchar_t *pp = path_for_index(par, cache, names, parents, valid, record_count, vol_root,
-                               root_mft_idx, depth + 1u);
-  if (!pp) {
-    return NULL;
+  size_t par_off = path_for_index(par, path_offs, arena, names, parents, valid,
+                                   record_count, vol_root, root_mft_idx, depth + 1u);
+  if (par_off == PATH_OFFS_NONE) {
+    return PATH_OFFS_NONE;
   }
-  size_t pl = wcslen(pp);
-  size_t nl = wcslen(names[idx]);
-  wchar_t *full = (wchar_t *)malloc((pl + 1u + nl + 1u) * sizeof(wchar_t));
-  if (!full) {
-    return NULL;
+
+  /* Measure before allocating (arena->buf may move on realloc). */
+  size_t pl       = wcslen(arena->buf + par_off);
+  size_t nl       = wcslen(names[idx]);
+  bool   need_sep = (pl == 0 || (arena->buf[par_off + pl - 1] != L'\\' &&
+                                  arena->buf[par_off + pl - 1] != L'/'));
+  size_t total    = pl + (need_sep ? 1u : 0u) + nl + 1u;
+
+  size_t off = wchar_arena_alloc(arena, total);
+  if (off == PATH_OFFS_NONE) {
+    return PATH_OFFS_NONE;
   }
-  memcpy(full, pp, pl * sizeof(wchar_t));
+
+  /* Re-derive parent pointer after potential realloc. */
+  wchar_t *dst = arena->buf + off;
+  memcpy(dst, arena->buf + par_off, pl * sizeof(wchar_t));
   size_t pos = pl;
-  if (pos == 0 || (full[pos - 1] != L'\\' && full[pos - 1] != L'/')) {
-    full[pos++] = L'\\';
+  if (need_sep) {
+    dst[pos++] = L'\\';
   }
-  memcpy(full + pos, names[idx], (nl + 1u) * sizeof(wchar_t));
-  cache[idx] = full;
-  return full;
+  memcpy(dst + pos, names[idx], (nl + 1u) * sizeof(wchar_t));
+
+  path_offs[idx] = off;
+  return off;
 }
 
 static DWORD WINAPI mft_parse_worker_main(LPVOID param) {
@@ -1167,7 +1290,9 @@ static DWORD WINAPI mft_parse_worker_main(LPVOID param) {
     atomic_fetch_add_explicit(&s->r->entry_visits, 1, memory_order_relaxed);
 
     uint64_t off = (uint64_t)idx * (uint64_t)s->record_size;
-    if (s->use_mmap) {
+    if (s->mft_buf) {
+      memcpy(recbuf, s->mft_buf + off, (size_t)s->record_size);
+    } else if (s->use_mmap) {
       mft_mmap_read(s->mmap, off, recbuf, (size_t)s->record_size);
     } else if (!mft_stream_read(s->vol, s->cluster_bytes, s->runs, s->stream_base_vcn, off, recbuf,
                                 (size_t)s->record_size)) {
@@ -1429,9 +1554,10 @@ bool diskatlas_scan_ntfs_mft(diskatlas_scan_result_t *r, wchar_t *root_path_wide
   uint64_t *sizes = (uint64_t *)calloc(record_count, sizeof(uint64_t));
   uint64_t *mtimes = (uint64_t *)calloc(record_count, sizeof(uint64_t));
   uint32_t *dosattrs = (uint32_t *)calloc(record_count, sizeof(uint32_t));
-  wchar_t **path_cache = (wchar_t **)calloc(record_count, sizeof(wchar_t *));
+  /* Offset-based path cache: PATH_OFFS_NONE means "not yet resolved". */
+  size_t *path_offs = (size_t *)malloc(record_count * sizeof(size_t));
 
-  if (!parents || !names || !valid || !is_dir || !sizes || !mtimes || !dosattrs || !path_cache) {
+  if (!parents || !names || !valid || !is_dir || !sizes || !mtimes || !dosattrs || !path_offs) {
     free(parents);
     if (names) {
       for (size_t i = 0; i < record_count; i++) {
@@ -1444,15 +1570,23 @@ bool diskatlas_scan_ntfs_mft(diskatlas_scan_result_t *r, wchar_t *root_path_wide
     free(sizes);
     free(mtimes);
     free(dosattrs);
-    free(path_cache);
+    free(path_offs);
     run_list_free(&runs);
     CloseHandle(vol);
     return false;
   }
+  memset(path_offs, 0xFF, record_count * sizeof(size_t)); /* initialise all to PATH_OFFS_NONE */
+
+  /* Try to pre-read the whole MFT into one contiguous buffer (fastest path).
+   * Fall back to memory-mapped I/O, then to per-record stream reads. */
+  unsigned char *mft_buf = bulk_read_mft(vol, &runs, cluster_bytes, (size_t)stream_total);
 
   mft_stream_mmap_t mft_mmap;
   memset(&mft_mmap, 0, sizeof(mft_mmap));
-  int mmap_ok = mft_mmap_try_build(&mft_mmap, vol, cluster_bytes, &runs, stream_total) ? 1 : 0;
+  int mmap_ok = 0;
+  if (!mft_buf) {
+    mmap_ok = mft_mmap_try_build(&mft_mmap, vol, cluster_bytes, &runs, stream_total) ? 1 : 0;
+  }
 
   atomic_size_t next_idx;
   atomic_init(&next_idx, 0);
@@ -1470,6 +1604,7 @@ bool diskatlas_scan_ntfs_mft(diskatlas_scan_result_t *r, wchar_t *root_path_wide
   psh.runs = &runs;
   psh.mmap = &mft_mmap;
   psh.use_mmap = mmap_ok;
+  psh.mft_buf = mft_buf;
   psh.parents = parents;
   psh.names = names;
   psh.valid = valid;
@@ -1502,6 +1637,7 @@ bool diskatlas_scan_ntfs_mft(diskatlas_scan_result_t *r, wchar_t *root_path_wide
 
   HANDLE *th = (HANDLE *)calloc(tc, sizeof(HANDLE));
   if (th == NULL) {
+    free(mft_buf);
     mft_mmap_destroy(&mft_mmap);
     free(parents);
     if (names) {
@@ -1515,7 +1651,7 @@ bool diskatlas_scan_ntfs_mft(diskatlas_scan_result_t *r, wchar_t *root_path_wide
     free(sizes);
     free(mtimes);
     free(dosattrs);
-    free(path_cache);
+    free(path_offs);
     run_list_free(&runs);
     CloseHandle(vol);
     return false;
@@ -1529,6 +1665,7 @@ bool diskatlas_scan_ntfs_mft(diskatlas_scan_result_t *r, wchar_t *root_path_wide
         CloseHandle(th[tj]);
       }
       free(th);
+      free(mft_buf);
       mft_mmap_destroy(&mft_mmap);
       free(parents);
       for (size_t i = 0; i < record_count; i++) {
@@ -1540,7 +1677,7 @@ bool diskatlas_scan_ntfs_mft(diskatlas_scan_result_t *r, wchar_t *root_path_wide
       free(sizes);
       free(mtimes);
       free(dosattrs);
-      free(path_cache);
+      free(path_offs);
       run_list_free(&runs);
       CloseHandle(vol);
       return false;
@@ -1552,7 +1689,12 @@ bool diskatlas_scan_ntfs_mft(diskatlas_scan_result_t *r, wchar_t *root_path_wide
   }
   free(th);
 
+  /* Bulk buffer and mmap are no longer needed after workers finish. */
+  free(mft_buf);
   mft_mmap_destroy(&mft_mmap);
+
+  wchar_arena_t path_arena;
+  memset(&path_arena, 0, sizeof(path_arena));
 
   const uint32_t max_depth_req = opts->max_depth;
   const bool include_hidden = (opts->flags & DISKATLAS_SCAN_OPTION_INCLUDE_HIDDEN) != 0;
@@ -1564,11 +1706,12 @@ bool diskatlas_scan_ntfs_mft(diskatlas_scan_result_t *r, wchar_t *root_path_wide
     if (!valid[idx]) {
       continue;
     }
-    wchar_t *full = path_for_index((uint64_t)idx, path_cache, names, parents, valid, record_count,
-                                   vol_path_full, root_mft_idx, 0);
-    if (!full) {
+    size_t path_off = path_for_index((uint64_t)idx, path_offs, &path_arena, names, parents, valid,
+                                     record_count, vol_path_full, root_mft_idx, 0);
+    if (path_off == PATH_OFFS_NONE) {
       continue;
     }
+    const wchar_t *full = path_arena.buf + path_off;
     if (ntfs_emit_skip_system_metadata_ci(full, vol_path_full)) {
       continue;
     }
@@ -1607,10 +1750,10 @@ bool diskatlas_scan_ntfs_mft(diskatlas_scan_result_t *r, wchar_t *root_path_wide
   free(parents);
   for (size_t i = 0; i < record_count; i++) {
     free(names[i]);
-    free(path_cache[i]);
   }
   free(names);
-  free(path_cache);
+  free(path_offs);
+  free(path_arena.buf);
   free(valid);
   free(is_dir);
   free(sizes);
