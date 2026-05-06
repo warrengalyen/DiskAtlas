@@ -1,5 +1,8 @@
 /* DiskAtlas - global application stylesheet */
 
+/* GtkCellRendererProgress draws the fill with style class `progressbar` (not a `progress` child node). */
+@define-color diskatlas_tree_progress_fill #3584e4;
+
 /* Top panel + similar boxed regions (class set on widgets in UI). */
 .global-panel {
   border: 1px solid @borders;
@@ -7,7 +10,6 @@
   padding: 6px;
 }
 
-/* Default GtkProgressBar */
 progressbar {
   min-height: 12px;
 }
@@ -21,20 +23,51 @@ progressbar progress {
   min-height: 0;
 }
 
-/* File list percent column */
-#diskatlas_file_view_tree.view.trough {
-  background-color: transparent;
-  border: 1px solid alpha(@theme_fg_color, 0.35);
+treeview.view header button label {
+  color: @theme_fg_color
 }
 
-#diskatlas_file_view_tree.view.progressbar {
-  background-color: #3584e4;
+treeview.view:selected {
+  background-color: #c8c8c8;
+  color: @theme_fg_color;  
+}
+
+/*
+ * Tree percent columns (class diskatlas-tree-progress on GtkTreeView, set in ui_window.c).
+ * GtkCellRendererProgress: first pass uses class `trough` (track), second pass uses `progressbar` (fill).
+ * Do not target a `progress` descendant here — the cell renderer never creates that node.
+ */
+.diskatlas-tree-progress.view.trough {
+  background-color: transparent;
+  border: 1px solid alpha(@theme_fg_color, 0.35);
+  /* GtkCellRendererProgress insets the fill using get_padding() only; without padding the fill
+   * reaches the cell edge and paints over the trough border. Match border width (1px). */
+  padding: 1px;
+}
+
+.diskatlas-tree-progress.view.trough:selected {
+  border-color: #E0E0E0;
+}
+
+.diskatlas-tree-progress.view.trough:backdrop:selected {
+  border-color: #E0E0E0;
+}
+
+.diskatlas-tree-progress.view.progressbar {
+  background-color: @diskatlas_tree_progress_fill;
   background-image: none;
   border: none;
   box-shadow: none;
   color: @theme_fg_color;
 }
 
-#diskatlas_file_view_tree.view.progressbar:selected {
+.diskatlas-tree-progress.view.progressbar:selected {
+  background-color: @diskatlas_tree_progress_fill;
+  background-image: none;
   color: @theme_selected_fg_color;
+}
+
+.diskatlas-tree-progress.view.progressbar:backdrop:selected {
+  background-color: @diskatlas_tree_progress_fill;
+  background-image: none;
 }

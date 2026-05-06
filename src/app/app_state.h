@@ -12,6 +12,8 @@
 typedef struct DaTreeViewModel DaTreeViewModel;
 
 #define DA_COL_COUNT 9
+/** String column index: formatted allocated size (matches file list `titles` / model column 4). */
+#define DA_COL_ALLOCATED 4
 #define DA_TREEINSERT_BATCH 960
 #define DA_TREEINSERT_MS 22
 #define DA_FILTER_BATCH 4000

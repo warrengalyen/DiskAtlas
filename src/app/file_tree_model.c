@@ -181,8 +181,8 @@ static void fill_row_strings(AppState *app, size_t nid, char col[DA_COL_COUNT][5
     uint64_t dsum = dup_group_total_size(app->scan, &v, gid);
     da_format_bytes(dsum, col[7], sizeof(col[7]));
   } else {
-    g_strlcpy(col[6], "—", sizeof(col[6]));
-    g_strlcpy(col[7], "—", sizeof(col[7]));
+    g_strlcpy(col[6], "", sizeof(col[6]));
+    g_strlcpy(col[7], "", sizeof(col[7]));
   }
   da_format_win32_attr_letters(n->win32_attributes, col[8], sizeof(col[8]));
 }

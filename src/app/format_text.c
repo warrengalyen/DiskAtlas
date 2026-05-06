@@ -69,7 +69,9 @@ void da_format_pct_of_volume(uint64_t file_bytes, uint64_t vol_total, char *dst,
     return;
   }
   if (vol_total == 0) {
-    snprintf(dst, dstsz, "—");
+    if (dstsz > 0) {
+      dst[0] = '\0';
+    }
     return;
   }
   double pct = 100.0 * (double)file_bytes / (double)vol_total;
@@ -81,7 +83,9 @@ void da_format_pct_progress_label(uint64_t file_bytes, uint64_t vol_total, char 
     return;
   }
   if (vol_total == 0) {
-    snprintf(dst, dstsz, "—");
+    if (dstsz > 0) {
+      dst[0] = '\0';
+    }
     return;
   }
   double pct = 100.0 * (double)file_bytes / (double)vol_total;
@@ -93,13 +97,17 @@ void da_format_mtime_local(uint64_t unix_ns, char *dst, size_t dstsz) {
     return;
   }
   if (unix_ns == 0) {
-    snprintf(dst, dstsz, "—");
+    if (dstsz > 0) {
+      dst[0] = '\0';
+    }
     return;
   }
   GDateTime *utc =
       g_date_time_new_from_unix_utc((gint64)(unix_ns / 1000000000ull));
   if (utc == NULL) {
-    snprintf(dst, dstsz, "—");
+    if (dstsz > 0) {
+      dst[0] = '\0';
+    }
     return;
   }
   GDateTime *loc = g_date_time_to_local(utc);
@@ -108,7 +116,9 @@ void da_format_mtime_local(uint64_t unix_ns, char *dst, size_t dstsz) {
     g_strlcpy(dst, s, dstsz);
     g_free(s);
   } else {
-    snprintf(dst, dstsz, "—");
+    if (dstsz > 0) {
+      dst[0] = '\0';
+    }
   }
   g_date_time_unref(loc);
   g_date_time_unref(utc);
@@ -119,7 +129,9 @@ void da_format_win32_attr_letters(uint32_t wa, char *dst, size_t dstsz) {
     return;
   }
   if (wa == 0) {
-    snprintf(dst, dstsz, "—");
+    if (dstsz > 0) {
+      dst[0] = '\0';
+    }
     return;
   }
   char *p = dst;

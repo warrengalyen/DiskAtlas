@@ -206,6 +206,32 @@ static void da_tv_insert_entry(AppState *app, GtkTreeIter *parent_iter, int32_t 
   }
 }
 
+/** After populate, expand root row(s) on idle so GTK has applied store changes first. */
+static gboolean da_tv_expand_top_level_idle(gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->tree_view == NULL || app->tree_view_store == NULL || !app->tree_view_populated) {
+    return G_SOURCE_REMOVE;
+  }
+  GtkTreeView *tv = GTK_TREE_VIEW(app->tree_view);
+  GtkTreeModel *m = GTK_TREE_MODEL(app->tree_view_store);
+  GtkTreeIter iter;
+  for (gboolean ok = gtk_tree_model_get_iter_first(m, &iter); ok; ok = gtk_tree_model_iter_next(m, &iter)) {
+    GtkTreePath *p = gtk_tree_model_get_path(m, &iter);
+    if (p == NULL) {
+      continue;
+    }
+    /*
+     * Programmatic gtk_tree_view_expand_row does not always emit row-expanded on every
+     * platform/GTK build, so placeholder children would never be replaced. Run the same
+     * work as the signal handler, then expand.
+     */
+    da_tree_view_on_row_expanded(tv, &iter, p, app);
+    gtk_tree_view_expand_row(tv, p, FALSE);
+    gtk_tree_path_free(p);
+  }
+  return G_SOURCE_REMOVE;
+}
+
 /* ---- Public: populate ---- */
 
 void da_tree_view_populate(AppState *app) {
@@ -405,6 +431,10 @@ void da_tree_view_populate(AppState *app) {
   }
 
   app->tree_view_populated = TRUE;
+
+  if (app->tree_view != NULL) {
+    g_idle_add(da_tv_expand_top_level_idle, app);
+  }
 }
 
 /* ---- Public: clear ---- */

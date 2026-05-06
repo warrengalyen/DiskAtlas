@@ -126,8 +126,10 @@ static void da_file_view_paned_on_allocate(GtkWidget *widget, GdkRectangle *allo
 
 #define DISKATLAS_WINDOW_UI_RESOURCE "/ui/diskatlas_window.ui"
 #define DISKATLAS_APP_CSS_RESOURCE "/app.css"
-/** gtk_widget_set_name for CSS; targets percent column progress rendering on the file tree. */
-#define DISKATLAS_FILE_TREE_CSS_NAME "diskatlas_file_view_tree"
+/** gtk_style_context_add_class for percent-column progress CSS (file list + Tree View tabs). */
+#define DISKATLAS_TREE_PROGRESS_STYLE_CLASS "diskatlas-tree-progress"
+/** Default GtkCellRendererText background for Allocated columns (file list + Tree View tab). */
+#define DISKATLAS_TREE_ALLOC_CELL_BG "#EFEFEF"
 
 static void da_load_global_app_css(void) {
   static gboolean installed = FALSE;
@@ -270,9 +272,12 @@ static void append_pct_of_drive_column(GtkTreeView *tv, const char *title, int s
 }
 
 static void append_text_column(GtkTreeView *tv, const char *title, int model_col, int sort_model_id, int width_px,
-                               int min_width_px, gfloat xalign) {
+                               int min_width_px, gfloat xalign, const char *cell_background) {
   GtkCellRenderer *r = gtk_cell_renderer_text_new();
   g_object_set(r, "ellipsize", PANGO_ELLIPSIZE_END, "xalign", xalign, NULL);
+  if (cell_background != NULL) {
+    g_object_set(r, "background", cell_background, "background-set", TRUE, NULL);
+  }
   GtkTreeViewColumn *c = gtk_tree_view_column_new_with_attributes(title, r, "text", model_col, NULL);
   gtk_tree_view_column_set_alignment(c, xalign);
   gtk_tree_view_column_set_resizable(c, TRUE);
@@ -379,13 +384,13 @@ static void da_setup_tree_view(AppState *app) {
 
   gtk_tree_view_set_fixed_height_mode(GTK_TREE_VIEW(app->tree_view), TRUE);
 
-  /* Column 0: Folder / File Name (icon + text with tree expander). */
+  /* Column 0: Folder (icon + text with tree expander). */
   {
     GtkCellRenderer *pix = gtk_cell_renderer_pixbuf_new();
     GtkCellRenderer *txt = gtk_cell_renderer_text_new();
     g_object_set(txt, "ellipsize", PANGO_ELLIPSIZE_END, "xalign", 0.0f, NULL);
     GtkTreeViewColumn *c = gtk_tree_view_column_new();
-    gtk_tree_view_column_set_title(c, "Folder / File Name");
+    gtk_tree_view_column_set_title(c, "Folder");
     gtk_tree_view_column_pack_start(c, pix, FALSE);
     gtk_tree_view_column_set_cell_data_func(c, pix, tv_icon_cell_data, NULL, NULL);
     gtk_tree_view_column_pack_start(c, txt, TRUE);
@@ -410,8 +415,9 @@ static void da_setup_tree_view(AppState *app) {
   static const int    tv_minw[]   = { 72, 72, 56, 56, 56, 100, 48 };
   static const gfloat tv_align[]  = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f };
   for (int i = 0; i < 7; i++) {
+    const char *cell_bg = tv_cols[i] == DA_TV_COL_ALLOC ? DISKATLAS_TREE_ALLOC_CELL_BG : NULL;
     append_text_column(GTK_TREE_VIEW(app->tree_view), tv_titles[i], tv_cols[i], tv_cols[i],
-                       tv_widths[i], tv_minw[i], tv_align[i]);
+                       tv_widths[i], tv_minw[i], tv_align[i], cell_bg);
   }
 }
 
@@ -470,11 +476,12 @@ void da_ui_build(AppState *app) {
   app->show_folders_check = GTK_WIDGET(gtk_builder_get_object(builder, "show_folders_check"));
   app->combo_display_max = GTK_WIDGET(gtk_builder_get_object(builder, "combo_display_max"));
   app->tree = GTK_WIDGET(gtk_builder_get_object(builder, "file_view_tree"));
-  gtk_widget_set_name(app->tree, DISKATLAS_FILE_TREE_CSS_NAME);
+  gtk_style_context_add_class(gtk_widget_get_style_context(app->tree), DISKATLAS_TREE_PROGRESS_STYLE_CLASS);
   gtk_widget_add_events(app->tree, GDK_POINTER_MOTION_MASK | GDK_LEAVE_NOTIFY_MASK);
   app->treemap_panel_title = GTK_WIDGET(gtk_builder_get_object(builder, "treemap_panel_title"));
   app->main_notebook = GTK_WIDGET(gtk_builder_get_object(builder, "main_notebook"));
   app->tree_view = GTK_WIDGET(gtk_builder_get_object(builder, "tree_view_tree"));
+  gtk_style_context_add_class(gtk_widget_get_style_context(app->tree_view), DISKATLAS_TREE_PROGRESS_STYLE_CLASS);
   {
     GtkWidget *tv_scrolled = GTK_WIDGET(gtk_builder_get_object(builder, "tree_view_scrolled"));
     GtkWidget *tv_paned = GTK_WIDGET(gtk_builder_get_object(builder, "tree_view_paned"));
@@ -544,7 +551,9 @@ void da_ui_build(AppState *app) {
     if (i == 3 || i == 4 || i == 6 || i == 7) {
       xalign = 1.0f;
     }
-    append_text_column(GTK_TREE_VIEW(app->tree), titles[i], i, col_sort_id[i], col_w[i], col_min_w[i], xalign);
+    const char *cell_bg = (i == DA_COL_ALLOCATED) ? DISKATLAS_TREE_ALLOC_CELL_BG : NULL;
+    append_text_column(GTK_TREE_VIEW(app->tree), titles[i], i, col_sort_id[i], col_w[i], col_min_w[i], xalign,
+                       cell_bg);
   }
 
   da_file_tree_install_sorting(GTK_TREE_VIEW(app->tree), app->store, app);
