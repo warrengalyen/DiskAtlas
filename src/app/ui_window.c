@@ -382,6 +382,9 @@ static void da_setup_tree_view(AppState *app) {
   gtk_tree_view_set_model(GTK_TREE_VIEW(app->tree_view), GTK_TREE_MODEL(app->tree_view_store));
   g_object_unref(app->tree_view_store);
 
+  gtk_tree_selection_set_mode(gtk_tree_view_get_selection(GTK_TREE_VIEW(app->tree_view)),
+                              GTK_SELECTION_MULTIPLE);
+
   gtk_tree_view_set_fixed_height_mode(GTK_TREE_VIEW(app->tree_view), TRUE);
 
   /* Column 0: Folder (icon + text with tree expander). */

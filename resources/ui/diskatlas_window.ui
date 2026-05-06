@@ -87,9 +87,6 @@
           <object class="GtkBox" id="top_panel">
             <property name="visible">True</property>
             <property name="can-focus">False</property>
-            <property name="orientation">horizontal</property>
-            <property name="spacing">0</property>
-            <property name="halign">fill</property>
             <property name="hexpand">True</property>
             <child>
               <!-- n-columns=3 n-rows=3 -->
@@ -141,6 +138,7 @@
                   <object class="GtkLabel" id="panel_scan_label">
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
+                    <property name="label" translatable="yes">Ready...</property>
                     <property name="xalign">0</property>
                   </object>
                   <packing>
@@ -196,6 +194,9 @@
                     <property name="can-focus">False</property>
                     <property name="label">—</property>
                     <property name="xalign">0</property>
+                    <style>
+                      <class name="bold-text"/>
+                    </style>
                   </object>
                   <packing>
                     <property name="left-attach">1</property>
@@ -297,7 +298,6 @@
               <object class="GtkBox" id="top_panel_tail_spacer">
                 <property name="visible">True</property>
                 <property name="can-focus">False</property>
-                <property name="orientation">horizontal</property>
               </object>
               <packing>
                 <property name="expand">True</property>
@@ -324,9 +324,9 @@
               <object class="GtkBox" id="file_view_content_vbox">
                 <property name="visible">True</property>
                 <property name="can-focus">False</property>
+                <property name="vexpand">True</property>
                 <property name="orientation">vertical</property>
                 <property name="spacing">5</property>
-                <property name="vexpand">True</property>
                 <child>
                   <object class="GtkBox" id="file_view_top_box">
                     <property name="visible">True</property>
@@ -530,7 +530,6 @@
                 </child>
                 <child>
                   <object class="GtkScrolledWindow" id="file_view_scrolled">
-                    <property name="min-content-height">70</property>
                     <property name="visible">True</property>
                     <property name="can-focus">True</property>
                     <property name="margin-start">5</property>
@@ -539,6 +538,7 @@
                     <property name="hexpand">True</property>
                     <property name="vexpand">True</property>
                     <property name="shadow-type">in</property>
+                    <property name="min-content-height">70</property>
                     <child>
                       <object class="GtkTreeView" id="file_view_tree">
                         <property name="visible">True</property>
@@ -574,26 +574,25 @@
               <object class="GtkPaned" id="tree_view_paned">
                 <property name="visible">True</property>
                 <property name="can-focus">True</property>
-                <property name="vexpand">True</property>
                 <property name="margin-start">5</property>
                 <property name="margin-end">5</property>
                 <property name="margin-top">5</property>
                 <property name="margin-bottom">5</property>
+                <property name="vexpand">True</property>
                 <property name="orientation">vertical</property>
                 <property name="position">500</property>
                 <child>
                   <object class="GtkScrolledWindow" id="tree_view_scrolled">
-                    <property name="min-content-height">70</property>
                     <property name="visible">True</property>
                     <property name="can-focus">True</property>
                     <property name="hexpand">True</property>
                     <property name="vexpand">True</property>
                     <property name="shadow-type">in</property>
+                    <property name="min-content-height">70</property>
                     <child>
                       <object class="GtkTreeView" id="tree_view_tree">
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
-                        <property name="headers-clickable">True</property>
                         <property name="enable-tree-lines">True</property>
                         <child internal-child="selection">
                           <object class="GtkTreeSelection"/>
@@ -655,6 +654,7 @@
                 </child>
               </object>
               <packing>
+                <property name="position">1</property>
                 <property name="tab-fill">False</property>
               </packing>
             </child>
@@ -665,6 +665,7 @@
                 <property name="label" translatable="yes">Tree View</property>
               </object>
               <packing>
+                <property name="position">1</property>
                 <property name="tab-fill">False</property>
               </packing>
             </child>
@@ -679,17 +680,16 @@
           <object class="GtkBox" id="main_status_bar_box">
             <property name="visible">True</property>
             <property name="can-focus">False</property>
-            <property name="orientation">horizontal</property>
-            <property name="spacing">12</property>
             <property name="margin-top">4</property>
+            <property name="spacing">12</property>
             <child>
               <object class="GtkLabel" id="status_label_left">
                 <property name="visible">True</property>
                 <property name="can-focus">False</property>
-                <property name="hexpand">True</property>
                 <property name="halign">start</property>
-                <property name="xalign">0</property>
+                <property name="hexpand">True</property>
                 <property name="ellipsize">end</property>
+                <property name="xalign">0</property>
               </object>
               <packing>
                 <property name="expand">True</property>
@@ -701,10 +701,10 @@
               <object class="GtkLabel" id="status_label_center">
                 <property name="visible">True</property>
                 <property name="can-focus">False</property>
-                <property name="hexpand">True</property>
                 <property name="halign">center</property>
-                <property name="xalign">0.5</property>
+                <property name="hexpand">True</property>
                 <property name="ellipsize">middle</property>
+                <property name="xalign">0.5</property>
               </object>
               <packing>
                 <property name="expand">True</property>
@@ -716,10 +716,10 @@
               <object class="GtkLabel" id="status_label_right">
                 <property name="visible">True</property>
                 <property name="can-focus">False</property>
-                <property name="hexpand">True</property>
                 <property name="halign">end</property>
-                <property name="xalign">1</property>
+                <property name="hexpand">True</property>
                 <property name="ellipsize">start</property>
+                <property name="xalign">1</property>
               </object>
               <packing>
                 <property name="expand">True</property>

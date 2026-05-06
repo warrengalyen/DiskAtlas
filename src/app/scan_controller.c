@@ -207,12 +207,300 @@ static gboolean on_tree_leave(GtkWidget *tv, GdkEventCrossing *ev, gpointer user
   return FALSE;
 }
 
+/* ---- Tree View tab hover handlers ---------------------------------------- */
+
+static gboolean on_tree_view_motion(GtkWidget *tv, GdkEventMotion *ev, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->status_label_center == NULL || !scan_controller_is_tree_view_tab(app)) {
+    return FALSE;
+  }
+  GtkTreePath *tp = NULL;
+  if (!gtk_tree_view_get_path_at_pos(GTK_TREE_VIEW(tv), (gint)ev->x, (gint)ev->y, &tp, NULL,
+                                     NULL, NULL)) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_center), "");
+    return FALSE;
+  }
+  GtkTreeIter iter;
+  GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(tv));
+  gchar *pstr = NULL;
+  if (gtk_tree_model_get_iter(model, &iter, tp)) {
+    gtk_tree_model_get(model, &iter, DA_TV_COL_PATH, &pstr, -1);
+  }
+  gtk_tree_path_free(tp);
+  gtk_label_set_text(GTK_LABEL(app->status_label_center), pstr != NULL ? pstr : "");
+  g_free(pstr);
+  return FALSE;
+}
+
+static gboolean on_tree_view_leave(GtkWidget *tv, GdkEventCrossing *ev, gpointer user_data) {
+  (void)tv;
+  (void)ev;
+  AppState *app = (AppState *)user_data;
+  if (app != NULL && app->status_label_center != NULL && scan_controller_is_tree_view_tab(app)) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_center), "");
+  }
+  return FALSE;
+}
+
+/* ---- Tree View selection → status_label_left ------------------------------ */
+
+static void scan_controller_update_status_left_from_tree_view_selection(AppState *app) {
+  if (app == NULL || app->status_label_left == NULL || app->tree_view == NULL) {
+    return;
+  }
+  if (app->tree_view_model == NULL) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_left), "");
+    return;
+  }
+  GtkTreeSelection *sel = gtk_tree_view_get_selection(GTK_TREE_VIEW(app->tree_view));
+  GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(app->tree_view));
+  GList *rows = gtk_tree_selection_get_selected_rows(sel, &model);
+  if (rows == NULL) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_left), "");
+    return;
+  }
+  uint64_t n_files_sel = 0;
+  uint64_t sum_sz = 0;
+  uint64_t sum_alloc = 0;
+  for (GList *l = rows; l != NULL; l = l->next) {
+    GtkTreePath *path = (GtkTreePath *)l->data;
+    GtkTreeIter iter;
+    if (!gtk_tree_model_get_iter(model, &iter, path)) {
+      continue;
+    }
+    gint64 idx_id = DA_TV_LP_PLACEHOLDER;
+    gtk_tree_model_get(model, &iter, DA_TV_COL_IDX_ID, &idx_id, -1);
+    if (idx_id == DA_TV_LP_PLACEHOLDER) {
+      continue;
+    }
+    /* Use pre-aggregated entry stats: for dirs these are subtree totals. */
+    uint64_t esz = 0, ealloc = 0, efiles = 0;
+    if (da_tv_entry_get_stats(app->tree_view_model, idx_id, &esz, &ealloc, &efiles)) {
+      n_files_sel += efiles;
+      sum_sz      += esz;
+      sum_alloc   += ealloc;
+    }
+  }
+  g_list_free_full(rows, (GDestroyNotify)gtk_tree_path_free);
+
+  char nfs[48];
+  char tsz[72];
+  char asz[72];
+  char buf[512];
+  da_format_uint64_locale(n_files_sel, nfs, sizeof(nfs));
+  da_format_bytes(sum_sz, tsz, sizeof(tsz));
+  da_format_bytes(sum_alloc, asz, sizeof(asz));
+  snprintf(buf, sizeof(buf), "Selected Files: %s, Total Size: %s, Allocated: %s", nfs, tsz, asz);
+  gtk_label_set_text(GTK_LABEL(app->status_label_left), buf);
+}
+
+/* ---- Tree View selection → treemap sync ----------------------------------- */
+
+static void on_tree_view_selection_changed(GtkTreeSelection *sel, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || !scan_controller_is_tree_view_tab(app)) {
+    return;
+  }
+  scan_controller_update_status_left_from_tree_view_selection(app);
+
+  if (app->treemap_tree_sync_in_progress) {
+    return;
+  }
+  /* Sync last-selected row to treemap. */
+  if (app->treemap == NULL || !TREEMAP_IS_WIDGET(app->treemap) || app->scan == NULL) {
+    return;
+  }
+  GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(app->tree_view));
+  GList *rows = gtk_tree_selection_get_selected_rows(sel, &model);
+
+  app->treemap_tree_sync_in_progress = TRUE;
+  /* Clear treemap selection first, then add one entry per selected row. */
+  treemap_widget_set_selection_by_scan_index(TREEMAP_WIDGET(app->treemap), -1);
+
+  if (rows != NULL && app->scan != NULL) {
+    scan_results_view_t v = scan_get_results(app->scan);
+    for (GList *l = rows; l != NULL; l = l->next) {
+      GtkTreePath *tp = (GtkTreePath *)l->data;
+      GtkTreeIter iter;
+      if (!gtk_tree_model_get_iter(model, &iter, tp)) {
+        continue;
+      }
+      gchar *pstr = NULL;
+      gtk_tree_model_get(model, &iter, DA_TV_COL_PATH, &pstr, -1);
+      if (pstr != NULL && v.nodes != NULL) {
+        for (size_t ni = 0; ni < v.count; ni++) {
+          if (v.nodes[ni].path != NULL &&
+#ifdef G_OS_WIN32
+              g_ascii_strcasecmp(v.nodes[ni].path, pstr) == 0
+#else
+              strcmp(v.nodes[ni].path, pstr) == 0
+#endif
+          ) {
+            treemap_widget_add_to_selection_by_scan_index(TREEMAP_WIDGET(app->treemap),
+                                                         (gint64)ni);
+            break;
+          }
+        }
+      }
+      g_free(pstr);
+    }
+    g_list_free_full(rows, (GDestroyNotify)gtk_tree_path_free);
+  }
+  app->treemap_tree_sync_in_progress = FALSE;
+}
+
+/* ---- treemap → tree_view sync helper ------------------------------------- */
+
+/**
+ * Find and expand ancestor rows in tree_view_store for the given path string,
+ * then select the row matching target_path.
+ */
+static void da_tv_select_path(AppState *app, const char *target_path) {
+  GtkTreeView *tv;
+  GtkTreeModel *model;
+  GtkTreeSelection *sel;
+  GtkTreeIter root_iter;
+  gboolean found = FALSE;
+
+  if (app == NULL || target_path == NULL || app->tree_view == NULL ||
+      app->tree_view_store == NULL) {
+    return;
+  }
+  tv    = GTK_TREE_VIEW(app->tree_view);
+  model = GTK_TREE_MODEL(app->tree_view_store);
+  sel   = gtk_tree_view_get_selection(tv);
+
+  /* Iterate top-level rows; expand as needed; BFS for the target. */
+  if (!gtk_tree_model_get_iter_first(model, &root_iter)) {
+    return;
+  }
+
+  /* Use a queue-based BFS to locate target_path without recursion. */
+  GQueue *queue = g_queue_new();
+  {
+    GtkTreeIter *copy = g_new(GtkTreeIter, 1);
+    *copy = root_iter;
+    g_queue_push_tail(queue, copy);
+    /* Also enqueue siblings of root. */
+    GtkTreeIter sib = root_iter;
+    while (gtk_tree_model_iter_next(model, &sib)) {
+      GtkTreeIter *sc = g_new(GtkTreeIter, 1);
+      *sc = sib;
+      g_queue_push_tail(queue, sc);
+    }
+  }
+
+  /* Clear existing selection first so the sync replaces rather than appends. */
+  gtk_tree_selection_unselect_all(sel);
+
+  while (!g_queue_is_empty(queue) && !found) {
+    GtkTreeIter *cur = (GtkTreeIter *)g_queue_pop_head(queue);
+    gchar *pstr = NULL;
+    gtk_tree_model_get(model, cur, DA_TV_COL_PATH, &pstr, -1);
+
+    /* Normalise pstr: trim trailing separators for comparison only. */
+    gchar *pstr_norm = NULL;
+    if (pstr != NULL) {
+      pstr_norm = g_strdup(pstr);
+      gsize pn = strlen(pstr_norm);
+      while (pn > 0 && (pstr_norm[pn - 1] == '/' || pstr_norm[pn - 1] == '\\')) {
+        pstr_norm[--pn] = '\0';
+      }
+    }
+
+    gboolean match = FALSE;
+    if (pstr_norm != NULL) {
+#ifdef G_OS_WIN32
+      match = (g_ascii_strcasecmp(pstr_norm, target_path) == 0);
+#else
+      match = (strcmp(pstr_norm, target_path) == 0);
+#endif
+    }
+    if (match) {
+      /* Found: select and scroll. */
+      gtk_tree_selection_select_iter(sel, cur);
+      GtkTreePath *tp = gtk_tree_model_get_path(model, cur);
+      if (tp != NULL) {
+        gtk_tree_view_scroll_to_cell(tv, tp, NULL, FALSE, 0.0f, 0.0f);
+        gtk_tree_path_free(tp);
+      }
+      found = TRUE;
+    } else {
+      /* Check if target_path could be under this node (node is an ancestor).
+       * Use the trimmed length so "D:\" with plen=3→2 correctly matches "D:\foo". */
+      gboolean is_ancestor = FALSE;
+      if (pstr_norm != NULL) {
+        size_t clen = strlen(pstr_norm);
+        if (clen > 0) {
+#ifdef G_OS_WIN32
+          is_ancestor = (g_ascii_strncasecmp(pstr_norm, target_path, (gint)clen) == 0) &&
+                        (target_path[clen] == '/' || target_path[clen] == '\\' ||
+                         target_path[clen] == '\0');
+#else
+          is_ancestor = (strncmp(pstr_norm, target_path, clen) == 0) &&
+                        (target_path[clen] == '/' || target_path[clen] == '\\' ||
+                         target_path[clen] == '\0');
+#endif
+        }
+      }
+      if (is_ancestor && gtk_tree_model_iter_has_child(model, cur)) {
+        /* Expand row to trigger lazy loading. */
+        GtkTreePath *tp = gtk_tree_model_get_path(model, cur);
+        if (tp != NULL) {
+          gtk_tree_view_expand_row(tv, tp, FALSE);
+          gtk_tree_path_free(tp);
+        }
+        /* Enqueue children. */
+        GtkTreeIter child;
+        if (gtk_tree_model_iter_children(model, &child, cur)) {
+          do {
+            GtkTreeIter *cc = g_new(GtkTreeIter, 1);
+            *cc = child;
+            g_queue_push_tail(queue, cc);
+          } while (gtk_tree_model_iter_next(model, &child));
+        }
+      }
+    }
+    g_free(pstr_norm);
+    g_free(pstr);
+    g_free(cur);
+  }
+
+  /* Drain remaining queue entries. */
+  while (!g_queue_is_empty(queue)) {
+    g_free(g_queue_pop_head(queue));
+  }
+  g_queue_free(queue);
+}
+
+static void da_tv_select_path_by_scan_index(AppState *app, gint64 scan_index) {
+  if (app == NULL || app->scan == NULL || scan_index < 0) {
+    if (app != NULL && app->tree_view != NULL) {
+      GtkTreeSelection *sel = gtk_tree_view_get_selection(GTK_TREE_VIEW(app->tree_view));
+      gtk_tree_selection_unselect_all(sel);
+    }
+    return;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (v.nodes == NULL || (size_t)scan_index >= v.count) {
+    return;
+  }
+  const char *target = v.nodes[(size_t)scan_index].path;
+  if (target != NULL) {
+    da_tv_select_path(app, target);
+  }
+}
+
 static void on_notebook_switch_page(GtkNotebook *nb, GtkWidget *page, guint page_num,
                                     gpointer user_data) {
   (void)nb;
   (void)page;
   (void)page_num;
-  scan_controller_sync_file_view_status((AppState *)user_data);
+  AppState *app = (AppState *)user_data;
+  if (scan_controller_is_tree_view_tab(app) && app != NULL && app->status_label_right != NULL) {
+    gtk_label_set_text(GTK_LABEL(app->status_label_right), "");
+  }
+  scan_controller_sync_file_view_status(app);
 }
 
 static const file_node_t *da_qsort_nodes;
@@ -318,39 +606,28 @@ static void da_refresh_treemap(AppState *app) {
   }
 }
 
+static void da_tv_select_path_by_scan_index(AppState *app, gint64 scan_index);
+
 static void on_treemap_selected(GtkWidget *treemap, gint64 scan_index, gpointer user_data) {
   AppState *app = (AppState *)user_data;
   (void)treemap;
-  if (app == NULL || app->stat_sel_val == NULL) {
+  if (app == NULL) {
     return;
   }
-  if (scan_index == -2) {
-    gtk_label_set_text(GTK_LABEL(app->stat_sel_val), "Other (merged entries beyond treemap cap)");
+  /* stat_sel_val is owned exclusively by scan_controller_refresh_volume_labels;
+   * do not write to it from treemap selection events. */
+  if (app->treemap_tree_sync_in_progress) {
     return;
   }
-  if (scan_index < 0 || app->scan == NULL) {
-    gtk_label_set_text(GTK_LABEL(app->stat_sel_val), "—");
-    return;
-  }
-  {
-    scan_results_view_t v = scan_get_results(app->scan);
-    size_t ix = (size_t)scan_index;
-    char line[1024];
-    char sz[80];
-    if (v.nodes == NULL || ix >= v.count) {
-      gtk_label_set_text(GTK_LABEL(app->stat_sel_val), "—");
-      return;
-    }
-    da_format_bytes(v.nodes[ix].size_bytes, sz, sizeof sz);
-    snprintf(line, sizeof line, "%s  (%s)", v.nodes[ix].path != NULL ? v.nodes[ix].path : "", sz);
-    gtk_label_set_text(GTK_LABEL(app->stat_sel_val), line);
-  }
+  app->treemap_tree_sync_in_progress = TRUE;
+  da_tv_select_path_by_scan_index(app, scan_index);
+  app->treemap_tree_sync_in_progress = FALSE;
 }
 
 static void on_treemap_hover(GtkWidget *treemap, gint64 scan_index, gpointer user_data) {
   AppState *app = (AppState *)user_data;
   (void)treemap;
-  if (app == NULL || app->status_label_center == NULL || !scan_controller_is_tree_view_tab(app)) {
+  if (app == NULL || app->status_label_center == NULL) {
     return;
   }
   if (scan_index == -1) {
@@ -1044,6 +1321,12 @@ void scan_controller_attach(AppState *app) {
   g_signal_connect(app->tree, "row-expanded", G_CALLBACK(on_tree_row_expanded), app);
   if (app->tree_view != NULL) {
     g_signal_connect(app->tree_view, "row-expanded", G_CALLBACK(on_tree_view_row_expanded), app);
+    g_signal_connect(app->tree_view, "motion-notify-event", G_CALLBACK(on_tree_view_motion), app);
+    g_signal_connect(app->tree_view, "leave-notify-event",  G_CALLBACK(on_tree_view_leave),  app);
+    {
+      GtkTreeSelection *tv_sel = gtk_tree_view_get_selection(GTK_TREE_VIEW(app->tree_view));
+      g_signal_connect(tv_sel, "changed", G_CALLBACK(on_tree_view_selection_changed), app);
+    }
   }
   if (app->main_notebook != NULL) {
     g_signal_connect(app->main_notebook, "switch-page", G_CALLBACK(on_notebook_switch_page), app);

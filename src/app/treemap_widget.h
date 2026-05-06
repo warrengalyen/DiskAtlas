@@ -32,4 +32,17 @@ void treemap_widget_set_selected_callback(TreemapWidget *w,
                                           void (*cb)(GtkWidget *widget, gint64 scan_index, gpointer data),
                                           gpointer data);
 
+/**
+ * Programmatically replace the treemap's selection with the single tile whose
+ * node_index == scan_index, clearing any prior multi-selection.
+ * Passing -1 clears all selections without selecting anything.
+ */
+void treemap_widget_set_selection_by_scan_index(TreemapWidget *w, gint64 scan_index);
+
+/**
+ * Add the tile whose node_index == scan_index to the current selection without
+ * clearing existing selections.  No-op if scan_index is < 0 or not found.
+ */
+void treemap_widget_add_to_selection_by_scan_index(TreemapWidget *w, gint64 scan_index);
+
 #endif

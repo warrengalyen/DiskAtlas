@@ -46,4 +46,16 @@ void da_tree_view_clear(AppState *app);
 void da_tree_view_on_row_expanded(GtkTreeView *tv, GtkTreeIter *iter,
                                   GtkTreePath *path, gpointer user_data);
 
+/**
+ * Return the pre-aggregated stats for a tree view entry by its entry index
+ * (the value stored in DA_TV_COL_IDX_ID).  Returns FALSE if the model is
+ * NULL, the index is out of range, or it is a placeholder row.
+ *
+ * For files:  size_bytes = own size, file_count = 1.
+ * For dirs:   size_bytes = subtree total, file_count = total descendant files.
+ */
+gboolean da_tv_entry_get_stats(const DaTreeViewModel *m, gint64 entry_id,
+                               uint64_t *out_size, uint64_t *out_alloc,
+                               uint64_t *out_file_count);
+
 #endif /* TREE_VIEW_MODEL_H */

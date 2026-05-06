@@ -498,3 +498,16 @@ void da_tree_view_on_row_expanded(GtkTreeView *tv, GtkTreeIter *iter,
     cid = app->tree_view_model->entries[cid].next_sibling_id;
   }
 }
+
+gboolean da_tv_entry_get_stats(const DaTreeViewModel *m, gint64 entry_id,
+                               uint64_t *out_size, uint64_t *out_alloc,
+                               uint64_t *out_file_count) {
+  if (m == NULL || entry_id < 0 || (size_t)entry_id >= m->count) {
+    return FALSE;
+  }
+  const DaTvEntry *e = &m->entries[(size_t)entry_id];
+  if (out_size)       *out_size       = e->size_bytes;
+  if (out_alloc)      *out_alloc      = e->alloc_bytes;
+  if (out_file_count) *out_file_count = e->file_count;
+  return TRUE;
+}

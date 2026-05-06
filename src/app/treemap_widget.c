@@ -11,6 +11,21 @@
 #include "format_text.h"
 #include "treemap_widget.h"
 
+/* ---- visual constants ---------------------------------------------------- */
+#define DIR_HEADER_H    16.0  /* pixel height reserved for folder header strip  */
+#define MIN_LABEL_W     72.0  /* min rect width  to show any text               */
+#define MIN_LABEL_H     13.0  /* min rect height to show any text               */
+#define LARGE_W         90.0  /* rect width  threshold for normal-font label    */
+#define LARGE_H         26.0  /* rect height threshold for normal-font label    */
+
+/* Hover / selection border appearance */
+#define HOVER_BORDER_R  1.00  /* border color (white) */
+#define HOVER_BORDER_G  1.00
+#define HOVER_BORDER_B  1.00
+#define HOVER_BORDER_A  0.80  /* opacity */
+#define HOVER_BORDER_W  1.2   /* line width while hovering  (thin)   */
+#define SELECT_BORDER_W 2.0   /* line width when selected   (thick)  */
+
 typedef struct TreemapNode TreemapNode;
 struct TreemapNode {
   char *name;
@@ -22,7 +37,9 @@ struct TreemapNode {
 };
 
 typedef struct {
-  double x, y, w, h;
+  double x, y, w, h; /* header strip bounds                                    */
+  double dir_h;       /* total height of the directory group (header+children) */
+  size_t scan_ix;     /* scan node index for this directory; (size_t)-1 if unknown */
   char *text;
 } TreemapDirLabel;
 
@@ -43,7 +60,12 @@ struct _TreemapWidget {
   size_t dir_label_count;
 
   int hovered_index;
-  int selected_index;
+  int hovered_dir_index;    /* index into dir_labels[] whose header is under the cursor  */
+
+  /* Multi-selection: GArray of gint rect/dir indices. */
+  GArray *selected_rect_indices; /* gint elements – indices into rects[]      */
+  GArray *selected_dir_indices;  /* gint elements – indices into dir_labels[] */
+  gint    anchor_rect_index;     /* Shift-click anchor for rects; -1 if none  */
 
   int alloc_w;
   int alloc_h;
@@ -54,10 +76,14 @@ struct _TreemapWidget {
   void (*on_selected)(GtkWidget *, gint64, gpointer);
   gpointer on_selected_data;
 
-  PangoLayout *pango_layout;
+  PangoLayout *pango_layout;    /* normal font – large rects            */
+  PangoLayout *pango_layout_sm; /* small  font – medium rects           */
+  PangoLayout *pango_layout_hdr;/* bold font sized to DIR_HEADER_H – dir headers */
 };
 
 G_DEFINE_TYPE(TreemapWidget, treemap_widget, GTK_TYPE_DRAWING_AREA)
+
+/* ---- tree helpers -------------------------------------------------------- */
 
 static void treemap_node_free(TreemapNode *n) {
   size_t i;
@@ -106,6 +132,8 @@ static void treemap_clear_tree(TreemapWidget *self) {
   treemap_node_free(self->tree_root);
   self->tree_root = NULL;
 }
+
+/* ---- path utilities ------------------------------------------------------ */
 
 static void path_to_forward_slashes(char *p) {
   for (; p != NULL && *p != '\0'; p++) {
@@ -173,6 +201,8 @@ static gchar *rel_path_under_root(const char *full_utf8, const char *root_utf8) 
   return rel;
 }
 
+/* ---- tree construction --------------------------------------------------- */
+
 static TreemapNode *treemap_node_new_dir(const char *name) {
   TreemapNode *n = g_new0(TreemapNode, 1);
   n->name = g_strdup(name);
@@ -227,7 +257,7 @@ static TreemapNode *treemap_build_tree(const char *root_utf8, const file_node_t 
   char *root_norm;
   size_t ni;
 
-  root = treemap_node_new_dir("");
+  root = treemap_node_new_dir(root_utf8 != NULL ? root_utf8 : "");
   root_norm = g_strdup(root_utf8 != NULL ? root_utf8 : "");
   path_to_forward_slashes(root_norm);
   strip_trailing_slashes(root_norm);
@@ -304,10 +334,34 @@ static TreemapNode *treemap_build_tree(const char *root_utf8, const file_node_t 
     g_free(rel);
   }
 
+  /* Find the scan node for the root directory itself so its header strip is
+   * interactive (hover path shown in status bar, click selects in tree view). */
+  for (ni = 0; ni < count; ni++) {
+    const file_node_t *fn = &nodes[ni];
+    uint32_t kind = fn->attributes & DISKATLAS_NODE_KIND_MASK;
+    if (kind == DISKATLAS_NODE_KIND_DIR && fn->path != NULL) {
+      char *p = g_strdup(fn->path);
+      path_to_forward_slashes(p);
+      strip_trailing_slashes(p);
+#ifdef G_OS_WIN32
+      if (g_ascii_strcasecmp(p, root_norm) == 0) {
+#else
+      if (strcmp(p, root_norm) == 0) {
+#endif
+        root->scan_ix = ni;
+        g_free(p);
+        break;
+      }
+      g_free(p);
+    }
+  }
+
   g_free(root_norm);
   (void)treemap_node_compute_agg(root);
   return root;
 }
+
+/* ---- layout output buffers ----------------------------------------------- */
 
 typedef struct {
   treemap_rect_t *rects;
@@ -340,18 +394,20 @@ static int layout_push_rect(LayoutOut *out, double x, double y, double w, double
   r->h = h;
   r->node_index = scan_ix;
   out->rect_labels[out->n_rects] = NULL;
-  if (label_optional != NULL && w > 60.0 && h > 18.0) {
+  if (label_optional != NULL && w > MIN_LABEL_W && h > MIN_LABEL_H) {
     out->rect_labels[out->n_rects] = g_strdup(label_optional);
   }
   out->n_rects++;
   return 0;
 }
 
-static int layout_push_dir_lab(LayoutOut *out, double x, double y, double w, double h, const char *text) {
+/* Stores a folder header strip.
+ * h      = strip height (DIR_HEADER_H).
+ * dir_h  = full directory height (header + children area).
+ * nix    = scan node index for this directory ((size_t)-1 if unknown). */
+static int layout_push_dir_lab(LayoutOut *out, double x, double y, double w, double h,
+                               double dir_h, size_t nix, const char *text) {
   TreemapDirLabel *L;
-  if (!(w > 60.0 && h > 18.0)) {
-    return 0;
-  }
   if (out->n_dir >= out->cap_dir) {
     size_t nc = out->cap_dir ? out->cap_dir * 2u : 64u;
     TreemapDirLabel *a = g_renew(TreemapDirLabel, out->dir_labs, nc);
@@ -366,6 +422,8 @@ static int layout_push_dir_lab(LayoutOut *out, double x, double y, double w, dou
   L->y = y;
   L->w = w;
   L->h = h;
+  L->dir_h = dir_h;
+  L->scan_ix = nix;
   L->text = g_strdup(text);
   return 0;
 }
@@ -384,39 +442,191 @@ static int cmp_tnode_agg_desc(const void *a, const void *b) {
   return strcmp((*pa)->name, (*pb)->name);
 }
 
-static void layout_slice_dice(LayoutOut *out, TreemapNode *n, double x, double y, double w, double h) {
-  size_t i;
-  size_t nch;
+/* ---- squarified treemap layout (Bruls / KDirStat style) ------------------ */
+
+/*
+ * Returns the worst aspect ratio for a candidate row.
+ *   sum      – sum of pixel areas in the row
+ *   amax     – largest pixel area in the row
+ *   amin     – smallest pixel area in the row
+ *   side     – length of the strip's fixed dimension (shorter rect side)
+ *
+ * For a strip of height h = sum/side, each item i has width = area_i/h.
+ * Aspect ratio of item i = max(h/(area_i/h),  (area_i/h)/h)
+ *                        = max(h²/area_i, area_i/h²).
+ * Worst is the max over largest and smallest items.
+ */
+static double sq_worst(double sum, double amax, double amin, double side) {
+  double sw;
+  if (side < 1e-12 || amin < 1e-12) {
+    return 1e18;
+  }
+  sw = sum / side;
+  if (sw < 1e-12) {
+    return 1e18;
+  }
+  return fmax(sw * sw / amin, amax / (sw * sw));
+}
+
+/* Forward declaration for mutual recursion between squarify and dir layout. */
+static void layout_squarify_node(LayoutOut *out, TreemapNode *n,
+                                  double x, double y, double w, double h);
+
+/*
+ * Squarify a pre-sorted (descending) array of items with pre-computed pixel
+ * areas into the rectangle (x,y,w,h), consuming the rectangle from top/left.
+ */
+static void squarify_impl(LayoutOut *out, TreemapNode **items, int n,
+                           double *areas, double x, double y, double w, double h) {
+  int i;
+  double rx, ry, rw, rh;
+
+  i = 0;
+  rx = x;
+  ry = y;
+  rw = w;
+  rh = h;
+
+  while (i < n && rw > 1.0 && rh > 1.0) {
+    int j;
+    int row_end;
+    double row_sum, row_max, row_min;
+    double strip, pos;
+    gboolean horiz;
+    double free_dim;
+
+    horiz = (rw >= rh);
+    free_dim = horiz ? rw : rh;
+
+    /* Seed the row with item i. */
+    row_sum = areas[i];
+    row_max = areas[i];
+    row_min = areas[i] > 1e-9 ? areas[i] : 1e-9;
+    row_end = i + 1;
+
+    /* Greedily extend the row while aspect ratio improves or stays equal. */
+    for (j = i + 1; j < n; j++) {
+      double ns, nx, nm;
+      if (areas[j] < 1e-9) {
+        /* Zero-area item – absorb silently without affecting aspect ratio. */
+        row_sum += areas[j];
+        row_end = j + 1;
+        continue;
+      }
+      ns = row_sum + areas[j];
+      nx = fmax(row_max, areas[j]);
+      nm = fmin(row_min, areas[j]);
+      if (sq_worst(ns, nx, nm, free_dim) <= sq_worst(row_sum, row_max, row_min, free_dim) + 1e-9) {
+        row_sum = ns;
+        row_max = nx;
+        row_min = nm;
+        row_end = j + 1;
+      } else {
+        break;
+      }
+    }
+
+    strip = (free_dim > 1e-9) ? (row_sum / free_dim) : 0.0;
+    if (strip < 1e-9) {
+      break;
+    }
+
+    /* Place each item in the committed row. */
+    pos = 0.0;
+    for (j = i; j < row_end; j++) {
+      gboolean last = (j + 1 == row_end);
+      double free_len = horiz ? rw : rh;
+      double item_len = last ? (free_len - pos) : (areas[j] / strip);
+      double cx, cy, cw, ch;
+      TreemapNode *node;
+
+      if (horiz) {
+        cx = rx + pos;
+        cy = ry;
+        cw = item_len;
+        ch = strip;
+      } else {
+        cx = rx;
+        cy = ry + pos;
+        cw = strip;
+        ch = item_len;
+      }
+      pos += item_len;
+
+      node = items[j];
+      if (node->is_file) {
+        (void)layout_push_rect(out, cx, cy, cw, ch, node->scan_ix, node->name);
+      } else if (node->children != NULL && node->children->len > 0) {
+        layout_squarify_node(out, node, cx, cy, cw, ch);
+      } else if (node->scan_ix != (size_t)-1) {
+        (void)layout_push_rect(out, cx, cy, cw, ch, node->scan_ix, node->name);
+      }
+    }
+
+    /* Shrink the remaining rectangle. */
+    if (horiz) {
+      ry += strip;
+      rh -= strip;
+    } else {
+      rx += strip;
+      rw -= strip;
+    }
+    i = row_end;
+  }
+}
+
+/*
+ * Layout a directory node into (x,y,w,h):
+ *  1. If the node has a name and the rect is tall enough, reserve DIR_HEADER_H
+ *     pixels at the top for a folder label strip.
+ *  2. Squarify the children into the remaining inner area.
+ */
+static void layout_squarify_node(LayoutOut *out, TreemapNode *n,
+                                  double x, double y, double w, double h) {
+  double inner_y, inner_h;
+  int nch, i;
   TreemapNode **order;
   uint64_t total;
-  gboolean horizontal;
-  double pos;
-  gboolean is_dir_container;
+  double total_px;
+  double *areas;
 
-  if (w < 1e-9 || h < 1e-9) {
+  if (w < 1.0 || h < 1.0) {
     return;
   }
 
-  is_dir_container = !n->is_file && n->children != NULL && n->children->len > 0;
+  inner_y = y;
+  inner_h = h;
 
-  if (n->is_file) {
-    (void)layout_push_rect(out, x, y, w, h, n->scan_ix, n->name);
+  /* Folder header strip – only when named and rect has enough room. */
+  if (n->name != NULL && n->name[0] != '\0' && w > MIN_LABEL_W && h > DIR_HEADER_H + 4.0) {
+    char szb[64];
+    gchar *lab;
+    da_format_bytes(n->agg, szb, sizeof szb);
+    lab = g_strdup_printf("%s (%s)", n->name, szb);
+    (void)layout_push_dir_lab(out, x, y, w, DIR_HEADER_H, h, n->scan_ix, lab);
+    g_free(lab);
+    inner_y = y + DIR_HEADER_H;
+    inner_h = h - DIR_HEADER_H;
+  }
+
+  if (n->children == NULL || n->children->len == 0) {
+    return;
+  }
+  if (inner_h < 1.0) {
     return;
   }
 
-  if (!is_dir_container) {
-    if (!n->is_file && n->scan_ix != (size_t)-1) {
-      (void)layout_push_rect(out, x, y, w, h, n->scan_ix, n->name);
-    }
-    return;
-  }
-
-  nch = n->children->len;
+  nch = (int)n->children->len;
   order = g_new(TreemapNode *, nch);
   for (i = 0; i < nch; i++) {
     order[i] = (TreemapNode *)g_ptr_array_index(n->children, i);
   }
   qsort(order, nch, sizeof(TreemapNode *), cmp_tnode_agg_desc);
+
+  /* Drop trailing zero-area children (sorted to the back). */
+  while (nch > 0 && order[nch - 1]->agg == 0) {
+    nch--;
+  }
 
   total = 0;
   for (i = 0; i < nch; i++) {
@@ -427,37 +637,19 @@ static void layout_slice_dice(LayoutOut *out, TreemapNode *n, double x, double y
     return;
   }
 
-  if (n->name[0] != '\0') {
-    char szb[64];
-    gchar *lab;
-    da_format_bytes(n->agg, szb, sizeof szb);
-    lab = g_strdup_printf("%s\\ (%s)", n->name, szb);
-    (void)layout_push_dir_lab(out, x, y, w, h, lab);
-    g_free(lab);
-  }
-
-  horizontal = w >= h;
-  pos = 0.0;
-
+  total_px = w * inner_h;
+  areas = g_new(double, nch);
   for (i = 0; i < nch; i++) {
-    TreemapNode *ch = order[i];
-    double frac = (double)ch->agg / (double)total;
-    double strip;
-    gboolean last = (i + 1 == nch);
-
-    if (horizontal) {
-      strip = last ? (w - pos) : w * frac;
-      layout_slice_dice(out, ch, x + pos, y, strip, h);
-      pos += strip;
-    } else {
-      strip = last ? (h - pos) : h * frac;
-      layout_slice_dice(out, ch, x, y + pos, w, strip);
-      pos += strip;
-    }
+    areas[i] = (double)order[i]->agg / (double)total * total_px;
   }
 
+  squarify_impl(out, order, nch, areas, x, inner_y, w, inner_h);
+
+  g_free(areas);
   g_free(order);
 }
+
+/* ---- colour helpers ------------------------------------------------------ */
 
 static void hsv_to_rgb(double h, double s, double v, double *r, double *g, double *b) {
   double c = v * s;
@@ -530,19 +722,69 @@ static void color_for_path(const char *path, double *r, double *g, double *b) {
   hsv_to_rgb(hue, 0.88, 0.74, r, g, b);
 }
 
+/* ---- multi-selection helpers --------------------------------------------- */
+
+static gboolean treemap_rect_is_selected(const TreemapWidget *self, gint idx) {
+  guint i;
+  if (self->selected_rect_indices == NULL) return FALSE;
+  for (i = 0; i < self->selected_rect_indices->len; i++) {
+    if (g_array_index(self->selected_rect_indices, gint, i) == idx) return TRUE;
+  }
+  return FALSE;
+}
+
+static gboolean treemap_dir_is_selected(const TreemapWidget *self, gint idx) {
+  guint i;
+  if (self->selected_dir_indices == NULL) return FALSE;
+  for (i = 0; i < self->selected_dir_indices->len; i++) {
+    if (g_array_index(self->selected_dir_indices, gint, i) == idx) return TRUE;
+  }
+  return FALSE;
+}
+
+/* Toggle rect index in the selected_rect_indices array. */
+static void treemap_rect_toggle(TreemapWidget *self, gint idx) {
+  guint i;
+  for (i = 0; i < self->selected_rect_indices->len; i++) {
+    if (g_array_index(self->selected_rect_indices, gint, i) == idx) {
+      g_array_remove_index_fast(self->selected_rect_indices, i);
+      return;
+    }
+  }
+  g_array_append_val(self->selected_rect_indices, idx);
+}
+
+/* Toggle dir index in the selected_dir_indices array. */
+static void treemap_dir_toggle(TreemapWidget *self, gint idx) {
+  guint i;
+  for (i = 0; i < self->selected_dir_indices->len; i++) {
+    if (g_array_index(self->selected_dir_indices, gint, i) == idx) {
+      g_array_remove_index_fast(self->selected_dir_indices, i);
+      return;
+    }
+  }
+  g_array_append_val(self->selected_dir_indices, idx);
+}
+
+/* ---- layout entry point -------------------------------------------------- */
+
 static void treemap_run_layout(TreemapWidget *self, int wid, int hei) {
   LayoutOut out = {0};
 
   treemap_clear_layout_buffers(self);
   self->layout_ok = FALSE;
-  self->hovered_index = -1;
+  self->hovered_index     = -1;
+  self->hovered_dir_index = -1;
+  if (self->selected_rect_indices) g_array_set_size(self->selected_rect_indices, 0);
+  if (self->selected_dir_indices)  g_array_set_size(self->selected_dir_indices,  0);
+  self->anchor_rect_index = -1;
 
   if (self->tree_root == NULL || wid < 2 || hei < 2) {
     gtk_widget_queue_draw(GTK_WIDGET(self));
     return;
   }
 
-  layout_slice_dice(&out, self->tree_root, 0.0, 0.0, (double)wid, (double)hei);
+  layout_squarify_node(&out, self->tree_root, 0.0, 0.0, (double)wid, (double)hei);
 
   self->rects = out.rects;
   self->rect_count = out.n_rects;
@@ -555,6 +797,8 @@ static void treemap_run_layout(TreemapWidget *self, int wid, int hei) {
 
   gtk_widget_queue_draw(GTK_WIDGET(self));
 }
+
+/* ---- hit testing --------------------------------------------------------- */
 
 static int treemap_hit_index(const TreemapWidget *self, double px, double py) {
   gint j;
@@ -570,6 +814,23 @@ static int treemap_hit_index(const TreemapWidget *self, double px, double py) {
   return -1;
 }
 
+/* Returns the index of the dir_labels[] entry whose header strip contains (px,py), else -1. */
+static int treemap_hit_dir_header(const TreemapWidget *self, double px, double py) {
+  size_t i;
+  if (self->dir_labels == NULL || self->dir_label_count == 0) {
+    return -1;
+  }
+  for (i = 0; i < self->dir_label_count; i++) {
+    const TreemapDirLabel *L = &self->dir_labels[i];
+    if (px >= L->x && px < L->x + L->w && py >= L->y && py < L->y + L->h) {
+      return (int)i;
+    }
+  }
+  return -1;
+}
+
+/* ---- drawing ------------------------------------------------------------- */
+
 static gboolean treemap_draw(GtkWidget *widget, cairo_t *cr) {
   TreemapWidget *self = TREEMAP_WIDGET(widget);
   size_t i;
@@ -581,6 +842,7 @@ static gboolean treemap_draw(GtkWidget *widget, cairo_t *cr) {
     return FALSE;
   }
 
+  /* --- Pass 1: fill all file/dir rects with colour + border --- */
   for (i = 0; i < self->rect_count; i++) {
     const treemap_rect_t *R = &self->rects[i];
     const file_node_t *fn;
@@ -608,77 +870,110 @@ static gboolean treemap_draw(GtkWidget *widget, cairo_t *cr) {
     cairo_rectangle(cr, R->x, R->y, R->w, R->h);
     cairo_fill(cr);
 
-    br = rf * 0.52;
-    bg = gf * 0.52;
-    bb = bf * 0.52;
+    br = rf * 0.50;
+    bg = gf * 0.50;
+    bb = bf * 0.50;
     cairo_set_source_rgb(cr, br, bg, bb);
-    cairo_set_line_width(cr, 1.0);
+    cairo_set_line_width(cr, 0.5);
     cairo_rectangle(cr, R->x + 0.25, R->y + 0.25, R->w - 0.5, R->h - 0.5);
     cairo_stroke(cr);
   }
 
+  /* --- Pass 2: directory header strip backgrounds --- */
+  cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.58);
+  for (i = 0; i < self->dir_label_count; i++) {
+    const TreemapDirLabel *L = &self->dir_labels[i];
+    cairo_rectangle(cr, L->x, L->y, L->w, L->h);
+    cairo_fill(cr);
+  }
+
+  /* --- Pass 3: hover / selected border on file/dir rects --- */
+  cairo_set_source_rgba(cr, HOVER_BORDER_R, HOVER_BORDER_G, HOVER_BORDER_B, HOVER_BORDER_A);
   for (i = 0; i < self->rect_count; i++) {
     const treemap_rect_t *R = &self->rects[i];
-    const file_node_t *fn;
-    double rf, gf, bf;
-    uint32_t kind;
-    if (R->w < 1.0 || R->h < 1.0) {
+    gboolean sel = treemap_rect_is_selected(self, (gint)i);
+    gboolean hov = ((gint)i == self->hovered_index);
+    double bw, off;
+    if (!sel && !hov) {
       continue;
     }
-    if (R->node_index >= self->node_count) {
-      continue;
-    }
-    if ((gint)i != self->hovered_index && (gint)i != self->selected_index) {
-      continue;
-    }
-    fn = &self->nodes[R->node_index];
-    kind = fn->attributes & DISKATLAS_NODE_KIND_MASK;
-    if (kind == DISKATLAS_NODE_KIND_DIR) {
-      rf = 0.28;
-      gf = 0.28;
-      bf = 0.30;
-    } else {
-      color_for_path(fn->path, &rf, &gf, &bf);
-    }
-    if ((gint)i == self->selected_index) {
-      cairo_set_source_rgb(cr, fmin(1.0, rf + 0.22), fmin(1.0, gf + 0.22), fmin(1.0, bf + 0.22));
-      cairo_set_line_width(cr, 2.0);
-    } else {
-      cairo_set_source_rgb(cr, fmin(1.0, rf + 0.14), fmin(1.0, gf + 0.14), fmin(1.0, bf + 0.14));
-      cairo_set_line_width(cr, 1.0);
-    }
-    cairo_rectangle(cr, R->x + 0.25, R->y + 0.25, R->w - 0.5, R->h - 0.5);
+    bw  = sel ? SELECT_BORDER_W : HOVER_BORDER_W;
+    off = bw / 2.0;
+    cairo_set_line_width(cr, bw);
+    cairo_rectangle(cr, R->x + off, R->y + off, R->w - bw, R->h - bw);
     cairo_stroke(cr);
   }
 
-  if (self->pango_layout != NULL) {
-    cairo_set_source_rgb(cr, 0.94, 0.94, 0.95);
-    for (i = 0; i < self->rect_count; i++) {
-      const treemap_rect_t *R = &self->rects[i];
-      const char *txt = self->rect_labels != NULL ? self->rect_labels[i] : NULL;
-      if (txt == NULL || R->w <= 60.0 || R->h <= 18.0) {
-        continue;
-      }
-      pango_layout_set_width(self->pango_layout, (int)((R->w - 4.0) * PANGO_SCALE));
-      pango_layout_set_ellipsize(self->pango_layout, PANGO_ELLIPSIZE_END);
-      pango_layout_set_text(self->pango_layout, txt, -1);
-      cairo_save(cr);
-      cairo_rectangle(cr, R->x, R->y, R->w, R->h);
-      cairo_clip(cr);
-      cairo_move_to(cr, R->x + 2.0, R->y + 2.0);
-      pango_cairo_show_layout(cr, self->pango_layout);
-      cairo_restore(cr);
+  /* --- Pass 3b: folder group outlines (selected = thick, hovered = thin) --- */
+  cairo_set_source_rgba(cr, HOVER_BORDER_R, HOVER_BORDER_G, HOVER_BORDER_B, HOVER_BORDER_A);
+  for (i = 0; i < self->dir_label_count; i++) {
+    const TreemapDirLabel *HL = &self->dir_labels[i];
+    gboolean sel = treemap_dir_is_selected(self, (gint)i);
+    gboolean hov = ((gint)i == self->hovered_dir_index);
+    double bw, off;
+    if (!sel && !hov) {
+      continue;
     }
+    bw  = sel ? SELECT_BORDER_W : HOVER_BORDER_W;
+    off = bw / 2.0;
+    cairo_set_line_width(cr, bw);
+    cairo_rectangle(cr, HL->x + off, HL->y + off, HL->w - bw, HL->dir_h - bw);
+    cairo_stroke(cr);
+  }
+
+  /* --- Pass 4: file rect labels (dynamic font size based on rect area) --- */
+  cairo_set_source_rgb(cr, 0.94, 0.94, 0.95);
+  for (i = 0; i < self->rect_count; i++) {
+    const treemap_rect_t *R = &self->rects[i];
+    const char *txt;
+    PangoLayout *pl;
+
+    if (R->w < MIN_LABEL_W || R->h < MIN_LABEL_H) {
+      continue;
+    }
+    txt = (self->rect_labels != NULL) ? self->rect_labels[i] : NULL;
+    if (txt == NULL) {
+      continue;
+    }
+
+    /* Use normal-font layout for large rects; small-font for medium rects. */
+    if (R->w >= LARGE_W && R->h >= LARGE_H && self->pango_layout != NULL) {
+      pl = self->pango_layout;
+    } else if (self->pango_layout_sm != NULL) {
+      pl = self->pango_layout_sm;
+    } else {
+      pl = self->pango_layout;
+    }
+    if (pl == NULL) {
+      continue;
+    }
+
+    pango_layout_set_width(pl, (int)((R->w - 5.0) * PANGO_SCALE));
+    pango_layout_set_ellipsize(pl, PANGO_ELLIPSIZE_END);
+    pango_layout_set_text(pl, txt, -1);
+
+    cairo_save(cr);
+    cairo_rectangle(cr, R->x, R->y, R->w, R->h);
+    cairo_clip(cr);
+    cairo_move_to(cr, R->x + 3.0, R->y + 2.0);
+    pango_cairo_show_layout(cr, pl);
+    cairo_restore(cr);
+  }
+
+  /* --- Pass 5: directory header strip labels (font sized to DIR_HEADER_H) --- */
+  if (self->pango_layout_hdr != NULL) {
+    cairo_set_source_rgb(cr, 0.97, 0.97, 0.98);
     for (i = 0; i < self->dir_label_count; i++) {
       const TreemapDirLabel *L = &self->dir_labels[i];
-      pango_layout_set_width(self->pango_layout, (int)((L->w - 4.0) * PANGO_SCALE));
-      pango_layout_set_ellipsize(self->pango_layout, PANGO_ELLIPSIZE_END);
-      pango_layout_set_text(self->pango_layout, L->text, -1);
+      pango_layout_set_width(self->pango_layout_hdr, (int)((L->w - 6.0) * PANGO_SCALE));
+      pango_layout_set_ellipsize(self->pango_layout_hdr, PANGO_ELLIPSIZE_END);
+      pango_layout_set_text(self->pango_layout_hdr, L->text, -1);
+
       cairo_save(cr);
       cairo_rectangle(cr, L->x, L->y, L->w, L->h);
       cairo_clip(cr);
-      cairo_move_to(cr, L->x + 2.0, L->y + 2.0);
-      pango_cairo_show_layout(cr, self->pango_layout);
+      cairo_move_to(cr, L->x + 3.0, L->y + 2.0);
+      pango_cairo_show_layout(cr, self->pango_layout_hdr);
       cairo_restore(cr);
     }
   }
@@ -686,15 +981,25 @@ static gboolean treemap_draw(GtkWidget *widget, cairo_t *cr) {
   return FALSE;
 }
 
+/* ---- input events -------------------------------------------------------- */
+
 static gboolean treemap_motion(GtkWidget *w, GdkEventMotion *ev, gpointer user_data) {
   TreemapWidget *self = TREEMAP_WIDGET(user_data);
-  int hit = treemap_hit_index(self, ev->x, ev->y);
+  int hit     = treemap_hit_index(self, ev->x, ev->y);
+  int hit_dir = treemap_hit_dir_header(self, ev->x, ev->y);
   (void)w;
-  if (hit != self->hovered_index) {
-    self->hovered_index = hit;
+  if (hit != self->hovered_index || hit_dir != self->hovered_dir_index) {
+    self->hovered_index     = hit;
+    self->hovered_dir_index = hit_dir;
     gtk_widget_queue_draw(GTK_WIDGET(self));
     if (self->on_hover != NULL) {
-      gint64 ix = (hit < 0) ? -1 : (gint64)self->rects[hit].node_index;
+      gint64 ix;
+      if (hit_dir >= 0 && (size_t)hit_dir < self->dir_label_count &&
+          self->dir_labels[hit_dir].scan_ix != (size_t)-1) {
+        ix = (gint64)self->dir_labels[hit_dir].scan_ix;
+      } else {
+        ix = (hit < 0) ? -1 : (gint64)self->rects[hit].node_index;
+      }
       self->on_hover(GTK_WIDGET(self), ix, self->on_hover_data);
     }
   }
@@ -705,8 +1010,9 @@ static gboolean treemap_leave(GtkWidget *w, GdkEventCrossing *ev, gpointer user_
   TreemapWidget *self = TREEMAP_WIDGET(user_data);
   (void)w;
   (void)ev;
-  if (self->hovered_index >= 0) {
-    self->hovered_index = -1;
+  if (self->hovered_index >= 0 || self->hovered_dir_index >= 0) {
+    self->hovered_index     = -1;
+    self->hovered_dir_index = -1;
     gtk_widget_queue_draw(GTK_WIDGET(self));
     if (self->on_hover != NULL) {
       self->on_hover(GTK_WIDGET(self), -1, self->on_hover_data);
@@ -717,24 +1023,67 @@ static gboolean treemap_leave(GtkWidget *w, GdkEventCrossing *ev, gpointer user_
 
 static gboolean treemap_button_press(GtkWidget *w, GdkEventButton *ev, gpointer user_data) {
   TreemapWidget *self = TREEMAP_WIDGET(user_data);
-  int hit;
+  int hit, hit_dir;
+  gint64 ix;
+  gboolean ctrl_held, shift_held;
   (void)w;
   if (ev->button != 1U) {
     return FALSE;
   }
-  hit = treemap_hit_index(self, ev->x, ev->y);
-  self->selected_index = hit;
+  hit      = treemap_hit_index(self, ev->x, ev->y);
+  hit_dir  = treemap_hit_dir_header(self, ev->x, ev->y);
+  ctrl_held  = (ev->state & GDK_CONTROL_MASK) != 0;
+  shift_held = (ev->state & GDK_SHIFT_MASK) != 0;
+
+  if (hit_dir >= 0) {
+    gint idx = (gint)hit_dir;
+    if (ctrl_held || shift_held) {
+      /* Ctrl/Shift: toggle dir in its array; don't touch rect selection. */
+      treemap_dir_toggle(self, idx);
+    } else {
+      /* Plain click: clear both arrays, select this dir only. */
+      g_array_set_size(self->selected_rect_indices, 0);
+      g_array_set_size(self->selected_dir_indices, 0);
+      self->anchor_rect_index = -1;
+      g_array_append_val(self->selected_dir_indices, idx);
+    }
+    ix = (self->dir_labels[hit_dir].scan_ix != (size_t)-1)
+         ? (gint64)self->dir_labels[hit_dir].scan_ix : -1;
+  } else if (hit >= 0) {
+    gint idx = (gint)hit;
+    if (ctrl_held || shift_held) {
+      /* Ctrl/Shift: toggle rect in its array; don't touch dir selection. */
+      treemap_rect_toggle(self, idx);
+    } else {
+      /* Plain click: clear both arrays, select this rect only. */
+      g_array_set_size(self->selected_rect_indices, 0);
+      g_array_set_size(self->selected_dir_indices, 0);
+      g_array_append_val(self->selected_rect_indices, idx);
+      self->anchor_rect_index = idx;
+    }
+    ix = (gint64)self->rects[hit].node_index;
+  } else {
+    /* Click on empty space: clear all. */
+    if (!ctrl_held && !shift_held) {
+      g_array_set_size(self->selected_rect_indices, 0);
+      g_array_set_size(self->selected_dir_indices, 0);
+      self->anchor_rect_index = -1;
+    }
+    ix = -1;
+  }
+
   gtk_widget_queue_draw(GTK_WIDGET(self));
   if (self->on_selected != NULL) {
-    gint64 ix = (hit < 0) ? -1 : (gint64)self->rects[hit].node_index;
     self->on_selected(GTK_WIDGET(self), ix, self->on_selected_data);
   }
   return FALSE;
 }
 
+/* ---- size allocation ----------------------------------------------------- */
+
 static void treemap_size_allocate(GtkWidget *widget, GdkRectangle *allocation, gpointer user_data) {
   TreemapWidget *self = TREEMAP_WIDGET(user_data);
-  (void)allocation;
+  (void)widget;
   if (allocation->width != self->alloc_w || allocation->height != self->alloc_h || !self->layout_ok) {
     if (self->tree_root != NULL && allocation->width >= 2 && allocation->height >= 2) {
       treemap_run_layout(self, allocation->width, allocation->height);
@@ -742,11 +1091,51 @@ static void treemap_size_allocate(GtkWidget *widget, GdkRectangle *allocation, g
   }
 }
 
+/* ---- realize / unrealize ------------------------------------------------- */
+
 static void treemap_realize(GtkWidget *widget, gpointer user_data) {
   TreemapWidget *self = TREEMAP_WIDGET(user_data);
+  PangoFontDescription *fd;
+
   if (self->pango_layout == NULL) {
     self->pango_layout = gtk_widget_create_pango_layout(widget, "");
     pango_layout_set_single_paragraph_mode(self->pango_layout, TRUE);
+    /* Explicit 9pt font for normal (large rect) labels. */
+    fd = pango_font_description_copy(
+        pango_context_get_font_description(pango_layout_get_context(self->pango_layout)));
+    pango_font_description_set_size(fd, 9 * PANGO_SCALE);
+    pango_layout_set_font_description(self->pango_layout, fd);
+    pango_font_description_free(fd);
+  }
+
+  if (self->pango_layout_sm == NULL) {
+    self->pango_layout_sm = gtk_widget_create_pango_layout(widget, "");
+    pango_layout_set_single_paragraph_mode(self->pango_layout_sm, TRUE);
+    /* 7pt font for small (medium rect) labels. */
+    fd = pango_font_description_copy(
+        pango_context_get_font_description(pango_layout_get_context(self->pango_layout_sm)));
+    pango_font_description_set_size(fd, 7 * PANGO_SCALE);
+    pango_layout_set_font_description(self->pango_layout_sm, fd);
+    pango_font_description_free(fd);
+  }
+
+  if (self->pango_layout_hdr == NULL) {
+    /*
+     * Font size for the directory header strip, derived from DIR_HEADER_H so
+     * it auto-scales whenever that constant changes:
+     *   usable height = DIR_HEADER_H - 4 px  (2 px top + 2 px bottom padding)
+     *   pts = px * 0.75                       (96 DPI: 1 px = 72/96 pt)
+     */
+    int hdr_pts = (int)((DIR_HEADER_H - 4.0) * 0.75);
+    if (hdr_pts < 6) hdr_pts = 6;
+    self->pango_layout_hdr = gtk_widget_create_pango_layout(widget, "");
+    pango_layout_set_single_paragraph_mode(self->pango_layout_hdr, TRUE);
+    fd = pango_font_description_copy(
+        pango_context_get_font_description(pango_layout_get_context(self->pango_layout_hdr)));
+    pango_font_description_set_size(fd, hdr_pts * PANGO_SCALE);
+
+    pango_layout_set_font_description(self->pango_layout_hdr, fd);
+    pango_font_description_free(fd);
   }
 }
 
@@ -754,14 +1143,28 @@ static void treemap_unrealize(GtkWidget *widget, gpointer user_data) {
   TreemapWidget *self = TREEMAP_WIDGET(user_data);
   (void)widget;
   g_clear_object(&self->pango_layout);
+  g_clear_object(&self->pango_layout_sm);
+  g_clear_object(&self->pango_layout_hdr);
 }
+
+/* ---- GObject lifecycle --------------------------------------------------- */
 
 static void treemap_widget_finalize(GObject *object) {
   TreemapWidget *self = TREEMAP_WIDGET(object);
   g_free(self->root_utf8);
   treemap_clear_tree(self);
   treemap_clear_layout_buffers(self);
+  if (self->selected_rect_indices) {
+    g_array_free(self->selected_rect_indices, TRUE);
+    self->selected_rect_indices = NULL;
+  }
+  if (self->selected_dir_indices) {
+    g_array_free(self->selected_dir_indices, TRUE);
+    self->selected_dir_indices = NULL;
+  }
   g_clear_object(&self->pango_layout);
+  g_clear_object(&self->pango_layout_sm);
+  g_clear_object(&self->pango_layout_hdr);
   G_OBJECT_CLASS(treemap_widget_parent_class)->finalize(object);
 }
 
@@ -776,8 +1179,11 @@ static void treemap_widget_init(TreemapWidget *self) {
   gtk_widget_set_has_window(GTK_WIDGET(self), TRUE);
   gtk_widget_add_events(GTK_WIDGET(self),
                         GDK_POINTER_MOTION_MASK | GDK_BUTTON_PRESS_MASK | GDK_LEAVE_NOTIFY_MASK);
-  self->hovered_index = -1;
-  self->selected_index = -1;
+  self->hovered_index        = -1;
+  self->hovered_dir_index    = -1;
+  self->selected_rect_indices = g_array_new(FALSE, FALSE, sizeof(gint));
+  self->selected_dir_indices  = g_array_new(FALSE, FALSE, sizeof(gint));
+  self->anchor_rect_index    = -1;
   self->alloc_w = -1;
   self->alloc_h = -1;
   g_signal_connect(self, "size-allocate", G_CALLBACK(treemap_size_allocate), self);
@@ -787,6 +1193,8 @@ static void treemap_widget_init(TreemapWidget *self) {
   g_signal_connect(self, "leave-notify-event", G_CALLBACK(treemap_leave), self);
   g_signal_connect(self, "button-press-event", G_CALLBACK(treemap_button_press), self);
 }
+
+/* ---- public API ---------------------------------------------------------- */
 
 GtkWidget *treemap_widget_new(void) {
   return GTK_WIDGET(g_object_new(TREEMAP_TYPE_WIDGET, NULL));
@@ -805,9 +1213,12 @@ void treemap_widget_set_data(TreemapWidget *widget, const char *root_utf8, const
 
   treemap_clear_layout_buffers(widget);
   treemap_clear_tree(widget);
-  widget->layout_ok = FALSE;
-  widget->selected_index = -1;
-  widget->hovered_index = -1;
+  widget->layout_ok        = FALSE;
+  widget->hovered_index    = -1;
+  widget->hovered_dir_index = -1;
+  if (widget->selected_rect_indices) g_array_set_size(widget->selected_rect_indices, 0);
+  if (widget->selected_dir_indices)  g_array_set_size(widget->selected_dir_indices,  0);
+  widget->anchor_rect_index = -1;
 
   if (nodes != NULL && count > 0 && widget->root_utf8[0] != '\0') {
     widget->tree_root = treemap_build_tree(widget->root_utf8, nodes, count);
@@ -839,4 +1250,78 @@ void treemap_widget_set_selected_callback(TreemapWidget *w,
   g_return_if_fail(TREEMAP_IS_WIDGET(w));
   w->on_selected = cb;
   w->on_selected_data = data;
+}
+
+void treemap_widget_add_to_selection_by_scan_index(TreemapWidget *w, gint64 scan_index) {
+  size_t i;
+  g_return_if_fail(TREEMAP_IS_WIDGET(w));
+
+  if (scan_index < 0 || !w->layout_ok) {
+    return;
+  }
+
+  /* Search file rects first. */
+  for (i = 0; i < w->rect_count; i++) {
+    if ((gint64)w->rects[i].node_index == scan_index) {
+      gint idx = (gint)i;
+      if (!treemap_rect_is_selected(w, idx)) {
+        g_array_append_val(w->selected_rect_indices, idx);
+      }
+      gtk_widget_queue_draw(GTK_WIDGET(w));
+      return;
+    }
+  }
+
+  /* Then search dir header labels. */
+  for (i = 0; i < w->dir_label_count; i++) {
+    if (w->dir_labels[i].scan_ix != (size_t)-1 &&
+        (gint64)w->dir_labels[i].scan_ix == scan_index) {
+      gint idx = (gint)i;
+      if (!treemap_dir_is_selected(w, idx)) {
+        g_array_append_val(w->selected_dir_indices, idx);
+      }
+      gtk_widget_queue_draw(GTK_WIDGET(w));
+      return;
+    }
+  }
+}
+
+void treemap_widget_set_selection_by_scan_index(TreemapWidget *w, gint64 scan_index) {
+  size_t i;
+  g_return_if_fail(TREEMAP_IS_WIDGET(w));
+
+  /* Clear existing selection. */
+  if (w->selected_rect_indices) g_array_set_size(w->selected_rect_indices, 0);
+  if (w->selected_dir_indices)  g_array_set_size(w->selected_dir_indices,  0);
+  w->anchor_rect_index = -1;
+
+  if (scan_index < 0 || !w->layout_ok) {
+    gtk_widget_queue_draw(GTK_WIDGET(w));
+    return;
+  }
+
+  /* Search file rects first. */
+  for (i = 0; i < w->rect_count; i++) {
+    if ((gint64)w->rects[i].node_index == scan_index) {
+      gint idx = (gint)i;
+      g_array_append_val(w->selected_rect_indices, idx);
+      w->anchor_rect_index = idx;
+      gtk_widget_queue_draw(GTK_WIDGET(w));
+      return;
+    }
+  }
+
+  /* Then search dir header labels. */
+  for (i = 0; i < w->dir_label_count; i++) {
+    if (w->dir_labels[i].scan_ix != (size_t)-1 &&
+        (gint64)w->dir_labels[i].scan_ix == scan_index) {
+      gint idx = (gint)i;
+      g_array_append_val(w->selected_dir_indices, idx);
+      gtk_widget_queue_draw(GTK_WIDGET(w));
+      return;
+    }
+  }
+
+  /* No matching tile — redraw to reflect cleared selection. */
+  gtk_widget_queue_draw(GTK_WIDGET(w));
 }

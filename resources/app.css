@@ -32,6 +32,10 @@ treeview.view:selected {
   color: @theme_fg_color;  
 }
 
+.bold-text {
+  font-weight: bold;
+}
+
 /*
  * Tree percent columns (class diskatlas-tree-progress on GtkTreeView, set in ui_window.c).
  * GtkCellRendererProgress: first pass uses class `trough` (track), second pass uses `progressbar` (fill).

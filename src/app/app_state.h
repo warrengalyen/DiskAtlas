@@ -92,6 +92,8 @@ typedef struct AppState {
   gboolean list_populated;
   /** TRUE when chunked GtkTreeView root insert is not running (see da_tree_begin_root_insert / timer_tree). */
   gboolean file_view_tree_ready;
+  /** Guard flag to prevent re-entrant A→B→A sync loops between treemap and tree_view. */
+  gboolean treemap_tree_sync_in_progress;
   size_t tree_insert_pos;
   guint8 *dup_group_seen;
   size_t dup_group_seen_cap;
