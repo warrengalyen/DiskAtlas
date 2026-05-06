@@ -17,12 +17,20 @@
 #include "volumes.h"
 
 #define DA_FILE_VIEW_NOTEBOOK_PAGE 0
+#define DA_TREE_VIEW_NOTEBOOK_PAGE 1
 
 static gboolean scan_controller_is_file_view_tab(const AppState *app) {
   if (app == NULL || app->main_notebook == NULL) {
     return TRUE;
   }
   return gtk_notebook_get_current_page(GTK_NOTEBOOK(app->main_notebook)) == DA_FILE_VIEW_NOTEBOOK_PAGE;
+}
+
+static gboolean scan_controller_is_tree_view_tab(const AppState *app) {
+  if (app == NULL || app->main_notebook == NULL) {
+    return FALSE;
+  }
+  return gtk_notebook_get_current_page(GTK_NOTEBOOK(app->main_notebook)) == DA_TREE_VIEW_NOTEBOOK_PAGE;
 }
 
 static void scan_controller_clear_file_view_status(AppState *app) {
@@ -342,7 +350,7 @@ static void on_treemap_selected(GtkWidget *treemap, gint64 scan_index, gpointer 
 static void on_treemap_hover(GtkWidget *treemap, gint64 scan_index, gpointer user_data) {
   AppState *app = (AppState *)user_data;
   (void)treemap;
-  if (app == NULL || app->status_label_center == NULL || !scan_controller_is_file_view_tab(app)) {
+  if (app == NULL || app->status_label_center == NULL || !scan_controller_is_tree_view_tab(app)) {
     return;
   }
   if (scan_index == -1) {

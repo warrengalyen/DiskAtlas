@@ -45,7 +45,7 @@ static void on_restart_admin_clicked(GtkButton *btn, gpointer user_data) {
 }
 #endif
 
-/** GtkPaned limits — align with diskatlas_window.ui (min-content-height, treemap_panel height-request). */
+/** GtkPaned limits — align with diskatlas_window.ui (tree_view_paned min-content-height, treemap_panel height-request). */
 #define DA_FILE_VIEW_PANED_MIN_TREE 70
 #define DA_FILE_VIEW_PANED_MIN_TREEMAP 225
 #define DA_FILE_VIEW_PANED_HANDLE_ROUGH 10
@@ -477,9 +477,17 @@ void da_ui_build(AppState *app) {
   app->tree_view = GTK_WIDGET(gtk_builder_get_object(builder, "tree_view_tree"));
   {
     GtkWidget *tv_scrolled = GTK_WIDGET(gtk_builder_get_object(builder, "tree_view_scrolled"));
+    GtkWidget *tv_paned = GTK_WIDGET(gtk_builder_get_object(builder, "tree_view_paned"));
     if (tv_scrolled != NULL) {
-      gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(tv_scrolled),
-                                     GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+      gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(tv_scrolled), GTK_POLICY_AUTOMATIC,
+                                     GTK_POLICY_AUTOMATIC);
+      gtk_widget_set_valign(tv_scrolled, GTK_ALIGN_FILL);
+      g_signal_connect(tv_scrolled, "size-allocate", G_CALLBACK(da_tree_scrolled_on_allocate), NULL);
+    }
+    if (tv_paned != NULL && GTK_IS_PANED(tv_paned) && tv_scrolled != NULL) {
+      g_signal_connect(tv_paned, "notify::position", G_CALLBACK(da_file_view_paned_on_notify_position),
+                       tv_scrolled);
+      g_signal_connect(tv_paned, "size-allocate", G_CALLBACK(da_file_view_paned_on_allocate), tv_scrolled);
     }
   }
   app->status_label_left = GTK_WIDGET(gtk_builder_get_object(builder, "status_label_left"));
@@ -495,14 +503,6 @@ void da_ui_build(AppState *app) {
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(tree_scrolled), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
   gtk_widget_set_valign(tree_scrolled, GTK_ALIGN_FILL);
   g_signal_connect(tree_scrolled, "size-allocate", G_CALLBACK(da_tree_scrolled_on_allocate), NULL);
-  {
-    GtkWidget *paned = gtk_widget_get_parent(tree_scrolled);
-    if (GTK_IS_PANED(paned)) {
-      g_signal_connect(paned, "notify::position", G_CALLBACK(da_file_view_paned_on_notify_position),
-                         tree_scrolled);
-      g_signal_connect(paned, "size-allocate", G_CALLBACK(da_file_view_paned_on_allocate), tree_scrolled);
-    }
-  }
 
   GtkWidget *search_clear_btn = GTK_WIDGET(gtk_builder_get_object(builder, "search_clear_btn"));
   if (search_clear_btn != NULL) {
