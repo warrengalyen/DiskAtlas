@@ -11,6 +11,7 @@
 #include "treemap_widget.h"
 #include "diskatlas.h"
 #include "file_tree_model.h"
+#include "tree_view_model.h"
 #include "format_text.h"
 #include "scan_controller.h"
 #include "volumes.h"
@@ -718,6 +719,8 @@ static gboolean on_timer_fill_chunk(gpointer data) {
   panel_scan_set_text(app, finish_pan);
   enable_scan_button(app, TRUE);
 
+  da_tree_view_populate(app);
+
   gboolean more = da_tree_begin_root_insert(app);
   if (more) {
     app->file_view_tree_ready = FALSE;
@@ -798,6 +801,7 @@ static void start_scan(AppState *app) {
 
   kill_all_timers(app);
   da_tree_clear(app);
+  da_tree_view_clear(app);
   da_refresh_treemap(app);
 
   free(app->master_indices);
@@ -1013,6 +1017,11 @@ static void on_tree_row_expanded(GtkTreeView *tv, GtkTreeIter *iter, GtkTreePath
   da_tree_on_row_expanded(tv, iter, path, user_data);
 }
 
+static void on_tree_view_row_expanded(GtkTreeView *tv, GtkTreeIter *iter, GtkTreePath *path,
+                                      gpointer user_data) {
+  da_tree_view_on_row_expanded(tv, iter, path, user_data);
+}
+
 void scan_controller_attach(AppState *app) {
   g_signal_connect(app->scan_btn, "clicked", G_CALLBACK(on_scan_clicked), app);
   g_signal_connect(app->file_chooser_btn, "file-set", G_CALLBACK(on_file_set), app);
@@ -1025,6 +1034,9 @@ void scan_controller_attach(AppState *app) {
   }
   g_signal_connect(app->search, "changed", G_CALLBACK(on_search_changed), app);
   g_signal_connect(app->tree, "row-expanded", G_CALLBACK(on_tree_row_expanded), app);
+  if (app->tree_view != NULL) {
+    g_signal_connect(app->tree_view, "row-expanded", G_CALLBACK(on_tree_view_row_expanded), app);
+  }
   if (app->main_notebook != NULL) {
     g_signal_connect(app->main_notebook, "switch-page", G_CALLBACK(on_notebook_switch_page), app);
   }

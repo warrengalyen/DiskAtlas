@@ -10,6 +10,7 @@
 
 #include "treemap_widget.h"
 #include "file_tree_model.h"
+#include "tree_view_model.h"
 #include "scan_controller.h"
 #include "ui_window.h"
 #include "volumes.h"
@@ -282,6 +283,138 @@ static void append_text_column(GtkTreeView *tv, const char *title, int model_col
   gtk_tree_view_append_column(tv, c);
 }
 
+/* ---- Tree View tab helpers ---- */
+
+static void tv_icon_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell, GtkTreeModel *model,
+                              GtkTreeIter *iter, gpointer user_data) {
+  (void)column;
+  (void)user_data;
+  gint64 eid = 0;
+  gchar *path_utf8 = NULL;
+  guint kind = 0;
+  gtk_tree_model_get(model, iter,
+                     DA_TV_COL_IDX_ID, &eid,
+                     DA_TV_COL_PATH,   &path_utf8,
+                     DA_TV_COL_KIND,   &kind,
+                     -1);
+
+  const char *icon_name = NULL;
+  if (eid != DA_TV_LP_PLACEHOLDER) {
+    if (kind == DISKATLAS_NODE_KIND_DIR) {
+      icon_name = "folder";
+    } else if (kind == DISKATLAS_NODE_KIND_SYMLINK) {
+      icon_name = "inode-symlink";
+    } else {
+      icon_name = "text-x-generic";
+    }
+  }
+
+  GdkPixbuf *pb = NULL;
+  if (path_utf8 != NULL && path_utf8[0] != '\0' && eid != DA_TV_LP_PLACEHOLDER) {
+    pb = da_shell_icon_for_path(path_utf8, 16);
+  }
+  if (pb == NULL && icon_name != NULL) {
+    GtkIconTheme *theme = gtk_icon_theme_get_default();
+    pb = gtk_icon_theme_load_icon(theme, icon_name, 16, GTK_ICON_LOOKUP_FORCE_SIZE, NULL);
+    if (pb == NULL && kind == DISKATLAS_NODE_KIND_SYMLINK) {
+      pb = gtk_icon_theme_load_icon(theme, "text-x-generic", 16, GTK_ICON_LOOKUP_FORCE_SIZE, NULL);
+    }
+  }
+
+  g_free(path_utf8);
+  g_object_set(GTK_CELL_RENDERER_PIXBUF(cell), "pixbuf", pb, NULL);
+  if (pb != NULL) {
+    g_object_unref(pb);
+  }
+}
+
+static void tv_pct_of_parent_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell,
+                                       GtkTreeModel *model, GtkTreeIter *iter,
+                                       gpointer user_data) {
+  (void)user_data;
+  gint pv = -1;
+  gchar *txt = NULL;
+  gtk_tree_model_get(model, iter, DA_TV_COL_PCT_VAL, &pv, DA_TV_COL_PCT_LABEL, &txt, -1);
+  gint v = (pv >= 0) ? (pv > 100 ? 100 : pv) : 0;
+
+  gint col_w = gtk_tree_view_column_get_width(column);
+  if (col_w <= 1) {
+    col_w = gtk_tree_view_column_get_fixed_width(column);
+  }
+  if (col_w > 4) {
+    gtk_cell_renderer_set_fixed_size(cell, col_w - 4, -1);
+  } else {
+    gtk_cell_renderer_set_fixed_size(cell, -1, -1);
+  }
+
+  g_object_set(GTK_CELL_RENDERER_PROGRESS(cell), "value", v,
+               "text", txt != NULL ? txt : "", "text-xalign", 0.98f, NULL);
+  g_free(txt);
+}
+
+static void append_tv_pct_column(GtkTreeView *tv, const char *title, int width_px, int min_width_px) {
+  GtkCellRenderer *r = da_cell_renderer_progress_new();
+  g_object_set(r, "xpad", 0, "ypad", 0, "xalign", 0.0f, NULL);
+  GtkTreeViewColumn *c = gtk_tree_view_column_new();
+  gtk_tree_view_column_set_title(c, title);
+  gtk_tree_view_column_pack_start(c, r, TRUE);
+  gtk_tree_view_column_set_cell_data_func(c, r, tv_pct_of_parent_cell_data, NULL, NULL);
+  gtk_tree_view_column_set_alignment(c, 1.0f);
+  gtk_tree_view_column_set_resizable(c, TRUE);
+  gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
+  gtk_tree_view_column_set_min_width(c, min_width_px);
+  gtk_tree_view_column_set_fixed_width(c, width_px);
+  gtk_tree_view_column_set_sort_column_id(c, DA_TV_COL_PCT_VAL);
+  gtk_tree_view_append_column(tv, c);
+}
+
+static void da_setup_tree_view(AppState *app) {
+  if (app->tree_view == NULL) {
+    return;
+  }
+
+  app->tree_view_store = da_tree_view_store_new();
+  gtk_tree_view_set_model(GTK_TREE_VIEW(app->tree_view), GTK_TREE_MODEL(app->tree_view_store));
+  g_object_unref(app->tree_view_store);
+
+  gtk_tree_view_set_fixed_height_mode(GTK_TREE_VIEW(app->tree_view), TRUE);
+
+  /* Column 0: Folder / File Name (icon + text with tree expander). */
+  {
+    GtkCellRenderer *pix = gtk_cell_renderer_pixbuf_new();
+    GtkCellRenderer *txt = gtk_cell_renderer_text_new();
+    g_object_set(txt, "ellipsize", PANGO_ELLIPSIZE_END, "xalign", 0.0f, NULL);
+    GtkTreeViewColumn *c = gtk_tree_view_column_new();
+    gtk_tree_view_column_set_title(c, "Folder / File Name");
+    gtk_tree_view_column_pack_start(c, pix, FALSE);
+    gtk_tree_view_column_set_cell_data_func(c, pix, tv_icon_cell_data, NULL, NULL);
+    gtk_tree_view_column_pack_start(c, txt, TRUE);
+    gtk_tree_view_column_add_attribute(c, txt, "text", DA_TV_COL_NAME);
+    gtk_tree_view_column_set_alignment(c, 0.0f);
+    gtk_tree_view_column_set_resizable(c, TRUE);
+    gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
+    gtk_tree_view_column_set_min_width(c, 140);
+    gtk_tree_view_column_set_fixed_width(c, 300);
+    gtk_tree_view_column_set_sort_column_id(c, DA_TV_COL_NAME);
+    gtk_tree_view_append_column(GTK_TREE_VIEW(app->tree_view), c);
+  }
+
+  /* Column 1: Percent of Parent (progress bar). */
+  append_tv_pct_column(GTK_TREE_VIEW(app->tree_view), "Percent of Parent", 130, 88);
+
+  /* Remaining text columns: Size, Allocated, Items, Files, Folders, Modified, Attributes. */
+  static const char  *tv_titles[] = { "Size", "Allocated", "Items", "Files", "Folders", "Modified", "Attributes" };
+  static const int    tv_cols[]   = { DA_TV_COL_SIZE, DA_TV_COL_ALLOC, DA_TV_COL_ITEMS,
+                                      DA_TV_COL_FILES, DA_TV_COL_FOLDERS, DA_TV_COL_MODIFIED, DA_TV_COL_ATTRS };
+  static const int    tv_widths[] = { 100, 100, 80, 80, 80, 140, 68 };
+  static const int    tv_minw[]   = { 72, 72, 56, 56, 56, 100, 48 };
+  static const gfloat tv_align[]  = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f };
+  for (int i = 0; i < 7; i++) {
+    append_text_column(GTK_TREE_VIEW(app->tree_view), tv_titles[i], tv_cols[i], tv_cols[i],
+                       tv_widths[i], tv_minw[i], tv_align[i]);
+  }
+}
+
 void da_ui_build(AppState *app) {
   da_load_global_app_css();
 
@@ -341,6 +474,14 @@ void da_ui_build(AppState *app) {
   gtk_widget_add_events(app->tree, GDK_POINTER_MOTION_MASK | GDK_LEAVE_NOTIFY_MASK);
   app->treemap_panel_title = GTK_WIDGET(gtk_builder_get_object(builder, "treemap_panel_title"));
   app->main_notebook = GTK_WIDGET(gtk_builder_get_object(builder, "main_notebook"));
+  app->tree_view = GTK_WIDGET(gtk_builder_get_object(builder, "tree_view_tree"));
+  {
+    GtkWidget *tv_scrolled = GTK_WIDGET(gtk_builder_get_object(builder, "tree_view_scrolled"));
+    if (tv_scrolled != NULL) {
+      gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(tv_scrolled),
+                                     GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    }
+  }
   app->status_label_left = GTK_WIDGET(gtk_builder_get_object(builder, "status_label_left"));
   app->status_label_center = GTK_WIDGET(gtk_builder_get_object(builder, "status_label_center"));
   app->status_label_right = GTK_WIDGET(gtk_builder_get_object(builder, "status_label_right"));
@@ -407,6 +548,8 @@ void da_ui_build(AppState *app) {
   }
 
   da_file_tree_install_sorting(GTK_TREE_VIEW(app->tree), app->store, app);
+
+  da_setup_tree_view(app);
 
 #if defined(G_OS_WIN32)
   app->admin_ntfs_notice_panel = GTK_WIDGET(gtk_builder_get_object(builder, "admin_ntfs_notice_panel"));

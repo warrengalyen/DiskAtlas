@@ -8,6 +8,9 @@
 
 #include "diskatlas.h"
 
+/** Opaque tree-view model (defined in tree_view_model.c). */
+typedef struct DaTreeViewModel DaTreeViewModel;
+
 #define DA_COL_COUNT 9
 #define DA_TREEINSERT_BATCH 960
 #define DA_TREEINSERT_MS 22
@@ -52,6 +55,12 @@ typedef struct AppState {
   GtkWidget *admin_ntfs_notice_panel;
   GtkWidget *restart_admin_btn;
   GtkWidget *dont_show_again_check;
+
+  /** Tree View tab widgets and model. */
+  GtkWidget *tree_view;
+  GtkTreeStore *tree_view_store;
+  DaTreeViewModel *tree_view_model;
+  gboolean tree_view_populated;
 
   scan_result_t *scan;
   guint timer_scan;
