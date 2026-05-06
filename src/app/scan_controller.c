@@ -844,7 +844,7 @@ static void start_scan(AppState *app) {
   }
 /* FIXME(ntfs-mft): Set to 1 to use raw $MFT scan when elevated; 0 = FindFirst tree until MFT is fixed. */
 #ifndef DISKATLAS_APP_ENABLE_NTFS_MFT
-#define DISKATLAS_APP_ENABLE_NTFS_MFT 0
+#define DISKATLAS_APP_ENABLE_NTFS_MFT 1
 #endif
 #if defined(G_OS_WIN32) && DISKATLAS_APP_ENABLE_NTFS_MFT
   if (da_win32_is_process_elevated()) {

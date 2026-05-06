@@ -30,6 +30,7 @@ typedef struct da_file_id_info {
 
 #include <stdint.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
@@ -316,20 +317,24 @@ static bool try_load_mft_runs_via_special_file(wchar_t drive_letter, ntfs_run_li
 }
 
 static bool vol_read_at(HANDLE vol, uint64_t off, void *buf, DWORD len) {
-  LARGE_INTEGER li;
-  li.QuadPart = (LONGLONG)off;
-  if (!SetFilePointerEx(vol, li, NULL, FILE_BEGIN)) {
-    return false;
-  }
   unsigned char *p = (unsigned char *)buf;
   DWORD left = len;
+  uint64_t cur_off = off;
   while (left > 0) {
     DWORD chunk = left > (64u * 1024u) ? (64u * 1024u) : left;
     DWORD got = 0;
-    if (!ReadFile(vol, p, chunk, &got, NULL) || got == 0) {
+    /* Use OVERLAPPED to embed the byte offset, making this call thread-safe.
+     * On synchronous handles Windows reads from Offset/OffsetHigh directly,
+     * so there is no shared file-pointer state between concurrent threads. */
+    OVERLAPPED ov;
+    memset(&ov, 0, sizeof(ov));
+    ov.Offset     = (DWORD)(cur_off & 0xFFFFFFFFu);
+    ov.OffsetHigh = (DWORD)(cur_off >> 32);
+    if (!ReadFile(vol, p, chunk, &got, &ov) || got == 0) {
       return false;
     }
     p += got;
+    cur_off += (uint64_t)got;
     left -= got;
   }
   return true;
@@ -685,7 +690,7 @@ static void fn_consider(fn_pick_t *best, const unsigned char *val, uint32_t val_
 
 static bool parse_resident_attrs(const unsigned char *rec, size_t rec_len, fn_pick_t *fn_out,
                                  uint64_t *mtime_ns_out, uint32_t *dos_attr_out,
-                                 int *has_si_out) {
+                                 int *has_si_out, uint64_t *data_size_out) {
   uint16_t attr_off = read_u16_le(rec + 0x14);
   uint32_t bytes_used = read_u32_le(rec + 0x18);
   size_t off = attr_off;
@@ -693,6 +698,9 @@ static bool parse_resident_attrs(const unsigned char *rec, size_t rec_len, fn_pi
   *mtime_ns_out = 0;
   *dos_attr_out = 0;
   *has_si_out = 0;
+  if (data_size_out) {
+    *data_size_out = 0;
+  }
 
   while (off + 8 <= rec_len && off + 8 <= bytes_used) {
     uint32_t type = read_u32_le(rec + off);
@@ -702,6 +710,17 @@ static bool parse_resident_attrs(const unsigned char *rec, size_t rec_len, fn_pi
     }
     if (type == 0xFFFFFFFFu) {
       break;
+    }
+    /* $DATA (unnamed stream only): extract authoritative file size.
+     * Non-resident: real size at attr+0x30.  Resident: value length at attr+0x10. */
+    if (data_size_out && type == ATTR_DATA && rec[off + 9] == 0) {
+      if (rec[off + 8] != 0 && alen >= 0x38u) {
+        /* non-resident: real_size at attribute offset 0x30 */
+        *data_size_out = read_u64_le(rec + off + 0x30);
+      } else if (rec[off + 8] == 0) {
+        /* resident: value length is the data size */
+        *data_size_out = (uint64_t)read_u32_le(rec + off + 0x10);
+      }
     }
     if (rec[off + 8] == 0) {
       uint32_t vlen = read_u32_le(rec + off + 0x10);
@@ -813,6 +832,54 @@ static bool mft_load_record_raw(mft_parse_shared_t *s, size_t idx, unsigned char
 }
 
 /**
+ * When $DATA lives in an extension record (base record has $ATTRIBUTE_LIST only), the
+ * non-resident $DATA header — which carries the authoritative real_size — is not visible
+ * in the base record.  Walk the $ATTRIBUTE_LIST for unnamed $DATA entries, load the first
+ * extension record that has a non-resident $DATA attribute, and return its real_size.
+ */
+static uint64_t find_data_size_via_attribute_list(const unsigned char *base_rec, size_t base_len,
+                                                   mft_parse_shared_t *s, unsigned char *ext_buf) {
+  const unsigned char *alist = NULL;
+  uint32_t alist_len = 0;
+  if (!resident_attr_value_unnamed(base_rec, base_len, ATTR_ATTRIBUTE_LIST, &alist, &alist_len)) {
+    return 0;
+  }
+  size_t pos = 0;
+  while (pos + ATTR_LIST_ENTRY_MIN <= alist_len) {
+    uint32_t ent_type = read_u32_le(alist + pos);
+    uint16_t ent_len  = read_u16_le(alist + pos + 4);
+    if (ent_len < ATTR_LIST_ENTRY_MIN || pos + ent_len > alist_len) {
+      break;
+    }
+    if (ent_type == ATTR_DATA && alist[pos + 6] == 0) { /* unnamed $DATA */
+      uint64_t ref = read_u64_le(alist + pos + 16) & MFT_REF_MASK;
+      if (ref != 0 && ref < s->record_count) {
+        if (mft_load_record_raw(s, (size_t)ref, ext_buf)) {
+          uint16_t aoff = read_u16_le(ext_buf + 0x14);
+          uint32_t bused = read_u32_le(ext_buf + 0x18);
+          size_t rlen = (size_t)s->record_size;
+          size_t off = aoff;
+          while (off + 8 <= rlen && off + 8 <= bused) {
+            uint32_t t = read_u32_le(ext_buf + off);
+            uint32_t a = read_u32_le(ext_buf + off + 4);
+            if (a < 24 || off + a > rlen || t == 0xFFFFFFFFu) { break; }
+            /* Non-resident unnamed $DATA: real_size at attr+0x30 */
+            if (t == ATTR_DATA && ext_buf[off + 9] == 0 &&
+                ext_buf[off + 8] != 0 && a >= 0x38u) {
+              uint64_t sz = read_u64_le(ext_buf + off + 0x30);
+              if (sz > 0) { return sz; }
+            }
+            off += a;
+          }
+        }
+      }
+    }
+    pos += ent_len;
+  }
+  return 0;
+}
+
+/**
  * Base FILE record may hold only $ATTRIBUTE_LIST; $FILE_NAME lives in an extension record.
  * Walk the list and merge filename (and SI if still missing) from the referenced segment.
  */
@@ -847,7 +914,8 @@ static bool parse_fn_via_attribute_list(const unsigned char *base_rec, size_t ba
       uint32_t da = 0;
       int hs = 0;
       memset(&fn_try, 0, sizeof(fn_try));
-      if (!parse_resident_attrs(ext_buf, (size_t)s->record_size, &fn_try, &mt, &da, &hs)) {
+      uint64_t dsz_try = 0;
+      if (!parse_resident_attrs(ext_buf, (size_t)s->record_size, &fn_try, &mt, &da, &hs, &dsz_try)) {
         continue;
       }
       if (fn_try.score > 0) {
@@ -1126,17 +1194,32 @@ static DWORD WINAPI mft_parse_worker_main(LPVOID param) {
     uint64_t mtime_ns = 0;
     uint32_t dattr = 0;
     int has_si = 0;
+    uint64_t data_size = 0;
     memset(&fn, 0, sizeof(fn));
-    if (!parse_resident_attrs(recbuf, (size_t)s->record_size, &fn, &mtime_ns, &dattr, &has_si)) {
+    if (!parse_resident_attrs(recbuf, (size_t)s->record_size, &fn, &mtime_ns, &dattr, &has_si,
+                              &data_size)) {
       if (!parse_fn_via_attribute_list(recbuf, (size_t)s->record_size, s, idx, &fn, &mtime_ns,
                                        &dattr, &has_si, extbuf)) {
         continue;
       }
+      /* Re-scan base record for $DATA size (parse_fn_via_attribute_list only yields $FILE_NAME). */
+      uint64_t base_data_size = 0;
+      fn_pick_t fn_dummy; memset(&fn_dummy, 0, sizeof(fn_dummy));
+      uint64_t mt_dummy = 0; uint32_t da_dummy = 0; int si_dummy = 0;
+      parse_resident_attrs(recbuf, (size_t)s->record_size, &fn_dummy, &mt_dummy, &da_dummy,
+                           &si_dummy, &base_data_size);
+      if (base_data_size > 0) data_size = base_data_size;
+    }
+
+    /* If $DATA size is still 0, look it up through $ATTRIBUTE_LIST (extension records). */
+    if (data_size == 0 && (flags & FILE_RECORD_IS_DIRECTORY) == 0) {
+      data_size = find_data_size_via_attribute_list(recbuf, (size_t)s->record_size, s, extbuf);
     }
 
     s->valid[idx] = 1;
     s->parents[idx] = fn.parent_id;
-    s->sizes[idx] = fn.real_size;
+    /* Prefer $DATA attribute size (authoritative); fall back to $FILE_NAME real_size. */
+    s->sizes[idx] = data_size > 0 ? data_size : fn.real_size;
     s->mtimes[idx] = mtime_ns;
     s->dosattrs[idx] = dattr;
     s->is_dir[idx] = (unsigned char)((flags & FILE_RECORD_IS_DIRECTORY) != 0 ? 1 : 0);
@@ -1468,6 +1551,7 @@ bool diskatlas_scan_ntfs_mft(diskatlas_scan_result_t *r, wchar_t *root_path_wide
     CloseHandle(th[ti]);
   }
   free(th);
+
   mft_mmap_destroy(&mft_mmap);
 
   const uint32_t max_depth_req = opts->max_depth;
