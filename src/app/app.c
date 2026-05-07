@@ -50,6 +50,8 @@ int diskatlas_app_run(int argc, char **argv) {
   free(app->master_indices);
   free(app->filtered_indices);
   g_free(app->scan_root_utf8);
+  g_free(app->csv_import_path);
+  g_free(app->csv_derived_root_utf8);
   free(app);
   return status;
 }

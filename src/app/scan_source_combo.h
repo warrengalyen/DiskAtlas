@@ -12,6 +12,9 @@ void da_scan_source_combo_on_changed(GtkComboBox *cb, gpointer user_data);
 /** Same folder dialog as choosing "<Select Folder...>" in the scan source combo. */
 void da_scan_source_combo_request_select_folder(AppState *app);
 
+/** Open CSV file picker and replace the current scan with imported data (same as the CSV File combo row). */
+void da_scan_source_combo_run_csv_import(AppState *app);
+
 /** Optional: silence GLib-GIO CRITICAL spam from GtkFileChooserNative/IFileDialog on Windows (GLib 2.84+).
  *  Safe to call multiple times; installs at most once. */
 void da_scan_source_install_gio_log_filter_once(void);

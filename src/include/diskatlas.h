@@ -153,6 +153,12 @@ DISKATLAS_API scan_results_view_t scan_get_results(scan_result_t *result);
 
 DISKATLAS_API void scan_result_free(scan_result_t *result);
 
+/**
+ * Import scan results from a UTF-8 CSV file in the DiskAtlas GUI export format (see csv_export). Reads
+ * line-by-line with a growable buffer (capped). Returns a completed scan_result_t or NULL.
+ */
+DISKATLAS_API scan_result_t *diskatlas_scan_import_csv(const char *utf8_path, char *errbuf, size_t errbuf_len);
+
 /** Highest assigned duplicate_group_id (>0); 0 when no duplicates. Valid after scan completes. */
 DISKATLAS_API uint32_t diskatlas_dup_max_group_id(const scan_result_t *result);
 

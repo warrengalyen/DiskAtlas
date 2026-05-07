@@ -61,6 +61,7 @@ find_package(Threads REQUIRED)
 set(DISKATLAS_CORE_SRCS
   "${DISKATLAS_SRC}/lib/diskatlas_scan_shared.c"
   "${DISKATLAS_SRC}/lib/diskatlas_api.c"
+  "${DISKATLAS_SRC}/lib/diskatlas_csv.c"
   "${DISKATLAS_SRC}/lib/diskatlas_index.c"
 )
 if(WIN32)
@@ -148,6 +149,7 @@ if(DISKATLAS_GTK3_FOUND)
     "${DISKATLAS_SRC}/app/shell_icon.c"
     "${DISKATLAS_SRC}/app/format_text.c"
     "${DISKATLAS_SRC}/app/scan_source_combo.c"
+    "${DISKATLAS_SRC}/app/csv_export.c"
     "${DISKATLAS_SRC}/app/volumes.c"
     ${DISKATLAS_GRESOURCE_C}
   )

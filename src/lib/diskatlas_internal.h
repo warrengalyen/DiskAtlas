@@ -72,6 +72,8 @@ typedef struct diskatlas_scan_result {
 bool diskatlas_nodes_ensure_capacity(diskatlas_scan_result_t *r);
 void diskatlas_finalize_paths(diskatlas_scan_result_t *r);
 int diskatlas_compute_duplicate_clusters(diskatlas_scan_result_t *r, uint32_t scan_flags);
+/** Build dup_group_off/mem from duplicate_group_id already set on nodes (e.g. CSV import). */
+int diskatlas_dup_materialize_tables(diskatlas_scan_result_t *r);
 
 uint64_t diskatlas_basename_hash_ci_fold_utf8(const char *basename_utf8);
 

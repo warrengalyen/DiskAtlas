@@ -87,6 +87,11 @@ typedef struct AppState {
   uint64_t volume_pct_denominator_bytes;
 
   char *scan_root_utf8;
+  /** After CSV import: full path to the .csv file; combo stays on "<CSV File>" row. */
+  gchar *csv_import_path;
+  /** Volume/common root from imported paths (e.g. "D:\\"); tree view + treemap root when scan_root_utf8 is "". */
+  gchar *csv_derived_root_utf8;
+  gboolean csv_import_active;
   size_t *master_indices;
   size_t master_count;
   size_t *filtered_indices;

@@ -48,7 +48,7 @@
                       </object>
                     </child>
                     <child>
-                      <object class="GtkMenuItem">
+                      <object class="GtkMenuItem" id="file_menu_import_csv">
                         <property name="visible">True</property>
                         <property name="can-focus">False</property>
                         <property name="label" translatable="yes">Select CSV file...</property>
@@ -84,7 +84,7 @@
                       <object class="GtkMenuItem" id="file_menu_export_mft">
                         <property name="visible">True</property>
                         <property name="can-focus">False</property>
-                        <property name="label" translatable="yes">Dumo MFT File</property>
+                        <property name="label" translatable="yes">Dump MFT File</property>
                         <property name="use-underline">True</property>
                       </object>
                     </child>

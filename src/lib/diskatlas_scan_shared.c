@@ -211,6 +211,42 @@ static int DupBuildMemberTable(diskatlas_scan_result_t *r, uint32_t max_gid) {
   return 0;
 }
 
+int diskatlas_dup_materialize_tables(diskatlas_scan_result_t *r) {
+  if (r == NULL) {
+    return 0;
+  }
+  if (r->nodes == NULL || r->node_count == 0) {
+    free(r->dup_group_off);
+    free(r->dup_group_mem);
+    r->dup_group_off = NULL;
+    r->dup_group_mem = NULL;
+    r->dup_max_group_id = 0;
+    return 0;
+  }
+
+  uint32_t max_gid = 0;
+  for (size_t i = 0; i < r->node_count; i++) {
+    uint32_t g = r->nodes[i].duplicate_group_id;
+    if (g > max_gid) {
+      max_gid = g;
+    }
+  }
+
+  free(r->dup_group_off);
+  free(r->dup_group_mem);
+  r->dup_group_off = NULL;
+  r->dup_group_mem = NULL;
+  r->dup_max_group_id = 0;
+
+  if (max_gid == 0) {
+    return 0;
+  }
+  if (DupBuildMemberTable(r, max_gid) != 0) {
+    return -1;
+  }
+  return 0;
+}
+
 int diskatlas_compute_duplicate_clusters(diskatlas_scan_result_t *r, uint32_t scan_flags) {
   ClearAllDuplicateAssignments(r);
   r->dup_max_group_id = 0;

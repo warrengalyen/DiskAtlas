@@ -13,6 +13,7 @@
 #include "tree_view_model.h"
 #include "scan_controller.h"
 #include "scan_source_combo.h"
+#include "csv_export.h"
 #include "ui_window.h"
 #include "volumes.h"
 #include "da_cell_renderer_progress.h"
@@ -236,6 +237,56 @@ static void on_file_menu_scan_activate(GtkMenuItem *item, gpointer user_data) {
 static void on_file_menu_select_folder_activate(GtkMenuItem *item, gpointer user_data) {
   (void)item;
   da_scan_source_combo_request_select_folder((AppState *)user_data);
+}
+
+static void on_file_menu_export_csv_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->window == NULL) {
+    return;
+  }
+  if (app->scan == NULL) {
+    GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
+                                          GTK_BUTTONS_OK, "Nothing to export (no scan data).");
+    gtk_dialog_run(GTK_DIALOG(d));
+    gtk_widget_destroy(d);
+    return;
+  }
+  scan_progress_t pr = scan_get_progress(app->scan);
+  if (!pr.is_complete) {
+    GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
+                                          GTK_BUTTONS_OK, "Wait until the scan finishes before exporting.");
+    gtk_dialog_run(GTK_DIALOG(d));
+    gtk_widget_destroy(d);
+    return;
+  }
+
+  GtkFileChooserNative *native =
+      gtk_file_chooser_native_new("Export to CSV…", GTK_WINDOW(app->window), GTK_FILE_CHOOSER_ACTION_SAVE,
+                                  "_Export", "_Cancel");
+  GtkFileChooser *chooser = GTK_FILE_CHOOSER(native);
+  gtk_file_chooser_set_current_name(chooser, "diskatlas_export.csv");
+
+  gint resp = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
+  if (resp == GTK_RESPONSE_ACCEPT) {
+    gchar *fn = gtk_file_chooser_get_filename(chooser);
+    if (fn != NULL) {
+      char err[512];
+      if (da_export_scan_csv(app, fn, TRUE, err, sizeof err) != 0) {
+        GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
+                                              GTK_BUTTONS_OK, "%s", err[0] != '\0' ? err : "Export failed.");
+        gtk_dialog_run(GTK_DIALOG(d));
+        gtk_widget_destroy(d);
+      }
+      g_free(fn);
+    }
+  }
+  gtk_native_dialog_destroy(GTK_NATIVE_DIALOG(native));
+}
+
+static void on_file_menu_import_csv_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  da_scan_source_combo_run_csv_import((AppState *)user_data);
 }
 
 static void pct_of_drive_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell, GtkTreeModel *model,
@@ -582,6 +633,18 @@ void da_ui_build(AppState *app) {
     GtkWidget *file_menu_select_folder = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_select_folder"));
     if (file_menu_select_folder != NULL) {
       g_signal_connect(file_menu_select_folder, "activate", G_CALLBACK(on_file_menu_select_folder_activate), app);
+    }
+  }
+  {
+    GtkWidget *file_menu_export_csv = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_export_csv"));
+    if (file_menu_export_csv != NULL) {
+      g_signal_connect(file_menu_export_csv, "activate", G_CALLBACK(on_file_menu_export_csv_activate), app);
+    }
+  }
+  {
+    GtkWidget *file_menu_import_csv = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_import_csv"));
+    if (file_menu_import_csv != NULL) {
+      g_signal_connect(file_menu_import_csv, "activate", G_CALLBACK(on_file_menu_import_csv_activate), app);
     }
   }
 

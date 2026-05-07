@@ -17,4 +17,8 @@ void scan_controller_sync_file_view_status(AppState *app);
 /** Call after `scan_root_utf8` changes (same side effects as former scan directory picker). */
 void scan_controller_notify_scan_root_changed(AppState *app);
 
+/** Replace current scan with an imported result (e.g. CSV); refreshes list like a finished scan. */
+void scan_controller_apply_imported_scan(AppState *app, scan_result_t *new_scan, const char *csv_source_path_utf8,
+                                          gboolean csv_import_layout);
+
 #endif

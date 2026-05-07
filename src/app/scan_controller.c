@@ -570,6 +570,11 @@ static void da_treemap_panel_sync_title(AppState *app) {
   if (app == NULL || app->treemap_panel_title == NULL) {
     return;
   }
+  if (app->csv_import_active && app->csv_import_path != NULL && app->csv_import_path[0] != '\0') {
+    gtk_label_set_text(GTK_LABEL(app->treemap_panel_title), "Top level: <CSV File>");
+    gtk_widget_set_tooltip_text(app->treemap_panel_title, app->csv_import_path);
+    return;
+  }
   if (app->scan_root_utf8 != NULL && app->scan_root_utf8[0] != '\0') {
     char buf[768];
     snprintf(buf, sizeof buf, "Top level: %s", app->scan_root_utf8);
@@ -587,6 +592,14 @@ static void da_main_window_sync_title(AppState *app) {
   if (app == NULL || app->window == NULL || !GTK_IS_WINDOW(app->window)) {
     return;
   }
+  if (app->csv_import_active && app->csv_import_path != NULL && app->csv_import_path[0] != '\0') {
+    gchar *bn = g_path_get_basename(app->csv_import_path);
+    char title[4096];
+    snprintf(title, sizeof(title), "%s - %s", bn != NULL ? bn : app->csv_import_path, k_app_name);
+    gtk_window_set_title(GTK_WINDOW(app->window), title);
+    g_free(bn);
+    return;
+  }
   if (app->scan_root_utf8 == NULL || app->scan_root_utf8[0] == '\0') {
     gtk_window_set_title(GTK_WINDOW(app->window), k_app_name);
     return;
@@ -596,19 +609,208 @@ static void da_main_window_sync_title(AppState *app) {
   gtk_window_set_title(GTK_WINDOW(app->window), title);
 }
 
+static void da_path_to_forward_slashes(char *p) {
+  char *q;
+  if (p == NULL) {
+    return;
+  }
+  for (q = p; *q != '\0'; q++) {
+    if (*q == '\\') {
+      *q = '/';
+    }
+  }
+}
+
+static size_t da_common_path_prefix_len(const char *a, const char *b) {
+  size_t i;
+  for (i = 0; a[i] != '\0' && b[i] != '\0'; i++) {
+    char ca = a[i];
+    char cb = b[i];
+    if (ca == '\\') {
+      ca = '/';
+    }
+    if (cb == '\\') {
+      cb = '/';
+    }
+#if defined(G_OS_WIN32)
+    if (g_ascii_tolower((guchar)ca) != g_ascii_tolower((guchar)cb)) {
+      break;
+    }
+#else
+    if (ca != cb) {
+      break;
+    }
+#endif
+  }
+  return i;
+}
+
+/** Strip trailing slashes but keep "/" (filesystem root). */
+static void da_strip_trailing_slashes_keep_root(char *p) {
+  size_t n;
+  if (p == NULL) {
+    return;
+  }
+  n = strlen(p);
+  while (n > 1u && (p[n - 1u] == '/' || p[n - 1u] == '\\')) {
+    p[--n] = '\0';
+  }
+}
+
+#if defined(G_OS_WIN32)
+/** If @a s starts with a drive letter (e.g. "d:/foo"), uppercase that letter for display. */
+static void da_win32_uppercase_abs_drive_letter(gchar *s) {
+  if (s != NULL && s[0] != '\0' && g_ascii_isalpha((guchar)s[0]) && s[1] == ':') {
+    s[0] = (char)g_ascii_toupper((guchar)s[0]);
+  }
+}
+#endif
+
+/**
+ * CSV import leaves scan_root empty; treemap_build_tree needs a non-empty root.
+ * Uses longest shared directory prefix of all node paths (then dirname fallback).
+ */
+static gchar *da_derive_treemap_root_from_nodes(const file_node_t *nodes, size_t count) {
+  const char *p0;
+  gchar *prefix;
+  size_t n;
+  size_t i;
+
+  if (nodes == NULL || count == 0u) {
+    return NULL;
+  }
+  p0 = NULL;
+  for (i = 0; i < count; i++) {
+    if (nodes[i].path != NULL && nodes[i].path[0] != '\0') {
+      p0 = nodes[i].path;
+      break;
+    }
+  }
+  if (p0 == NULL) {
+    return NULL;
+  }
+  prefix = g_strdup(p0);
+  da_path_to_forward_slashes(prefix);
+  da_strip_trailing_slashes_keep_root(prefix);
+  for (i = 0; i < count; i++) {
+    const char *p = nodes[i].path;
+    gchar *q;
+    size_t m;
+
+    if (p == NULL || p[0] == '\0') {
+      continue;
+    }
+    q = g_strdup(p);
+    da_path_to_forward_slashes(q);
+    da_strip_trailing_slashes_keep_root(q);
+    m = da_common_path_prefix_len(prefix, q);
+    prefix[m] = '\0';
+    g_free(q);
+  }
+  n = strlen(prefix);
+  while (n > 0u && prefix[n - 1u] != '/') {
+    n--;
+  }
+  if (n == 0u) {
+    gchar *d = g_path_get_dirname(p0);
+    g_free(prefix);
+#if defined(G_OS_WIN32)
+    da_win32_uppercase_abs_drive_letter(d);
+#endif
+    return d;
+  }
+  prefix[n] = '\0';
+  da_strip_trailing_slashes_keep_root(prefix);
+  if (prefix[0] == '\0') {
+    gchar *d;
+
+    g_free(prefix);
+    d = g_path_get_dirname(p0);
+#if defined(G_OS_WIN32)
+    da_win32_uppercase_abs_drive_letter(d);
+#endif
+    return d;
+  }
+#if defined(G_OS_WIN32)
+  da_win32_uppercase_abs_drive_letter(prefix);
+#endif
+  return prefix;
+}
+
+/**
+ * Root path for tree/treemap after CSV import: same Windows volume when all paths share a drive
+ * (e.g. "D:\\"); UNC or mixed drives fall back to deepest shared directory from paths.
+ */
+static gchar *da_derive_csv_import_scan_root(const file_node_t *nodes, size_t count) {
+#if defined(G_OS_WIN32)
+  int drive = -2; /* -2 unset */
+  gboolean any = FALSE;
+
+  if (nodes == NULL || count == 0u) {
+    return NULL;
+  }
+  for (size_t i = 0; i < count; i++) {
+    const char *p = nodes[i].path;
+    if (p == NULL || p[0] == '\0') {
+      continue;
+    }
+    any = TRUE;
+    if (p[0] == '\\' && p[1] == '\\') {
+      return da_derive_treemap_root_from_nodes(nodes, count);
+    }
+    if (!g_ascii_isalpha((guchar)p[0]) || p[1] != ':') {
+      return da_derive_treemap_root_from_nodes(nodes, count);
+    }
+    {
+      int d = g_ascii_tolower((guchar)p[0]);
+      if (drive == -2) {
+        drive = d;
+      } else if (drive != d) {
+        return da_derive_treemap_root_from_nodes(nodes, count);
+      }
+    }
+  }
+  if (any && drive >= 0) {
+    return g_strdup_printf("%c:\\", g_ascii_toupper((guchar)drive));
+  }
+#endif
+  return da_derive_treemap_root_from_nodes(nodes, count);
+}
+
 static void da_refresh_treemap(AppState *app) {
   da_treemap_panel_sync_title(app);
   if (app != NULL && app->treemap != NULL && TREEMAP_IS_WIDGET(app->treemap)) {
     scan_results_view_t v = {0};
+    const char *root_for_treemap = "";
+    gchar *derived_root = NULL;
+
     if (app->scan != NULL) {
       v = scan_get_results(app->scan);
     }
-    treemap_widget_set_data(TREEMAP_WIDGET(app->treemap), app->scan_root_utf8 != NULL ? app->scan_root_utf8 : "",
-                            v.nodes, v.count);
+    root_for_treemap = app->scan_root_utf8 != NULL ? app->scan_root_utf8 : "";
+    if (root_for_treemap[0] == '\0' && app->csv_import_active && v.nodes != NULL && v.count > 0u) {
+      if (app->csv_derived_root_utf8 != NULL && app->csv_derived_root_utf8[0] != '\0') {
+        root_for_treemap = app->csv_derived_root_utf8;
+      } else {
+        derived_root = da_derive_treemap_root_from_nodes(v.nodes, v.count);
+        if (derived_root != NULL && derived_root[0] != '\0') {
+          root_for_treemap = derived_root;
+        }
+      }
+    }
+    treemap_widget_set_data(TREEMAP_WIDGET(app->treemap), root_for_treemap, v.nodes, v.count);
+    g_free(derived_root);
   }
 }
 
 void scan_controller_notify_scan_root_changed(AppState *app) {
+  if (app != NULL && app->scan_root_utf8 != NULL && app->scan_root_utf8[0] != '\0') {
+    app->csv_import_active = FALSE;
+    g_free(app->csv_import_path);
+    app->csv_import_path = NULL;
+    g_free(app->csv_derived_root_utf8);
+    app->csv_derived_root_utf8 = NULL;
+  }
   scan_controller_refresh_volume_labels(app);
   da_refresh_treemap(app);
 }
@@ -1045,9 +1247,15 @@ static void on_search_changed(GtkEditable *editable, gpointer user_data) {
 }
 
 static void start_scan(AppState *app) {
-  if (app == NULL || app->scan_root_utf8 == NULL) {
+  if (app == NULL || app->scan_root_utf8 == NULL || app->scan_root_utf8[0] == '\0') {
     return;
   }
+
+  app->csv_import_active = FALSE;
+  g_free(app->csv_import_path);
+  app->csv_import_path = NULL;
+  g_free(app->csv_derived_root_utf8);
+  app->csv_derived_root_utf8 = NULL;
 
   kill_all_timers(app);
   if (app->flat_list_model != NULL) {
@@ -1211,9 +1419,51 @@ void scan_controller_sync_display_max_combo(AppState *app) {
   app->display_max_entries = caps[ix];
 }
 
+static uint64_t da_sum_imported_node_sizes(const AppState *app) {
+  if (app == NULL || app->scan == NULL) {
+    return 0u;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  uint64_t sum = 0;
+  for (size_t i = 0; i < v.count; i++) {
+    sum += v.nodes[i].size_bytes;
+  }
+  return sum;
+}
+
 void scan_controller_refresh_volume_labels(AppState *app) {
   da_treemap_panel_sync_title(app);
   da_main_window_sync_title(app);
+  if (app->csv_import_active && app->csv_import_path != NULL && app->csv_import_path[0] != '\0') {
+    uint64_t csv_sum = da_sum_imported_node_sizes(app);
+    app->volume_total_bytes = 0u;
+    app->volume_pct_denominator_bytes = csv_sum > 0u ? csv_sum : 0u;
+    if (app->flat_list_model != NULL) {
+      flat_list_model_invalidate(app->flat_list_model);
+    }
+    gchar *sel = g_strdup_printf("<CSV File> %s", app->csv_import_path);
+    if (app->stat_sel_val != NULL) {
+      gtk_label_set_text(GTK_LABEL(app->stat_sel_val), sel != NULL ? sel : "<CSV File>");
+      gtk_label_set_line_wrap(GTK_LABEL(app->stat_sel_val), TRUE);
+    }
+    g_free(sel);
+    if (app->stat_tot_val != NULL) {
+      gtk_label_set_text(GTK_LABEL(app->stat_tot_val), "n/a");
+    }
+    if (app->stat_free_val != NULL) {
+      gtk_label_set_text(GTK_LABEL(app->stat_free_val), "n/a");
+    }
+    if (app->stat_use_val != NULL) {
+      char use_line[96];
+      da_format_bytes(csv_sum, use_line, sizeof(use_line));
+      gtk_label_set_text(GTK_LABEL(app->stat_use_val), use_line);
+    }
+    scan_controller_sync_file_view_status(app);
+    return;
+  }
+  if (app->stat_sel_val != NULL) {
+    gtk_label_set_line_wrap(GTK_LABEL(app->stat_sel_val), FALSE);
+  }
   if (app->scan_root_utf8 == NULL || app->scan_root_utf8[0] == '\0') {
     scan_controller_sync_file_view_status(app);
     return;
@@ -1303,6 +1553,84 @@ void scan_controller_attach(AppState *app) {
     treemap_widget_set_selected_callback(TREEMAP_WIDGET(app->treemap), on_treemap_selected, app);
     treemap_widget_set_hover_callback(TREEMAP_WIDGET(app->treemap), on_treemap_hover, app);
   }
+}
+
+void scan_controller_apply_imported_scan(AppState *app, scan_result_t *new_scan, const char *csv_source_path_utf8,
+                                         gboolean csv_import_layout) {
+  if (app == NULL || new_scan == NULL) {
+    return;
+  }
+
+  scan_progress_t pr = scan_get_progress(new_scan);
+  if (!pr.is_complete) {
+    scan_result_free(new_scan);
+    return;
+  }
+
+  kill_all_timers(app);
+  if (app->flat_list_model != NULL) {
+    flat_list_model_set_indices(app->flat_list_model, NULL, 0);
+  }
+  da_tree_view_clear(app);
+  da_refresh_treemap(app);
+
+  free(app->master_indices);
+  app->master_indices = NULL;
+  app->master_count = 0;
+  free(app->filtered_indices);
+  app->filtered_indices = NULL;
+  app->filtered_cap = 0;
+  app->filtered_count = 0;
+  app->filter_scan_pos = 0;
+  app->filter_active = FALSE;
+  app->filter_build_running = FALSE;
+  app->populate_total = 0;
+  app->list_populated = FALSE;
+
+  if (app->scan != NULL) {
+    if (app->tv_held_scan == app->scan) {
+      app->scan = NULL;
+    } else {
+      scan_result_free(app->scan);
+    }
+    app->scan = NULL;
+  }
+
+  app->scan = new_scan;
+
+  if (csv_import_layout && csv_source_path_utf8 != NULL && csv_source_path_utf8[0] != '\0') {
+    app->csv_import_active = TRUE;
+    g_free(app->csv_import_path);
+    app->csv_import_path = g_strdup(csv_source_path_utf8);
+    g_free(app->scan_root_utf8);
+    app->scan_root_utf8 = g_strdup("");
+    {
+      scan_results_view_t vimp = scan_get_results(app->scan);
+      g_free(app->csv_derived_root_utf8);
+      app->csv_derived_root_utf8 = da_derive_csv_import_scan_root(vimp.nodes, vimp.count);
+    }
+  } else {
+    app->csv_import_active = FALSE;
+    g_free(app->csv_import_path);
+    app->csv_import_path = NULL;
+    g_free(app->csv_derived_root_utf8);
+    app->csv_derived_root_utf8 = NULL;
+    if (csv_source_path_utf8 != NULL) {
+      g_free(app->scan_root_utf8);
+      app->scan_root_utf8 = g_strdup(csv_source_path_utf8);
+    }
+  }
+
+  scan_progress_set_full(app);
+  app->last_scan_elapsed_s = 0.0;
+  panel_scan_set_text(app, "Imported from CSV.");
+  if (app->scan_btn != NULL) {
+    gtk_button_set_label(GTK_BUTTON(app->scan_btn), "Scan");
+  }
+
+  scan_controller_refresh_volume_labels(app);
+  da_scan_source_combo_rebuild(app);
+  begin_populate_list(app);
 }
 
 void scan_controller_detach(AppState *app) {

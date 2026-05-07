@@ -556,8 +556,16 @@ void da_tree_view_populate(AppState *app) {
   app->tv_held_scan = app->scan;
 
   TvBuildData *bd = g_new0(TvBuildData, 1);
-  bd->v         = v;
-  bd->scan_root = g_strdup(app->scan_root_utf8 ? app->scan_root_utf8 : "");
+  bd->v = v;
+  {
+    const gchar *root_src = "";
+    if (app->scan_root_utf8 != NULL && app->scan_root_utf8[0] != '\0') {
+      root_src = app->scan_root_utf8;
+    } else if (app->csv_derived_root_utf8 != NULL && app->csv_derived_root_utf8[0] != '\0') {
+      root_src = app->csv_derived_root_utf8;
+    }
+    bd->scan_root = g_strdup(root_src);
+  }
 
   GCancellable *cancel = g_cancellable_new();
   app->tv_build_cancel = cancel;

@@ -71,11 +71,15 @@ static void append_row(GtkListStore *store, GdkPixbuf *icon_owned, const gchar *
 }
 
 /** Row index for `gtk_combo_box_set_active` / `iter_nth_child`.
- *  Without file row: [vol0..nv-1][Browse][MFT][CSV] — Browse index = nv.
- *  With file row at top: [file][vol0..nv-1][Browse][MFT][CSV] — active file = 0; Browse = nv+1 (unused when file selected). */
+ *  Without file row: [vol0..nv-1][Browse][MFT][CSV File] — Browse index = nv.
+ *  With file row at top: [file][vol0..nv-1][Browse][MFT][CSV File] — active file = 0; Browse = nv+1 (unused when file selected). */
 static gint pick_active_row(AppState *app, gboolean show_custom_file_row, DaVolumeEntry *vols, gsize nv) {
   if (show_custom_file_row) {
     return 0;
+  }
+
+  if (app->csv_import_active) {
+    return (gint)(nv + 2);
   }
 
   if (app->scan_root_utf8 != NULL && app->scan_root_utf8[0] != '\0') {
@@ -110,7 +114,7 @@ static gint pick_active_row(AppState *app, gboolean show_custom_file_row, DaVolu
 static void da_scan_source_combo_append_specials(GtkListStore *store) {
   append_row(store, NULL, "<Select Folder...>", "", DA_SCAN_ROW_KIND_BROWSE_FOLDER);
   append_row(store, NULL, "<MFT file>", "", DA_SCAN_ROW_KIND_MFT_FILE);
-  append_row(store, NULL, "<CSV file>", "", DA_SCAN_ROW_KIND_CSV_FILE);
+  append_row(store, NULL, "<CSV File>", "", DA_SCAN_ROW_KIND_CSV_FILE);
 }
 
 void da_scan_source_combo_rebuild(AppState *app) {
@@ -135,7 +139,7 @@ void da_scan_source_combo_rebuild(AppState *app) {
       (app->scan_root_utf8 != NULL && app->scan_root_utf8[0] != '\0' &&
        g_file_test(app->scan_root_utf8, G_FILE_TEST_IS_REGULAR));
 
-  gboolean show_custom_file_row = scan_root_is_file;
+  gboolean show_custom_file_row = scan_root_is_file && !app->csv_import_active;
 
   g_scan_source_combo_internal = TRUE;
   gtk_list_store_clear(store);
@@ -280,12 +284,45 @@ static void apply_accepted_open_path(AppState *app, GtkFileChooser *chooser) {
   }
 }
 
-static void run_open_file_dialog(AppState *app, gboolean csv_mode) {
+void da_scan_source_combo_run_csv_import(AppState *app) {
+  if (app == NULL || app->window == NULL || !GTK_IS_WINDOW(app->window)) {
+    return;
+  }
   GtkFileChooserNative *native =
-      gtk_file_chooser_native_new(csv_mode ? "Select CSV file…" : "Select MFT file…", GTK_WINDOW(app->window),
-                                  GTK_FILE_CHOOSER_ACTION_OPEN, "_Open", "_Cancel");
+      gtk_file_chooser_native_new("Select CSV file…", GTK_WINDOW(app->window), GTK_FILE_CHOOSER_ACTION_OPEN,
+                                  "_Open", "_Cancel");
   GtkFileChooser *chooser = GTK_FILE_CHOOSER(native);
-  configure_open_file_chooser(chooser, app, csv_mode);
+  configure_open_file_chooser(chooser, app, TRUE);
+  gint resp = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
+  if (resp == GTK_RESPONSE_ACCEPT) {
+    gchar *fn = gtk_file_chooser_get_filename(chooser);
+    if (fn != NULL) {
+      char err[512];
+      scan_result_t *sr = diskatlas_scan_import_csv(fn, err, sizeof err);
+      if (sr != NULL) {
+        scan_controller_apply_imported_scan(app, sr, fn, TRUE);
+      } else {
+        GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
+                                              GTK_BUTTONS_OK, "%s", err[0] != '\0' ? err : "CSV import failed.");
+        gtk_dialog_run(GTK_DIALOG(d));
+        gtk_widget_destroy(d);
+      }
+      g_free(fn);
+    }
+  }
+  gtk_native_dialog_destroy(GTK_NATIVE_DIALOG(native));
+}
+
+static void run_open_file_dialog(AppState *app, gboolean csv_mode) {
+  if (csv_mode) {
+    da_scan_source_combo_run_csv_import(app);
+    return;
+  }
+  GtkFileChooserNative *native =
+      gtk_file_chooser_native_new("Select MFT file…", GTK_WINDOW(app->window), GTK_FILE_CHOOSER_ACTION_OPEN,
+                                  "_Open", "_Cancel");
+  GtkFileChooser *chooser = GTK_FILE_CHOOSER(native);
+  configure_open_file_chooser(chooser, app, FALSE);
   gint resp = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
   if (resp == GTK_RESPONSE_ACCEPT) {
     apply_accepted_open_path(app, chooser);
@@ -348,7 +385,7 @@ void da_scan_source_combo_on_changed(GtkComboBox *cb, gpointer user_data) {
     g_scan_source_combo_internal = TRUE;
     gtk_combo_box_set_active(cb, app->scan_source_last_stable_active);
     g_scan_source_combo_internal = FALSE;
-    run_open_file_dialog(app, TRUE);
+    da_scan_source_combo_run_csv_import(app);
     return;
   }
 
