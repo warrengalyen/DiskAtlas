@@ -11,6 +11,7 @@
 #include "treemap_widget.h"
 #include "diskatlas.h"
 #include "file_tree_model.h"
+#include "flat_list_model.h"
 #include "tree_view_model.h"
 #include "format_text.h"
 #include "scan_controller.h"
@@ -118,7 +119,7 @@ static void scan_controller_update_status_right_totals(AppState *app) {
     gtk_label_set_text(GTK_LABEL(app->status_label_right), "—");
     return;
   }
-  if (!app->list_populated || !app->file_view_tree_ready) {
+  if (!app->list_populated) {
     gtk_label_set_text(GTK_LABEL(app->status_label_right), "Loading file list...");
     return;
   }
@@ -563,7 +564,7 @@ static int rebuild_master_index_list(AppState *app) {
 
 static gboolean on_timer_fill_chunk(gpointer data);
 static gboolean on_timer_filter_chunk(gpointer data);
-static gboolean on_timer_tree_chunk(gpointer data);
+static void flat_model_commit_indices(AppState *app);
 
 static void da_treemap_panel_sync_title(AppState *app) {
   if (app == NULL || app->treemap_panel_title == NULL) {
@@ -671,7 +672,6 @@ static void kill_all_timers(AppState *app) {
   kill_timer(&app->timer_fill);
   kill_timer(&app->timer_filter);
   kill_timer(&app->timer_search);
-  kill_timer(&app->timer_tree);
 }
 
 static void panel_scan_set_text(AppState *app, const char *text) {
@@ -734,6 +734,20 @@ static gboolean ensure_filtered_capacity(AppState *app) {
   return TRUE;
 }
 
+/* Helper: push the current index set (master or filtered) to the flat model. */
+static void flat_model_commit_indices(AppState *app) {
+  if (app->flat_list_model == NULL) {
+    return;
+  }
+  if (da_view_uses_filtered_pool(app)) {
+    flat_list_model_set_indices(app->flat_list_model,
+                                app->filtered_indices, app->filtered_count);
+  } else {
+    flat_list_model_set_indices(app->flat_list_model,
+                                app->master_indices, app->master_count);
+  }
+}
+
 static void apply_search_filter(AppState *app) {
   kill_timer(&app->timer_search);
 
@@ -764,14 +778,8 @@ static void apply_search_filter(AppState *app) {
   if (!need_aux_pool) {
     app->filtered_count = 0;
     app->filter_scan_pos = 0;
-    gboolean more = da_tree_begin_root_insert(app);
-    if (more) {
-      app->file_view_tree_ready = FALSE;
-      app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
-    } else {
-      app->file_view_tree_ready = TRUE;
-      da_refresh_treemap(app);
-    }
+    flat_model_commit_indices(app);
+    da_refresh_treemap(app);
     scan_controller_sync_file_view_status(app);
     return;
   }
@@ -786,14 +794,8 @@ static void apply_search_filter(AppState *app) {
     if (app->duplicates_only_check != NULL) {
       gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app->duplicates_only_check), FALSE);
     }
-    gboolean more = da_tree_begin_root_insert(app);
-    if (more) {
-      app->file_view_tree_ready = FALSE;
-      app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
-    } else {
-      app->file_view_tree_ready = TRUE;
-      da_refresh_treemap(app);
-    }
+    flat_model_commit_indices(app);
+    da_refresh_treemap(app);
     scan_controller_sync_file_view_status(app);
     return;
   }
@@ -801,8 +803,6 @@ static void apply_search_filter(AppState *app) {
   app->filtered_count = 0;
   app->filter_scan_pos = 0;
   app->filter_build_running = TRUE;
-  da_tree_clear(app);
-  app->file_view_tree_ready = FALSE;
   scan_controller_sync_file_view_status(app);
   app->timer_filter = g_timeout_add(12, on_timer_filter_chunk, app);
 }
@@ -813,30 +813,18 @@ static gboolean on_timer_filter_chunk(gpointer data) {
       app->master_indices == NULL || app->master_count == 0 || app->filtered_indices == NULL) {
     kill_timer(&app->timer_filter);
     app->filter_build_running = FALSE;
-    gboolean more = da_tree_begin_root_insert(app);
-    if (more) {
-      app->file_view_tree_ready = FALSE;
-      app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
-    } else {
-      app->file_view_tree_ready = TRUE;
-      da_refresh_treemap(app);
-    }
+    flat_model_commit_indices(app);
+    da_refresh_treemap(app);
     scan_controller_sync_file_view_status(app);
     return G_SOURCE_REMOVE;
   }
 
   scan_results_view_t v = scan_get_results(app->scan);
-  if (v.nodes == NULL || v.count != app->master_count) {
+  if (v.nodes == NULL) {
     kill_timer(&app->timer_filter);
     app->filter_build_running = FALSE;
-    gboolean more = da_tree_begin_root_insert(app);
-    if (more) {
-      app->file_view_tree_ready = FALSE;
-      app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
-    } else {
-      app->file_view_tree_ready = TRUE;
-      da_refresh_treemap(app);
-    }
+    flat_model_commit_indices(app);
+    da_refresh_treemap(app);
     scan_controller_sync_file_view_status(app);
     return G_SOURCE_REMOVE;
   }
@@ -872,14 +860,8 @@ static gboolean on_timer_filter_chunk(gpointer data) {
                                               "Out of memory while filtering.");
         gtk_dialog_run(GTK_DIALOG(d));
         gtk_widget_destroy(d);
-        gboolean more = da_tree_begin_root_insert(app);
-        if (more) {
-          app->file_view_tree_ready = FALSE;
-          app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
-        } else {
-          app->file_view_tree_ready = TRUE;
-          da_refresh_treemap(app);
-        }
+        flat_model_commit_indices(app);
+        da_refresh_treemap(app);
         scan_controller_sync_file_view_status(app);
         return G_SOURCE_REMOVE;
       }
@@ -895,14 +877,8 @@ static gboolean on_timer_filter_chunk(gpointer data) {
   if (app->filter_scan_pos >= app->master_count) {
     kill_timer(&app->timer_filter);
     app->filter_build_running = FALSE;
-    gboolean more = da_tree_begin_root_insert(app);
-    if (more) {
-      app->file_view_tree_ready = FALSE;
-      app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
-    } else {
-      app->file_view_tree_ready = TRUE;
-      da_refresh_treemap(app);
-    }
+    flat_model_commit_indices(app);
+    da_refresh_treemap(app);
     scan_controller_sync_file_view_status(app);
     return G_SOURCE_REMOVE;
   }
@@ -914,9 +890,11 @@ static void begin_populate_list(AppState *app) {
 
   kill_timer(&app->timer_fill);
   kill_timer(&app->timer_filter);
-  kill_timer(&app->timer_tree);
-  da_tree_clear(app);
-  app->file_view_tree_ready = FALSE;
+
+  /* Clear the flat model immediately (zero rows while loading). */
+  if (app->flat_list_model != NULL) {
+    flat_list_model_set_indices(app->flat_list_model, NULL, 0);
+  }
 
   free(app->master_indices);
   app->master_indices = NULL;
@@ -940,7 +918,6 @@ static void begin_populate_list(AppState *app) {
              pr_done.is_cancel_observed ? " (cancelled)" : "");
     panel_scan_set_text(app, finish_pan);
     app->list_populated = TRUE;
-    app->file_view_tree_ready = TRUE;
     enable_scan_button(app, TRUE);
     da_refresh_treemap(app);
     scan_controller_sync_file_view_status(app);
@@ -964,7 +941,6 @@ static gboolean on_timer_fill_chunk(gpointer data) {
     if (v.nodes == NULL || v.count != app->populate_total) {
       kill_timer(&app->timer_fill);
       app->list_populated = TRUE;
-      app->file_view_tree_ready = TRUE;
       enable_scan_button(app, TRUE);
       scan_controller_sync_file_view_status(app);
       return G_SOURCE_REMOVE;
@@ -974,7 +950,6 @@ static gboolean on_timer_fill_chunk(gpointer data) {
       kill_timer(&app->timer_fill);
       panel_scan_set_text(app, "Could not allocate sort index.");
       app->list_populated = TRUE;
-      app->file_view_tree_ready = TRUE;
       enable_scan_button(app, TRUE);
       scan_controller_sync_file_view_status(app);
       GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
@@ -994,7 +969,6 @@ static gboolean on_timer_fill_chunk(gpointer data) {
     app->master_count = 0;
     panel_scan_set_text(app, "Scan results changed during list build; list partial or empty.");
     app->list_populated = TRUE;
-    app->file_view_tree_ready = TRUE;
     enable_scan_button(app, TRUE);
     scan_controller_sync_file_view_status(app);
     return G_SOURCE_REMOVE;
@@ -1010,22 +984,18 @@ static gboolean on_timer_fill_chunk(gpointer data) {
   panel_scan_set_text(app, finish_pan);
   enable_scan_button(app, TRUE);
 
+  /* Populate folder tree view (background thread after tv-background-thread task). */
   da_tree_view_populate(app);
 
-  gboolean more = da_tree_begin_root_insert(app);
-  if (more) {
-    app->file_view_tree_ready = FALSE;
-    app->timer_tree = g_timeout_add(DA_TREEINSERT_MS, on_timer_tree_chunk, app);
-  } else {
-    app->file_view_tree_ready = TRUE;
-    da_refresh_treemap(app);
-  }
-  scan_controller_sync_file_view_status(app);
-
+  /* Populate flat file-view list — instantaneous, no timer loop needed. */
   const gchar *peek = gtk_entry_get_text(GTK_ENTRY(app->search));
   gboolean search_nonempty = (peek != NULL && peek[0] != '\0');
   if (search_nonempty || da_duplicates_only(app)) {
     apply_search_filter(app);
+  } else {
+    flat_model_commit_indices(app);
+    da_refresh_treemap(app);
+    scan_controller_sync_file_view_status(app);
   }
   return G_SOURCE_REMOVE;
 }
@@ -1059,17 +1029,6 @@ static gboolean on_timer_scan_tick(gpointer data) {
   return G_SOURCE_CONTINUE;
 }
 
-static gboolean on_timer_tree_chunk(gpointer data) {
-  AppState *app = (AppState *)data;
-  if (da_tree_insert_roots_chunk(app)) {
-    return G_SOURCE_CONTINUE;
-  }
-  kill_timer(&app->timer_tree);
-  app->file_view_tree_ready = TRUE;
-  da_refresh_treemap(app);
-  scan_controller_sync_file_view_status(app);
-  return G_SOURCE_REMOVE;
-}
 
 static gboolean on_search_debounce(gpointer data) {
   AppState *app = (AppState *)data;
@@ -1091,7 +1050,9 @@ static void start_scan(AppState *app) {
   }
 
   kill_all_timers(app);
-  da_tree_clear(app);
+  if (app->flat_list_model != NULL) {
+    flat_list_model_set_indices(app->flat_list_model, NULL, 0);
+  }
   da_tree_view_clear(app);
   da_refresh_treemap(app);
 
@@ -1107,11 +1068,15 @@ static void start_scan(AppState *app) {
   app->filter_build_running = FALSE;
   app->populate_total = 0;
   app->list_populated = FALSE;
-  app->file_view_tree_ready = FALSE;
 
   if (app->scan != NULL) {
-    scan_result_free(app->scan);
-    app->scan = NULL;
+    if (app->tv_held_scan == app->scan) {
+      /* Background tree-view build is using this scan; the GTask callback will free it. */
+      app->scan = NULL;
+    } else {
+      scan_result_free(app->scan);
+      app->scan = NULL;
+    }
   }
 
   scan_options_t opt;
@@ -1196,7 +1161,6 @@ static void on_show_folders_toggled(GtkToggleButton *btn, gpointer user_data) {
 
   kill_timer(&app->timer_fill);
   kill_timer(&app->timer_filter);
-  kill_timer(&app->timer_tree);
 
   panel_scan_set_text(app, "Sorting entries by size…");
   if (rebuild_master_index_list(app) != 0) {
@@ -1221,6 +1185,9 @@ static void on_combo_display_changed(GtkComboBox *cb, gpointer user_data) {
   (void)cb;
   AppState *app = (AppState *)user_data;
   scan_controller_sync_display_max_combo(app);
+  if (app->list_populated) {
+    flat_model_commit_indices(app);
+  }
   da_refresh_treemap(app);
   scan_controller_sync_file_view_status(app);
 }
@@ -1266,6 +1233,9 @@ void scan_controller_refresh_volume_labels(AppState *app) {
   }
   app->volume_total_bytes = tot;
   app->volume_pct_denominator_bytes = (used_b > 0u) ? used_b : tot;
+  if (app->flat_list_model != NULL) {
+    flat_list_model_invalidate(app->flat_list_model);
+  }
   char a[64];
   char use_line[160];
   char free_line[160];
@@ -1287,11 +1257,6 @@ void scan_controller_refresh_volume_labels(AppState *app) {
   scan_controller_sync_file_view_status(app);
 }
 
-static void on_tree_row_expanded(GtkTreeView *tv, GtkTreeIter *iter, GtkTreePath *path,
-                                 gpointer user_data) {
-  da_tree_on_row_expanded(tv, iter, path, user_data);
-}
-
 static void on_tree_view_row_expanded(GtkTreeView *tv, GtkTreeIter *iter, GtkTreePath *path,
                                       gpointer user_data) {
   da_tree_view_on_row_expanded(tv, iter, path, user_data);
@@ -1310,7 +1275,6 @@ void scan_controller_attach(AppState *app) {
     g_signal_connect(app->show_folders_check, "toggled", G_CALLBACK(on_show_folders_toggled), app);
   }
   g_signal_connect(app->search, "changed", G_CALLBACK(on_search_changed), app);
-  g_signal_connect(app->tree, "row-expanded", G_CALLBACK(on_tree_row_expanded), app);
   if (app->tree_view != NULL) {
     g_signal_connect(app->tree_view, "row-expanded", G_CALLBACK(on_tree_view_row_expanded), app);
     g_signal_connect(app->tree_view, "motion-notify-event", G_CALLBACK(on_tree_view_motion), app);

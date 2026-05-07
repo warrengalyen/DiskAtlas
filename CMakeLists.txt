@@ -141,6 +141,7 @@ if(DISKATLAS_GTK3_FOUND)
     "${DISKATLAS_SRC}/app/da_cell_renderer_progress.c"
     "${DISKATLAS_SRC}/app/file_tree_sort.c"
     "${DISKATLAS_SRC}/app/file_tree_model.c"
+    "${DISKATLAS_SRC}/app/flat_list_model.c"
     "${DISKATLAS_SRC}/app/tree_view_model.c"
     "${DISKATLAS_SRC}/app/treemap_widget.c"
     "${DISKATLAS_SRC}/app/scan_controller.c"

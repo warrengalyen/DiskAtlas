@@ -29,7 +29,8 @@ typedef struct {
 
 struct DaTreeViewModel {
   DaTvEntry *entries;
-  size_t count;
+  size_t     count;
+  char      *scan_root_str; /* owns the string that synthetic root entry->path points to */
 };
 
 /* ---- Path utilities ---- */
@@ -110,13 +111,15 @@ static gchar *compute_parent_path(const char *path) {
 
 /* ---- Sort comparator (by path depth, then alphabetically) ---- */
 
+/* Pre-computed depth table: depths[node_index] = separator count, capped at 255. */
 static const file_node_t *tv_sort_nodes;
+static const uint8_t     *tv_sort_depths;
 
 static int cmp_by_depth(const void *a, const void *b) {
   size_t ia = *(const size_t *)a;
   size_t ib = *(const size_t *)b;
-  int da = count_separators(tv_sort_nodes[ia].path);
-  int db = count_separators(tv_sort_nodes[ib].path);
+  int da = tv_sort_depths ? (int)tv_sort_depths[ia] : count_separators(tv_sort_nodes[ia].path);
+  int db = tv_sort_depths ? (int)tv_sort_depths[ib] : count_separators(tv_sort_nodes[ib].path);
   if (da != db) {
     return da - db;
   }
@@ -232,51 +235,102 @@ static gboolean da_tv_expand_top_level_idle(gpointer user_data) {
   return G_SOURCE_REMOVE;
 }
 
-/* ---- Public: populate ---- */
+/* ---- GTask background build ---- */
 
-void da_tree_view_populate(AppState *app) {
-  if (app == NULL || app->scan == NULL || app->tree_view_store == NULL) {
+typedef struct {
+  scan_results_view_t v;       /* borrowed — lifetime managed by tv_held_scan */
+  char               *scan_root; /* owned copy */
+  DaTvEntry          *entries;   /* owned result; NULL until worker sets it */
+  size_t              count;
+} TvBuildData;
+
+static void tv_build_data_free(TvBuildData *bd) {
+  if (bd == NULL) { return; }
+  g_free(bd->scan_root);
+  free(bd->entries);
+  g_free(bd);
+}
+
+/* Build DaTvEntry[] off the main thread. No GTK calls allowed here. */
+static void tv_build_worker(GTask *task, gpointer source_object,
+                             gpointer task_data, GCancellable *cancellable) {
+  (void)source_object;
+  TvBuildData *bd = (TvBuildData *)task_data;
+
+  if (g_cancellable_is_cancelled(cancellable)) {
+    g_task_return_error(task,
+      g_error_new(G_IO_ERROR, G_IO_ERROR_CANCELLED, "tree-view build cancelled"));
     return;
   }
 
-  scan_results_view_t v = scan_get_results(app->scan);
-  if (v.nodes == NULL || v.count == 0) {
-    return;
-  }
-
+  scan_results_view_t v = bd->v;
   size_t n = v.count;
+  if (v.nodes == NULL || n == 0) {
+    bd->entries = NULL;
+    bd->count   = 0;
+    g_task_return_pointer(task, bd, NULL);
+    return;
+  }
 
-  /* Step 1: build sorted index by path depth (parents before children). */
+  /* Step 1: pre-compute depth array (O(n·L)) then sort (O(n log n)). */
   size_t *sorted_idx = (size_t *)malloc(n * sizeof(size_t));
-  if (sorted_idx == NULL) {
+  uint8_t *depths    = (uint8_t *)malloc(n * sizeof(uint8_t));
+  if (sorted_idx == NULL || depths == NULL) {
+    free(sorted_idx);
+    free(depths);
+    g_task_return_error(task,
+      g_error_new(G_IO_ERROR, G_IO_ERROR_NO_SPACE, "OOM in tree-view build"));
     return;
   }
   for (size_t i = 0; i < n; i++) {
     sorted_idx[i] = i;
+    int d = count_separators(v.nodes[i].path);
+    depths[i] = (uint8_t)(d > 255 ? 255 : d);
   }
-  tv_sort_nodes = v.nodes;
+
+  if (g_cancellable_is_cancelled(cancellable)) {
+    free(sorted_idx);
+    free(depths);
+    g_task_return_error(task,
+      g_error_new(G_IO_ERROR, G_IO_ERROR_CANCELLED, "tree-view build cancelled"));
+    return;
+  }
+
+  tv_sort_nodes  = v.nodes;
+  tv_sort_depths = depths;
   qsort(sorted_idx, n, sizeof(size_t), cmp_by_depth);
-  tv_sort_nodes = NULL;
+  tv_sort_nodes  = NULL;
+  tv_sort_depths = NULL;
+  free(depths);
+
+  if (g_cancellable_is_cancelled(cancellable)) {
+    free(sorted_idx);
+    g_task_return_error(task,
+      g_error_new(G_IO_ERROR, G_IO_ERROR_CANCELLED, "tree-view build cancelled"));
+    return;
+  }
 
   /* Step 2: allocate and initialise entry array. */
   DaTvEntry *entries = (DaTvEntry *)malloc(n * sizeof(DaTvEntry));
   if (entries == NULL) {
     free(sorted_idx);
+    g_task_return_error(task,
+      g_error_new(G_IO_ERROR, G_IO_ERROR_NO_SPACE, "OOM in tree-view build entries"));
     return;
   }
   for (size_t i = 0; i < n; i++) {
-    entries[i].kind = 0;
-    entries[i].path = NULL;
-    entries[i].mtime_unix_ns = 0;
+    entries[i].kind             = 0;
+    entries[i].path             = NULL;
+    entries[i].mtime_unix_ns    = 0;
     entries[i].win32_attributes = 0;
-    entries[i].size_bytes = 0;
-    entries[i].alloc_bytes = 0;
-    entries[i].file_count = 0;
-    entries[i].folder_count = 0;
-    entries[i].parent_id = -1;
-    entries[i].first_child_id = -1;
-    entries[i].next_sibling_id = -1;
-    entries[i].last_child_id = -1;
+    entries[i].size_bytes       = 0;
+    entries[i].alloc_bytes      = 0;
+    entries[i].file_count       = 0;
+    entries[i].folder_count     = 0;
+    entries[i].parent_id        = -1;
+    entries[i].first_child_id   = -1;
+    entries[i].next_sibling_id  = -1;
+    entries[i].last_child_id    = -1;
   }
 
   /* Step 3: build tree links using a path→position hash table. */
@@ -288,26 +342,23 @@ void da_tree_view_populate(AppState *app) {
     DaTvEntry *e = &entries[pos];
 
     uint32_t kind = node->attributes & DISKATLAS_NODE_KIND_MASK;
-    e->kind = kind;
-    e->path = node->path;
-    e->mtime_unix_ns = node->mtime_unix_ns;
+    e->kind             = kind;
+    e->path             = node->path;
+    e->mtime_unix_ns    = node->mtime_unix_ns;
     e->win32_attributes = node->win32_attributes;
 
     if (kind == DISKATLAS_NODE_KIND_DIR) {
-      /* Directory sizes/counts aggregated bottom-up later. */
-      e->size_bytes = 0;
+      e->size_bytes  = 0;
       e->alloc_bytes = 0;
-      e->file_count = 0;
+      e->file_count  = 0;
       e->folder_count = 0;
     } else {
-      /* Files (and symlinks) contribute their own size. */
-      e->size_bytes = node->size_bytes;
+      e->size_bytes  = node->size_bytes;
       e->alloc_bytes = node->allocated_bytes;
-      e->file_count = 1;
+      e->file_count  = 1;
       e->folder_count = 0;
     }
 
-    /* Locate parent entry via path map. */
     if (node->path != NULL) {
       gchar *pp = compute_parent_path(node->path);
       if (pp != NULL) {
@@ -315,7 +366,6 @@ void da_tree_view_populate(AppState *app) {
         if (pval != NULL) {
           int32_t pid = (int32_t)((gintptr)pval - 1);
           e->parent_id = pid;
-          /* Append to parent's ordered child list. */
           if (entries[pid].last_child_id >= 0) {
             entries[entries[pid].last_child_id].next_sibling_id = (int32_t)pos;
           } else {
@@ -325,7 +375,6 @@ void da_tree_view_populate(AppState *app) {
         }
         g_free(pp);
       }
-      /* Register this path so children can find it. */
       g_hash_table_insert(path_map, (gpointer)node->path, (gpointer)(gintptr)(pos + 1));
     }
   }
@@ -333,35 +382,22 @@ void da_tree_view_populate(AppState *app) {
   g_hash_table_destroy(path_map);
   free(sorted_idx);
 
-  /* Step 4: bottom-up aggregation (entries are in parents-first order,
-   * so reverse order is children-first = leaves first). */
+  /* Step 4: bottom-up aggregation. */
   for (int32_t pos = (int32_t)n - 1; pos >= 0; pos--) {
     DaTvEntry *e = &entries[pos];
-    if (e->parent_id < 0) {
-      continue;
-    }
+    if (e->parent_id < 0) { continue; }
     DaTvEntry *parent = &entries[e->parent_id];
-    parent->size_bytes += e->size_bytes;
+    parent->size_bytes  += e->size_bytes;
     parent->alloc_bytes += e->alloc_bytes;
-    parent->file_count += e->file_count;
+    parent->file_count  += e->file_count;
     if (e->kind == DISKATLAS_NODE_KIND_DIR) {
-      /* Count this directory itself plus its own folder descendants. */
       parent->folder_count += 1u + e->folder_count;
     }
-    /* Files do not add to folder_count. */
   }
 
-  /* Step 4b: inject a synthetic root node for the scan-root directory.
-   *
-   * The Win32 scanner enumerates entries INSIDE the root but never records the
-   * root directory itself as a node.  Without this step every top-level
-   * subdirectory would appear as a separate root in the tree widget, matching
-   * neither WizTree's layout nor the user's expectation.
-   *
-   * We append one extra entry at index `n`, re-parent all orphan entries
-   * (parent_id == -1) to it, then aggregate its totals. */
-  const char *scan_root_path = (app->scan_root_utf8 != NULL && app->scan_root_utf8[0] != '\0')
-                                ? app->scan_root_utf8 : "";
+  /* Step 4b: synthetic root. */
+  const char *scan_root_path = (bd->scan_root != NULL && bd->scan_root[0] != '\0')
+                                ? bd->scan_root : "";
   {
     DaTvEntry *entries_new = (DaTvEntry *)realloc(entries, (n + 1) * sizeof(DaTvEntry));
     if (entries_new != NULL) {
@@ -380,21 +416,15 @@ void da_tree_view_populate(AppState *app) {
       sr->next_sibling_id  = -1;
       sr->last_child_id    = -1;
 
-      /* Re-parent every orphan entry to the synthetic root and aggregate. */
       for (size_t i = 0; i < n; i++) {
-        if (entries[i].parent_id != -1) {
-          continue;
-        }
+        if (entries[i].parent_id != -1) { continue; }
         entries[i].parent_id = (int32_t)n;
-        /* Append to synthetic root's child list. */
         if (sr->last_child_id >= 0) {
           entries[sr->last_child_id].next_sibling_id = (int32_t)i;
         } else {
           sr->first_child_id = (int32_t)i;
         }
         sr->last_child_id = (int32_t)i;
-
-        /* Accumulate totals. */
         sr->size_bytes  += entries[i].size_bytes;
         sr->alloc_bytes += entries[i].alloc_bytes;
         sr->file_count  += entries[i].file_count;
@@ -402,28 +432,94 @@ void da_tree_view_populate(AppState *app) {
           sr->folder_count += 1u + entries[i].folder_count;
         }
       }
-
-      n++; /* include synthetic root in the model */
+      n++;
     }
   }
 
-  /* Step 5: replace old model. */
-  if (app->tree_view_model != NULL) {
-    free(app->tree_view_model->entries);
-    free(app->tree_view_model);
+  bd->entries = entries;
+  bd->count   = n;
+  g_task_return_pointer(task, bd, NULL);
+}
+
+/* Main-thread callback: receives TvBuildData from worker and does GTK work. */
+static void tv_build_done(GObject *source_object, GAsyncResult *res, gpointer user_data) {
+  (void)source_object;
+  AppState *app = (AppState *)user_data;
+
+  /* Release the held-scan reference.
+   *
+   * DaTvEntry.path borrows directly from the scan nodes, so the scan must
+   * stay alive at least as long as the tree-view model.
+   *
+   * Two cases:
+   *  a) No new scan started while the worker was running:
+   *     tv_held_scan == app->scan.  app->scan still owns the data; we just
+   *     clear our borrow reference and leave the scan alive.
+   *  b) A new scan was started (start_scan set app->scan = NULL and handed
+   *     ownership to tv_held_scan).  Nobody else holds the old scan, so we
+   *     must free it here.
+   */
+  if (app->tv_held_scan != NULL) {
+    if (app->tv_held_scan != app->scan) {
+      scan_result_free(app->tv_held_scan);
+    }
+    app->tv_held_scan = NULL;
   }
-  DaTreeViewModel *model = (DaTreeViewModel *)malloc(sizeof(DaTreeViewModel));
-  if (model == NULL) {
-    free(entries);
+  if (app->tv_build_cancel != NULL) {
+    g_object_unref(app->tv_build_cancel);
+    app->tv_build_cancel = NULL;
+  }
+
+  GError *err = NULL;
+  TvBuildData *bd = (TvBuildData *)g_task_propagate_pointer(G_TASK(res), &err);
+  if (err != NULL) {
+    g_error_free(err);
+    /* Cancelled or OOM — discard without updating the tree. */
+    tv_build_data_free(bd);
     return;
   }
-  model->entries = entries;
-  model->count = n;
+  if (bd == NULL) {
+    return;
+  }
+
+  if (app->tree_view_store == NULL) {
+    tv_build_data_free(bd);
+    return;
+  }
+
+  /* Swap model. */
+  if (app->tree_view_model != NULL) {
+    free(app->tree_view_model->entries);
+    g_free(app->tree_view_model->scan_root_str);
+    free(app->tree_view_model);
+    app->tree_view_model = NULL;
+  }
+
+  if (bd->entries == NULL || bd->count == 0) {
+    tv_build_data_free(bd);
+    return;
+  }
+
+  DaTreeViewModel *model = (DaTreeViewModel *)malloc(sizeof(DaTreeViewModel));
+  if (model == NULL) {
+    tv_build_data_free(bd);
+    return;
+  }
+  model->entries       = bd->entries;
+  model->count         = bd->count;
+  model->scan_root_str = bd->scan_root; /* transfer ownership — synthetic root path points here */
+  bd->entries          = NULL;          /* transferred */
+  bd->count            = 0;
+  bd->scan_root        = NULL;          /* transferred — prevent tv_build_data_free from freeing */
+  tv_build_data_free(bd);
+
   app->tree_view_model = model;
 
-  /* Step 6: clear store and insert root-level entries only. */
-  gtk_tree_store_clear(app->tree_view_store);
+  size_t n = model->count;
+  DaTvEntry *entries = model->entries;
 
+  /* Populate GTK store with root-level entries. */
+  gtk_tree_store_clear(app->tree_view_store);
   for (size_t i = 0; i < n; i++) {
     if (entries[i].parent_id == -1) {
       da_tv_insert_entry(app, NULL, (int32_t)i);
@@ -437,17 +533,59 @@ void da_tree_view_populate(AppState *app) {
   }
 }
 
+/* ---- Public: populate ---- */
+
+void da_tree_view_populate(AppState *app) {
+  if (app == NULL || app->scan == NULL || app->tree_view_store == NULL) {
+    return;
+  }
+
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (v.nodes == NULL || v.count == 0) {
+    return;
+  }
+
+  /* Cancel any pending build first. */
+  if (app->tv_build_cancel != NULL) {
+    g_cancellable_cancel(app->tv_build_cancel);
+    g_object_unref(app->tv_build_cancel);
+    app->tv_build_cancel = NULL;
+  }
+
+  /* Keep the scan alive while the worker runs. */
+  app->tv_held_scan = app->scan;
+
+  TvBuildData *bd = g_new0(TvBuildData, 1);
+  bd->v         = v;
+  bd->scan_root = g_strdup(app->scan_root_utf8 ? app->scan_root_utf8 : "");
+
+  GCancellable *cancel = g_cancellable_new();
+  app->tv_build_cancel = cancel;
+
+  GTask *task = g_task_new(NULL, cancel, tv_build_done, app);
+  g_task_set_task_data(task, bd, NULL);
+  g_task_run_in_thread(task, tv_build_worker);
+  g_object_unref(task);
+}
+
 /* ---- Public: clear ---- */
 
 void da_tree_view_clear(AppState *app) {
   if (app == NULL) {
     return;
   }
+  /* Cancel any background build; the callback will free tv_held_scan. */
+  if (app->tv_build_cancel != NULL) {
+    g_cancellable_cancel(app->tv_build_cancel);
+    g_object_unref(app->tv_build_cancel);
+    app->tv_build_cancel = NULL;
+  }
   if (app->tree_view_store != NULL) {
     gtk_tree_store_clear(app->tree_view_store);
   }
   if (app->tree_view_model != NULL) {
     free(app->tree_view_model->entries);
+    g_free(app->tree_view_model->scan_root_str);
     free(app->tree_view_model);
     app->tree_view_model = NULL;
   }

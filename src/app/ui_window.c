@@ -16,7 +16,7 @@
 #include "ui_window.h"
 #include "volumes.h"
 #include "da_cell_renderer_progress.h"
-#include "file_tree_sort.h"
+#include "flat_list_model.h"
 #include "shell_icon.h"
 
 #if defined(G_OS_WIN32)
@@ -503,11 +503,11 @@ void da_ui_build(AppState *app) {
   gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(app->combo_display_max), "100000");
   gtk_combo_box_set_active(GTK_COMBO_BOX(app->combo_display_max), 3);
 
-  app->store = da_tree_store_new();
-  gtk_tree_view_set_model(GTK_TREE_VIEW(app->tree), GTK_TREE_MODEL(app->store));
+  app->flat_list_model = flat_list_model_new(app);
+  gtk_tree_view_set_model(GTK_TREE_VIEW(app->tree), GTK_TREE_MODEL(app->flat_list_model));
   gtk_tree_selection_set_mode(gtk_tree_view_get_selection(GTK_TREE_VIEW(app->tree)),
                               GTK_SELECTION_MULTIPLE);
-  g_object_unref(app->store);
+  g_object_unref(app->flat_list_model);
 
   const char *titles[] = {"File Name", "Path", "% of used space", "Size", "Allocated", "Modified",
                           "Dup Count", "Dup Size", "Attributes"};
@@ -532,7 +532,10 @@ void da_ui_build(AppState *app) {
                        cell_bg);
   }
 
-  da_file_tree_install_sorting(GTK_TREE_VIEW(app->tree), app->store, app);
+  /* Sorting is handled internally by FlatListModel via GtkTreeSortable.
+   * fixed_height_mode is safe with children as long as all rows (parent and
+   * child) use the same cell renderers at the same font size — which they do. */
+  gtk_tree_view_set_fixed_height_mode(GTK_TREE_VIEW(app->tree), TRUE);
 
   da_setup_tree_view(app);
 

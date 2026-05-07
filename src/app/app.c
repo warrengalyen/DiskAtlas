@@ -49,7 +49,6 @@ int diskatlas_app_run(int argc, char **argv) {
   g_object_unref(app->gtk_app);
   free(app->master_indices);
   free(app->filtered_indices);
-  free(app->dup_group_seen);
   g_free(app->scan_root_utf8);
   free(app);
   return status;

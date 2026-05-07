@@ -11,6 +11,9 @@
 /** Opaque tree-view model (defined in tree_view_model.c). */
 typedef struct DaTreeViewModel DaTreeViewModel;
 
+/** Forward declaration — full type in flat_list_model.h. */
+typedef struct _FlatListModel FlatListModel;
+
 #define DA_COL_COUNT 9
 /** String column index: formatted allocated size (matches file list `titles` / model column 4). */
 #define DA_COL_ALLOCATED 4
@@ -44,7 +47,8 @@ typedef struct AppState {
   /** Centered caption above treemap (“Top level: …”). */
   GtkWidget *treemap_panel_title;
   GtkWidget *treemap;
-  GtkTreeStore *store;
+  /** Flat custom GtkTreeModel for the file-view list. */
+  FlatListModel *flat_list_model;
   GtkWidget *main_notebook;
   GtkWidget *status_label_left;
   GtkWidget *status_label_center;
@@ -64,13 +68,16 @@ typedef struct AppState {
   GtkTreeStore *tree_view_store;
   DaTreeViewModel *tree_view_model;
   gboolean tree_view_populated;
+  /** GCancellable for the background tree-view build GTask; NULL when idle. */
+  GCancellable *tv_build_cancel;
+  /** Scan kept alive while the background tree-view build worker is running. */
+  scan_result_t *tv_held_scan;
 
   scan_result_t *scan;
   guint timer_scan;
   guint timer_fill;
   guint timer_filter;
   guint timer_search;
-  guint timer_tree;
 
   gint64 scan_start_us;
   double last_scan_elapsed_s;
@@ -91,13 +98,8 @@ typedef struct AppState {
   gboolean filter_build_running;
   size_t populate_total;
   gboolean list_populated;
-  /** TRUE when chunked GtkTreeView root insert is not running (see da_tree_begin_root_insert / timer_tree). */
-  gboolean file_view_tree_ready;
   /** Guard flag to prevent re-entrant A→B→A sync loops between treemap and tree_view. */
   gboolean treemap_tree_sync_in_progress;
-  size_t tree_insert_pos;
-  guint8 *dup_group_seen;
-  size_t dup_group_seen_cap;
   size_t display_max_entries;
 } AppState;
 
