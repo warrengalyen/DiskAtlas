@@ -5,6 +5,9 @@
 
 void scan_controller_attach(AppState *app);
 void scan_controller_detach(AppState *app);
+
+/** Start a new scan, or cancel the current one if still running (same as the Scan toolbar button). */
+void scan_controller_request_scan(AppState *app);
 void scan_controller_refresh_volume_labels(AppState *app);
 void scan_controller_sync_display_max_combo(AppState *app);
 

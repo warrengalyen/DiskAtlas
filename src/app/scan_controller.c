@@ -1138,9 +1138,10 @@ static void start_scan(AppState *app) {
   panel_scan_set_text(app, "Starting scan…");
 }
 
-static void on_scan_clicked(GtkButton *btn, gpointer user_data) {
-  (void)btn;
-  AppState *app = (AppState *)user_data;
+void scan_controller_request_scan(AppState *app) {
+  if (app == NULL) {
+    return;
+  }
   if (app->scan != NULL) {
     scan_progress_t pr = scan_get_progress(app->scan);
     if (!pr.is_complete) {
@@ -1150,6 +1151,11 @@ static void on_scan_clicked(GtkButton *btn, gpointer user_data) {
     }
   }
   start_scan(app);
+}
+
+static void on_scan_clicked(GtkButton *btn, gpointer user_data) {
+  (void)btn;
+  scan_controller_request_scan((AppState *)user_data);
 }
 
 static void on_show_folders_toggled(GtkToggleButton *btn, gpointer user_data) {

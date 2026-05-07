@@ -9,6 +9,9 @@ void da_scan_source_combo_setup(AppState *app);
 void da_scan_source_combo_rebuild(AppState *app);
 void da_scan_source_combo_on_changed(GtkComboBox *cb, gpointer user_data);
 
+/** Same folder dialog as choosing "<Select Folder...>" in the scan source combo. */
+void da_scan_source_combo_request_select_folder(AppState *app);
+
 /** Optional: silence GLib-GIO CRITICAL spam from GtkFileChooserNative/IFileDialog on Windows (GLib 2.84+).
  *  Safe to call multiple times; installs at most once. */
 void da_scan_source_install_gio_log_filter_once(void);

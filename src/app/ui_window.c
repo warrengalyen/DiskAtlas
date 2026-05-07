@@ -228,6 +228,16 @@ static void on_search_clear_clicked(GtkButton *btn, gpointer user_data) {
   }
 }
 
+static void on_file_menu_scan_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  scan_controller_request_scan((AppState *)user_data);
+}
+
+static void on_file_menu_select_folder_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  da_scan_source_combo_request_select_folder((AppState *)user_data);
+}
+
 static void pct_of_drive_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell, GtkTreeModel *model,
                                    GtkTreeIter *iter, gpointer user_data) {
   (void)user_data;
@@ -561,6 +571,19 @@ void da_ui_build(AppState *app) {
   app->restart_admin_btn = NULL;
   app->dont_show_again_check = NULL;
 #endif
+
+  {
+    GtkWidget *file_menu_scan = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_scan"));
+    if (file_menu_scan != NULL) {
+      g_signal_connect(file_menu_scan, "activate", G_CALLBACK(on_file_menu_scan_activate), app);
+    }
+  }
+  {
+    GtkWidget *file_menu_select_folder = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_select_folder"));
+    if (file_menu_select_folder != NULL) {
+      g_signal_connect(file_menu_select_folder, "activate", G_CALLBACK(on_file_menu_select_folder_activate), app);
+    }
+  }
 
   g_object_unref(builder);
 

@@ -231,6 +231,13 @@ static void run_select_folder_dialog(AppState *app) {
   gtk_native_dialog_destroy(GTK_NATIVE_DIALOG(native));
 }
 
+void da_scan_source_combo_request_select_folder(AppState *app) {
+  if (app == NULL || app->window == NULL || !GTK_IS_WINDOW(app->window)) {
+    return;
+  }
+  run_select_folder_dialog(app);
+}
+
 static void configure_open_file_chooser(GtkFileChooser *chooser, AppState *app, gboolean csv_mode) {
   GtkFileFilter *ff = gtk_file_filter_new();
   if (csv_mode) {
