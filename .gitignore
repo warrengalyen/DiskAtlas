@@ -3,3 +3,4 @@ bin/
 .vscode/
 *.log
 *.ui~
+*.ui#
