@@ -8,3 +8,4 @@
 void da_file_tree_install_sorting(GtkTreeView *tv, GtkTreeStore *store, AppState *app);
 
 #endif
+ 

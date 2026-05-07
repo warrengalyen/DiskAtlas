@@ -33,6 +33,7 @@ typedef struct da_file_id_info {
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <wchar.h>
 #include <wctype.h>
 
@@ -1371,7 +1372,251 @@ static DWORD WINAPI mft_parse_worker_main(LPVOID param) {
   return 0;
 }
 
-/* FIXME(ntfs-mft): Incomplete; keep in sync with scan_controller DISKATLAS_APP_ENABLE_NTFS_MFT. */
+static void mft_vol_close_if_open(HANDLE *volp) {
+  if (volp != NULL && *volp != NULL && *volp != INVALID_HANDLE_VALUE) {
+    CloseHandle(*volp);
+    *volp = INVALID_HANDLE_VALUE;
+  }
+}
+
+/**
+ * Shared MFT parse + emit: @a mft_buf_pre non-NULL = caller-owned buffer transferred here (freed after workers).
+ * If NULL, reads MFT via bulk_read / mmap from @a *vol_io (must be open when NULL).
+ */
+static bool mft_parse_emit_mft_common(
+    diskatlas_scan_result_t *r,
+    unsigned char *mft_buf_pre,
+    HANDLE *vol_io,
+    ntfs_run_list_t *runs,
+    uint64_t stream_total,
+    uint32_t record_size,
+    uint16_t bps,
+    uint64_t cluster_bytes,
+    uint64_t stream_base_vcn,
+    wchar_t *vol_path_full,
+    wchar_t *root_path_wide,
+    uint64_t root_mft_idx,
+    const scan_options_t *opts) {
+  size_t record_count = (size_t)(stream_total / (uint64_t)record_size);
+  uint64_t *parents = (uint64_t *)calloc(record_count, sizeof(uint64_t));
+  wchar_t **names = (wchar_t **)calloc(record_count, sizeof(wchar_t *));
+  unsigned char *valid = (unsigned char *)calloc(record_count, 1);
+  unsigned char *is_dir = (unsigned char *)calloc(record_count, 1);
+  uint64_t *sizes = (uint64_t *)calloc(record_count, sizeof(uint64_t));
+  uint64_t *mtimes = (uint64_t *)calloc(record_count, sizeof(uint64_t));
+  uint32_t *dosattrs = (uint32_t *)calloc(record_count, sizeof(uint32_t));
+  size_t *path_offs = (size_t *)malloc(record_count * sizeof(size_t));
+
+  if (!parents || !names || !valid || !is_dir || !sizes || !mtimes || !dosattrs || !path_offs) {
+    free(parents);
+    if (names) {
+      for (size_t i = 0; i < record_count; i++) {
+        free(names[i]);
+      }
+    }
+    free(names);
+    free(valid);
+    free(is_dir);
+    free(sizes);
+    free(mtimes);
+    free(dosattrs);
+    free(path_offs);
+    run_list_free(runs);
+    if (mft_buf_pre != NULL) {
+      free(mft_buf_pre);
+    }
+    mft_vol_close_if_open(vol_io);
+    return false;
+  }
+  memset(path_offs, 0xFF, record_count * sizeof(size_t));
+
+  unsigned char *mft_buf = mft_buf_pre;
+  mft_stream_mmap_t mft_mmap;
+  memset(&mft_mmap, 0, sizeof(mft_mmap));
+  int mmap_ok = 0;
+  if (mft_buf == NULL) {
+    HANDLE volh = (vol_io != NULL) ? *vol_io : INVALID_HANDLE_VALUE;
+    mft_buf = bulk_read_mft(volh, runs, cluster_bytes, (size_t)stream_total);
+    if (!mft_buf) {
+      mmap_ok = mft_mmap_try_build(&mft_mmap, volh, cluster_bytes, runs, stream_total) ? 1 : 0;
+    }
+  }
+
+  atomic_size_t next_idx;
+  atomic_init(&next_idx, 0);
+
+  mft_parse_shared_t psh;
+  memset(&psh, 0, sizeof(psh));
+  psh.r = r;
+  psh.next_idx = &next_idx;
+  psh.record_count = record_count;
+  psh.record_size = record_size;
+  psh.bps = bps;
+  psh.cluster_bytes = cluster_bytes;
+  psh.stream_base_vcn = stream_base_vcn;
+  psh.vol = (vol_io != NULL && *vol_io != INVALID_HANDLE_VALUE) ? *vol_io : INVALID_HANDLE_VALUE;
+  psh.runs = runs;
+  psh.mmap = &mft_mmap;
+  psh.use_mmap = mmap_ok;
+  psh.mft_buf = mft_buf;
+  psh.parents = parents;
+  psh.names = names;
+  psh.valid = valid;
+  psh.is_dir = is_dir;
+  psh.sizes = sizes;
+  psh.mtimes = mtimes;
+  psh.dosattrs = dosattrs;
+
+  unsigned tc = (unsigned)opts->io_threads;
+  if (tc == 0) {
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    tc = (unsigned)si.dwNumberOfProcessors;
+    if (tc > 16u) {
+      tc = 16u;
+    }
+    if (tc < 1u) {
+      tc = 1u;
+    }
+  }
+  if (record_count > 0u && tc > (unsigned)record_count) {
+    tc = (unsigned)record_count;
+  }
+  if (record_count < 512u && opts->io_threads == 0) {
+    tc = 1u;
+  }
+  if (tc < 1u) {
+    tc = 1u;
+  }
+
+  HANDLE *th = (HANDLE *)calloc(tc, sizeof(HANDLE));
+  if (th == NULL) {
+    free(mft_buf);
+    mft_mmap_destroy(&mft_mmap);
+    free(parents);
+    if (names) {
+      for (size_t i = 0; i < record_count; i++) {
+        free(names[i]);
+      }
+    }
+    free(names);
+    free(valid);
+    free(is_dir);
+    free(sizes);
+    free(mtimes);
+    free(dosattrs);
+    free(path_offs);
+    run_list_free(runs);
+    mft_vol_close_if_open(vol_io);
+    return false;
+  }
+  for (unsigned ti = 0; ti < tc; ti++) {
+    th[ti] = CreateThread(NULL, 0, mft_parse_worker_main, &psh, 0, NULL);
+    if (th[ti] == NULL) {
+      atomic_store_explicit(&r->cancel, 1, memory_order_release);
+      for (unsigned tj = 0; tj < ti; tj++) {
+        (void)WaitForSingleObject(th[tj], INFINITE);
+        CloseHandle(th[tj]);
+      }
+      free(th);
+      free(mft_buf);
+      mft_mmap_destroy(&mft_mmap);
+      free(parents);
+      for (size_t i = 0; i < record_count; i++) {
+        free(names[i]);
+      }
+      free(names);
+      free(valid);
+      free(is_dir);
+      free(sizes);
+      free(mtimes);
+      free(dosattrs);
+      free(path_offs);
+      run_list_free(runs);
+      mft_vol_close_if_open(vol_io);
+      return false;
+    }
+  }
+  (void)WaitForMultipleObjects((DWORD)tc, th, TRUE, INFINITE);
+  for (unsigned ti = 0; ti < tc; ti++) {
+    CloseHandle(th[ti]);
+  }
+  free(th);
+
+  free(mft_buf);
+  mft_mmap_destroy(&mft_mmap);
+
+  wchar_arena_t path_arena;
+  memset(&path_arena, 0, sizeof(path_arena));
+
+  atomic_store_explicit(&r->folders_recorded, 0, memory_order_relaxed);
+  atomic_store_explicit(&r->files_recorded, 0, memory_order_relaxed);
+
+  const uint32_t max_depth_req = opts->max_depth;
+  const bool include_hidden = (opts->flags & DISKATLAS_SCAN_OPTION_INCLUDE_HIDDEN) != 0;
+
+  for (size_t idx = 0; idx < record_count; idx++) {
+    if (!valid[idx]) {
+      continue;
+    }
+    size_t path_off = path_for_index((uint64_t)idx, path_offs, &path_arena, names, parents, valid,
+                                     record_count, vol_path_full, root_mft_idx, 0);
+    if (path_off == PATH_OFFS_NONE) {
+      continue;
+    }
+    const wchar_t *full = path_arena.buf + path_off;
+    if (ntfs_emit_skip_system_metadata_ci(full, vol_path_full)) {
+      continue;
+    }
+    if (path_equals_scan_root_ci(full, root_path_wide) ||
+        path_equals_scan_root_ci(full, vol_path_full)) {
+      continue;
+    }
+    if (!path_is_under_scan_root_ci(full, root_path_wide)) {
+      continue;
+    }
+    if (max_depth_req != 0) {
+      uint32_t dep = depth_below_scan_root(full, root_path_wide);
+      if (dep == UINT32_MAX || dep > max_depth_req) {
+        continue;
+      }
+    }
+    if (!include_hidden) {
+      uint32_t a = dosattrs[idx];
+      DWORD skip_mask = FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM;
+      if (is_dir[idx] != 0) {
+        skip_mask = FILE_ATTRIBUTE_HIDDEN;
+      }
+      if ((a & skip_mask) != 0) {
+        continue;
+      }
+    }
+
+    bool dir_f = is_dir[idx] != 0;
+    if (!diskatlas_win32_record_entry_metadata(r, full, sizes[idx], mtimes[idx], dosattrs[idx],
+                                               dir_f)) {
+      continue;
+    }
+  }
+
+  free(parents);
+  for (size_t i = 0; i < record_count; i++) {
+    free(names[i]);
+  }
+  free(names);
+  free(path_offs);
+  free(path_arena.buf);
+  free(valid);
+  free(is_dir);
+  free(sizes);
+  free(mtimes);
+  free(dosattrs);
+  run_list_free(runs);
+  mft_vol_close_if_open(vol_io);
+
+  return true;
+}
+
 bool diskatlas_scan_ntfs_mft(diskatlas_scan_result_t *r, wchar_t *root_path_wide,
                              const scan_options_t *opts) {
   if (!r || !root_path_wide || !opts) {
@@ -1552,225 +1797,779 @@ bool diskatlas_scan_ntfs_mft(diskatlas_scan_result_t *r, wchar_t *root_path_wide
     return false;
   }
 
-  size_t record_count = (size_t)(stream_total / (uint64_t)record_size);
-  uint64_t *parents = (uint64_t *)calloc(record_count, sizeof(uint64_t));
-  wchar_t **names = (wchar_t **)calloc(record_count, sizeof(wchar_t *));
-  unsigned char *valid = (unsigned char *)calloc(record_count, 1);
-  unsigned char *is_dir = (unsigned char *)calloc(record_count, 1);
-  uint64_t *sizes = (uint64_t *)calloc(record_count, sizeof(uint64_t));
-  uint64_t *mtimes = (uint64_t *)calloc(record_count, sizeof(uint64_t));
-  uint32_t *dosattrs = (uint32_t *)calloc(record_count, sizeof(uint32_t));
-  /* Offset-based path cache: PATH_OFFS_NONE means "not yet resolved". */
-  size_t *path_offs = (size_t *)malloc(record_count * sizeof(size_t));
-
-  if (!parents || !names || !valid || !is_dir || !sizes || !mtimes || !dosattrs || !path_offs) {
-    free(parents);
-    if (names) {
-      for (size_t i = 0; i < record_count; i++) {
-        free(names[i]);
-      }
-    }
-    free(names);
-    free(valid);
-    free(is_dir);
-    free(sizes);
-    free(mtimes);
-    free(dosattrs);
-    free(path_offs);
-    run_list_free(&runs);
-    CloseHandle(vol);
+  if (!mft_parse_emit_mft_common(r, NULL, &vol, &runs, stream_total, record_size, bps, cluster_bytes,
+                                 stream_base_vcn, vol_path_full, root_path_wide, root_mft_idx, opts)) {
     return false;
   }
-  memset(path_offs, 0xFF, record_count * sizeof(size_t)); /* initialise all to PATH_OFFS_NONE */
+  return true;
+}
 
-  /* Try to pre-read the whole MFT into one contiguous buffer (fastest path).
-   * Fall back to memory-mapped I/O, then to per-record stream reads. */
-  unsigned char *mft_buf = bulk_read_mft(vol, &runs, cluster_bytes, (size_t)stream_total);
-
-  mft_stream_mmap_t mft_mmap;
-  memset(&mft_mmap, 0, sizeof(mft_mmap));
-  int mmap_ok = 0;
-  if (!mft_buf) {
-    mmap_ok = mft_mmap_try_build(&mft_mmap, vol, cluster_bytes, &runs, stream_total) ? 1 : 0;
-  }
-
-  atomic_size_t next_idx;
-  atomic_init(&next_idx, 0);
-
-  mft_parse_shared_t psh;
-  memset(&psh, 0, sizeof(psh));
-  psh.r = r;
-  psh.next_idx = &next_idx;
-  psh.record_count = record_count;
-  psh.record_size = record_size;
-  psh.bps = bps;
-  psh.cluster_bytes = cluster_bytes;
-  psh.stream_base_vcn = stream_base_vcn;
-  psh.vol = vol;
-  psh.runs = &runs;
-  psh.mmap = &mft_mmap;
-  psh.use_mmap = mmap_ok;
-  psh.mft_buf = mft_buf;
-  psh.parents = parents;
-  psh.names = names;
-  psh.valid = valid;
-  psh.is_dir = is_dir;
-  psh.sizes = sizes;
-  psh.mtimes = mtimes;
-  psh.dosattrs = dosattrs;
-
-  unsigned tc = (unsigned)opts->io_threads;
-  if (tc == 0) {
-    SYSTEM_INFO si;
-    GetSystemInfo(&si);
-    tc = (unsigned)si.dwNumberOfProcessors;
-    if (tc > 16u) {
-      tc = 16u;
+static int mft_dump_stream_runs_to_dst(HANDLE vol, HANDLE dst, const ntfs_run_list_t *runs, uint64_t cluster_bytes,
+                                       uint64_t total_bytes, char *errbuf, size_t errlen,
+                                       void (*on_progress)(void *user, int pct, uint64_t done, uint64_t total),
+                                       void *user) {
+  enum { k_buf = 1 << 20 };
+  unsigned char *buf = (unsigned char *)malloc(k_buf);
+  if (buf == NULL) {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "out of memory");
     }
-    if (tc < 1u) {
-      tc = 1u;
+    return -1;
+  }
+  uint64_t dst_off = 0;
+  for (size_t ri = 0; ri < runs->len; ri++) {
+    uint64_t run_bytes = (runs->segs[ri].vcn_hi_excl - runs->segs[ri].vcn_lo) * cluster_bytes;
+    if (dst_off + run_bytes > total_bytes) {
+      run_bytes = total_bytes - dst_off;
     }
-  }
-  if (record_count > 0u && tc > (unsigned)record_count) {
-    tc = (unsigned)record_count;
-  }
-  if (record_count < 512u && opts->io_threads == 0) {
-    tc = 1u;
-  }
-  if (tc < 1u) {
-    tc = 1u;
-  }
-
-  HANDLE *th = (HANDLE *)calloc(tc, sizeof(HANDLE));
-  if (th == NULL) {
-    free(mft_buf);
-    mft_mmap_destroy(&mft_mmap);
-    free(parents);
-    if (names) {
-      for (size_t i = 0; i < record_count; i++) {
-        free(names[i]);
+    if (run_bytes == 0) {
+      break;
+    }
+    uint64_t pos = 0;
+    while (pos < run_bytes) {
+      uint64_t n64 = run_bytes - pos;
+      if (n64 > (uint64_t)k_buf) {
+        n64 = (uint64_t)k_buf;
+      }
+      if (runs->segs[ri].lcn_start < 0) {
+        memset(buf, 0, (size_t)n64);
+      } else {
+        uint64_t vol_off = (uint64_t)runs->segs[ri].lcn_start * cluster_bytes + pos;
+        if (!vol_read_large(vol, vol_off, buf, n64)) {
+          if (errbuf != NULL && errlen > 0) {
+            (void)snprintf(errbuf, errlen, "volume read failed (error %lu)", (unsigned long)GetLastError());
+          }
+          free(buf);
+          return -1;
+        }
+      }
+      DWORD n = (DWORD)n64;
+      DWORD wrote = 0;
+      if (!WriteFile(dst, buf, n, &wrote, NULL) || wrote != n) {
+        if (errbuf != NULL && errlen > 0) {
+          (void)snprintf(errbuf, errlen, "write failed (error %lu)", (unsigned long)GetLastError());
+        }
+        free(buf);
+        return -1;
+      }
+      dst_off += (uint64_t)n64;
+      pos += n64;
+      if (on_progress != NULL && total_bytes > 0) {
+        int pct = (int)((dst_off * 100ull) / total_bytes);
+        if (pct > 100) {
+          pct = 100;
+        }
+        on_progress(user, pct, dst_off, total_bytes);
+      }
+      if (dst_off >= total_bytes) {
+        break;
       }
     }
-    free(names);
-    free(valid);
-    free(is_dir);
-    free(sizes);
-    free(mtimes);
-    free(dosattrs);
-    free(path_offs);
-    run_list_free(&runs);
+    if (dst_off >= total_bytes) {
+      break;
+    }
+  }
+  free(buf);
+  return 0;
+}
+
+static int mft_dump_via_volume_fallback(wchar_t dl, const wchar_t *destw, char *errbuf, size_t errlen,
+                                        void (*on_progress)(void *user, int pct, uint64_t done, uint64_t total),
+                                        void *user) {
+  wchar_t dev[16];
+  dev[0] = L'\\';
+  dev[1] = L'\\';
+  dev[2] = L'.';
+  dev[3] = L'\\';
+  dev[4] = dl;
+  dev[5] = L':';
+  dev[6] = L'\0';
+
+  HANDLE vol = CreateFileW(dev, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+  if (vol == INVALID_HANDLE_VALUE) {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "cannot open volume for MFT dump (error %lu)",
+                     (unsigned long)GetLastError());
+    }
+    return -1;
+  }
+
+  unsigned char boot[4096];
+  DWORD bgot = 0;
+  if (!ReadFile(vol, boot, sizeof(boot), &bgot, NULL) || bgot < 512u) {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "cannot read volume boot sector");
+    }
     CloseHandle(vol);
-    return false;
+    return -1;
   }
-  for (unsigned ti = 0; ti < tc; ti++) {
-    th[ti] = CreateThread(NULL, 0, mft_parse_worker_main, &psh, 0, NULL);
-    if (th[ti] == NULL) {
-      atomic_store_explicit(&r->cancel, 1, memory_order_release);
-      for (unsigned tj = 0; tj < ti; tj++) {
-        (void)WaitForSingleObject(th[tj], INFINITE);
-        CloseHandle(th[tj]);
+
+  if (memcmp(boot + 3, k_ntfs_oem, sizeof(k_ntfs_oem)) != 0) {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "not an NTFS volume");
+    }
+    CloseHandle(vol);
+    return -1;
+  }
+
+  uint16_t bps = read_u16_le(boot + NTFS_BOOT_BPS_OFF);
+  unsigned char spc_u = boot[NTFS_BOOT_SPC_OFF];
+  if (bps == 0 || (bps % 512u) != 0 || spc_u == 0 || !is_pow2_u8(spc_u)) {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "invalid NTFS boot parameters");
+    }
+    CloseHandle(vol);
+    return -1;
+  }
+
+  uint64_t cluster_bytes = (uint64_t)bps * (uint64_t)spc_u;
+  int64_t mft_lcn_i = read_i64_le(boot + NTFS_BOOT_MFT_LCN_OFF);
+  if (mft_lcn_i < 0) {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "invalid MFT LCN in boot sector");
+    }
+    CloseHandle(vol);
+    return -1;
+  }
+
+  uint64_t mft_vol_off = (uint64_t)mft_lcn_i * cluster_bytes;
+
+  int8_t cpr = (int8_t)boot[0x40];
+  uint32_t record_size = 1024;
+  if (cpr < 0) {
+    int exp = -(int)cpr;
+    if (exp >= 1 && exp <= 31) {
+      record_size = 1u << (unsigned)exp;
+    }
+  } else if (cpr > 0) {
+    uint64_t rs = (uint64_t)(unsigned char)cpr * cluster_bytes;
+    if (rs >= 512 && rs <= (uint64_t)(1024 * 1024)) {
+      record_size = (uint32_t)rs;
+    }
+  }
+
+  uint64_t mft_valid_len_ioctl = 0;
+  NTFS_VOLUME_DATA_BUFFER vol_data;
+  DWORD vol_data_br = 0;
+  if (DeviceIoControl(vol, FSCTL_GET_NTFS_VOLUME_DATA, NULL, 0, &vol_data, sizeof(vol_data), &vol_data_br, NULL) &&
+      vol_data_br >= sizeof(NTFS_VOLUME_DATA_BUFFER)) {
+    if (vol_data.BytesPerSector >= 512u && vol_data.BytesPerSector <= 4096u &&
+        (vol_data.BytesPerSector % 512u) == 0u) {
+      bps = (uint16_t)vol_data.BytesPerSector;
+    }
+    if (vol_data.BytesPerCluster > 0u) {
+      cluster_bytes = (uint64_t)vol_data.BytesPerCluster;
+    }
+    if (vol_data.BytesPerFileRecordSegment >= 512u &&
+        vol_data.BytesPerFileRecordSegment <= (1024u * 1024u)) {
+      record_size = vol_data.BytesPerFileRecordSegment;
+    }
+    mft_vol_off = (uint64_t)vol_data.MftStartLcn.QuadPart * cluster_bytes;
+    mft_valid_len_ioctl = (uint64_t)vol_data.MftValidDataLength.QuadPart;
+  }
+
+  ntfs_run_list_t runs = {0};
+  uint64_t stream_total = 0;
+  uint64_t stream_base_vcn = 0;
+
+  if (try_load_mft_runs_via_special_file(dl, &runs, &stream_total)) {
+    if (mft_valid_len_ioctl > stream_total) {
+      stream_total = mft_valid_len_ioctl;
+    }
+    stream_base_vcn = 0;
+  } else {
+    unsigned char *rec0 = (unsigned char *)malloc(record_size);
+    if (!rec0) {
+      if (errbuf != NULL && errlen > 0) {
+        (void)snprintf(errbuf, errlen, "out of memory");
       }
-      free(th);
-      free(mft_buf);
-      mft_mmap_destroy(&mft_mmap);
-      free(parents);
-      for (size_t i = 0; i < record_count; i++) {
-        free(names[i]);
-      }
-      free(names);
-      free(valid);
-      free(is_dir);
-      free(sizes);
-      free(mtimes);
-      free(dosattrs);
-      free(path_offs);
-      run_list_free(&runs);
       CloseHandle(vol);
+      return -1;
+    }
+    if (!vol_read_at(vol, mft_vol_off, rec0, record_size)) {
+      free(rec0);
+      if (errbuf != NULL && errlen > 0) {
+        (void)snprintf(errbuf, errlen, "cannot read $MFT record 0 from volume");
+      }
+      CloseHandle(vol);
+      return -1;
+    }
+    if (!ntfs_fixup_record(rec0, record_size, bps)) {
+      free(rec0);
+      if (errbuf != NULL && errlen > 0) {
+        (void)snprintf(errbuf, errlen, "invalid $MFT record 0");
+      }
+      CloseHandle(vol);
+      return -1;
+    }
+    if (read_u32_le(rec0) != NTFS_MAGIC_FILE) {
+      free(rec0);
+      if (errbuf != NULL && errlen > 0) {
+        (void)snprintf(errbuf, errlen, "bad $MFT record 0 signature");
+      }
+      CloseHandle(vol);
+      return -1;
+    }
+
+    uint16_t run_rel = 0;
+    uint32_t attr_len = 0;
+    const unsigned char *adata = find_best_unnamed_nonresident_data(rec0, record_size, &run_rel, &attr_len);
+    if (!adata || run_rel >= attr_len) {
+      free(rec0);
+      if (errbuf != NULL && errlen > 0) {
+        (void)snprintf(errbuf, errlen, "no $MFT $DATA attribute");
+      }
+      CloseHandle(vol);
+      return -1;
+    }
+
+    int64_t lowest_vcn = read_i64_le(adata + 0x10);
+    int64_t highest_vcn = read_i64_le(adata + 0x18);
+    uint64_t attr_allocated_size = read_u64_le(adata + 0x28);
+    uint64_t attr_real_size = read_u64_le(adata + 0x30);
+    uint64_t attr_initialized_size = read_u64_le(adata + 0x38);
+    (void)highest_vcn;
+
+    const unsigned char *runs_buf = adata + run_rel;
+    size_t runs_max = attr_len - run_rel;
+    if (!ntfs_decode_run_list(runs_buf, runs_max, lowest_vcn, highest_vcn, &runs)) {
+      free(rec0);
+      run_list_free(&runs);
+      if (errbuf != NULL && errlen > 0) {
+        (void)snprintf(errbuf, errlen, "bad $MFT data run list");
+      }
+      CloseHandle(vol);
+      return -1;
+    }
+    free(rec0);
+
+    uint64_t run_stream_bytes = ntfs_run_list_stream_total_bytes(&runs, cluster_bytes);
+    stream_total = attr_real_size;
+    if (attr_initialized_size > stream_total) {
+      stream_total = attr_initialized_size;
+    }
+    if (attr_allocated_size > stream_total) {
+      stream_total = attr_allocated_size;
+    }
+    if (run_stream_bytes > stream_total) {
+      stream_total = run_stream_bytes;
+    }
+    if (mft_valid_len_ioctl > stream_total) {
+      stream_total = mft_valid_len_ioctl;
+    }
+
+    if (lowest_vcn >= 0) {
+      stream_base_vcn = (uint64_t)lowest_vcn;
+    }
+  }
+
+  if (stream_total == 0 || record_size == 0 ||
+      stream_total / (uint64_t)record_size > (uint64_t)SIZE_MAX / 8u) {
+    run_list_free(&runs);
+    CloseHandle(vol);
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "invalid MFT stream size");
+    }
+    return -1;
+  }
+  (void)stream_base_vcn;
+
+  HANDLE dst =
+      CreateFileW(destw, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (dst == INVALID_HANDLE_VALUE) {
+    run_list_free(&runs);
+    CloseHandle(vol);
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "cannot create output file (error %lu)", (unsigned long)GetLastError());
+    }
+    return -1;
+  }
+
+  if (on_progress != NULL) {
+    on_progress(user, 0, 0, stream_total);
+  }
+
+  int st = mft_dump_stream_runs_to_dst(vol, dst, &runs, cluster_bytes, stream_total, errbuf, errlen, on_progress, user);
+  run_list_free(&runs);
+  CloseHandle(dst);
+  CloseHandle(vol);
+  if (st != 0) {
+    return st;
+  }
+  if (on_progress != NULL && stream_total > 0) {
+    on_progress(user, 100, stream_total, stream_total);
+  }
+  return 0;
+}
+
+static wchar_t *da_mft_utf8_to_wide_alloc(const char *utf8) {
+  DWORD conv = MB_ERR_INVALID_CHARS;
+  int n = MultiByteToWideChar(CP_UTF8, conv, utf8, -1, NULL, 0);
+  if (n <= 0) {
+    conv = 0;
+    n = MultiByteToWideChar(CP_UTF8, conv, utf8, -1, NULL, 0);
+  }
+  if (n <= 0) {
+    return NULL;
+  }
+  wchar_t *w = (wchar_t *)malloc((size_t)n * sizeof(wchar_t));
+  if (w == NULL) {
+    return NULL;
+  }
+  if (MultiByteToWideChar(CP_UTF8, conv, utf8, -1, w, n) <= 0) {
+    free(w);
+    return NULL;
+  }
+  return w;
+}
+
+static bool da_mft_read_all_bytes(HANDLE h, unsigned char *buf, uint64_t total) {
+  uint64_t got_total = 0;
+  while (got_total < total) {
+    uint64_t remain = total - got_total;
+    DWORD chunk = (DWORD)(remain > (16ULL * 1024 * 1024) ? (16ULL * 1024 * 1024) : remain);
+    DWORD got = 0;
+    if (!ReadFile(h, buf + got_total, chunk, &got, NULL) || got == 0) {
       return false;
     }
+    got_total += (uint64_t)got;
   }
-  (void)WaitForMultipleObjects((DWORD)tc, th, TRUE, INFINITE);
-  for (unsigned ti = 0; ti < tc; ti++) {
-    CloseHandle(th[ti]);
+  return true;
+}
+
+DISKATLAS_API scan_result_t *diskatlas_scan_import_raw_mft_file(const char *mft_dump_utf8,
+                                                                const char *root_hint_utf8,
+                                                                const scan_options_t *opts_in,
+                                                                char *errbuf, size_t errbuf_len) {
+  if (errbuf != NULL && errbuf_len > 0) {
+    errbuf[0] = '\0';
   }
-  free(th);
-
-  /* Bulk buffer and mmap are no longer needed after workers finish. */
-  free(mft_buf);
-  mft_mmap_destroy(&mft_mmap);
-
-  wchar_arena_t path_arena;
-  memset(&path_arena, 0, sizeof(path_arena));
-
-  /* Workers updated the progress counters for live display; reset them so the
-   * emit loop's diskatlas_win32_record_entry_metadata writes accurate final values. */
-  atomic_store_explicit(&r->folders_recorded, 0, memory_order_relaxed);
-  atomic_store_explicit(&r->files_recorded, 0, memory_order_relaxed);
-
-  const uint32_t max_depth_req = opts->max_depth;
-  const bool include_hidden = (opts->flags & DISKATLAS_SCAN_OPTION_INCLUDE_HIDDEN) != 0;
-
-  for (size_t idx = 0; idx < record_count; idx++) {
-    if (!valid[idx]) {
-      continue;
+  if (mft_dump_utf8 == NULL || mft_dump_utf8[0] == '\0' || root_hint_utf8 == NULL || root_hint_utf8[0] == '\0') {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "invalid arguments");
     }
-    size_t path_off = path_for_index((uint64_t)idx, path_offs, &path_arena, names, parents, valid,
-                                     record_count, vol_path_full, root_mft_idx, 0);
-    if (path_off == PATH_OFFS_NONE) {
-      continue;
-    }
-    const wchar_t *full = path_arena.buf + path_off;
-    if (ntfs_emit_skip_system_metadata_ci(full, vol_path_full)) {
-      continue;
-    }
-    if (path_equals_scan_root_ci(full, root_path_wide) ||
-        path_equals_scan_root_ci(full, vol_path_full)) {
-      continue;
-    }
-    if (!path_is_under_scan_root_ci(full, root_path_wide)) {
-      continue;
-    }
-    if (max_depth_req != 0) {
-      uint32_t dep = depth_below_scan_root(full, root_path_wide);
-      if (dep == UINT32_MAX || dep > max_depth_req) {
-        continue;
-      }
-    }
-    if (!include_hidden) {
-      uint32_t a = dosattrs[idx];
-      DWORD skip_mask = FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM;
-      if (is_dir[idx] != 0) {
-        skip_mask = FILE_ATTRIBUTE_HIDDEN;
-      }
-      if ((a & skip_mask) != 0) {
-        continue;
-      }
-    }
-
-    bool dir_f = is_dir[idx] != 0;
-    if (!diskatlas_win32_record_entry_metadata(r, full, sizes[idx], mtimes[idx], dosattrs[idx],
-                                               dir_f)) {
-      /* OOM or path UTF-8 conversion failure — skip this entry; keep scanning others. */
-      continue;
-    }
+    return NULL;
   }
 
-  free(parents);
-  for (size_t i = 0; i < record_count; i++) {
-    free(names[i]);
+  scan_options_t def_opts;
+  memset(&def_opts, 0, sizeof(def_opts));
+  def_opts.struct_version = DISKATLAS_SCAN_OPTIONS_STRUCT_VERSION;
+  def_opts.flags = DISKATLAS_SCAN_OPTION_DUPLICATE_USE_MTIME;
+  const scan_options_t *opts = opts_in != NULL ? opts_in : &def_opts;
+  if (opts->struct_version != DISKATLAS_SCAN_OPTIONS_STRUCT_VERSION) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "unsupported scan_options_t version");
+    }
+    return NULL;
   }
-  free(names);
-  free(path_offs);
-  free(path_arena.buf);
-  free(valid);
-  free(is_dir);
-  free(sizes);
-  free(mtimes);
-  free(dosattrs);
-  run_list_free(&runs);
+
+  wchar_t *root_path_wide = da_mft_utf8_to_wide_alloc(root_hint_utf8);
+  if (root_path_wide == NULL) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "invalid root path encoding");
+    }
+    return NULL;
+  }
+
+  wchar_t vol_path_full[MAX_PATH + 4];
+  if (!GetVolumePathNameW(root_path_wide, vol_path_full, MAX_PATH)) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "GetVolumePathNameW failed (error %lu)",
+                     (unsigned long)GetLastError());
+    }
+    free(root_path_wide);
+    return NULL;
+  }
+
+  if (vol_path_full[0] == L'\0' || vol_path_full[1] != L':' || vol_path_full[2] != L'\\') {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "could not resolve NTFS volume root");
+    }
+    free(root_path_wide);
+    return NULL;
+  }
+
+  uint64_t root_mft_idx = ntfs_volume_root_mft_index(vol_path_full);
+
+  wchar_t dev[16];
+  dev[0] = L'\\';
+  dev[1] = L'\\';
+  dev[2] = L'.';
+  dev[3] = L'\\';
+  dev[4] = vol_path_full[0];
+  dev[5] = L':';
+  dev[6] = L'\0';
+
+  HANDLE vol = CreateFileW(dev, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+  if (vol == INVALID_HANDLE_VALUE) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "cannot open volume (error %lu)", (unsigned long)GetLastError());
+    }
+    free(root_path_wide);
+    return NULL;
+  }
+
+  unsigned char boot[4096];
+  DWORD bgot = 0;
+  if (!ReadFile(vol, boot, sizeof(boot), &bgot, NULL) || bgot < 512u) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "cannot read volume boot sector");
+    }
+    CloseHandle(vol);
+    free(root_path_wide);
+    return NULL;
+  }
+
+  if (memcmp(boot + 3, k_ntfs_oem, sizeof(k_ntfs_oem)) != 0) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "not an NTFS volume");
+    }
+    CloseHandle(vol);
+    free(root_path_wide);
+    return NULL;
+  }
+
+  uint16_t bps = read_u16_le(boot + NTFS_BOOT_BPS_OFF);
+  unsigned char spc_u = boot[NTFS_BOOT_SPC_OFF];
+  if (bps == 0 || (bps % 512u) != 0 || spc_u == 0 || !is_pow2_u8(spc_u)) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "invalid NTFS boot parameters");
+    }
+    CloseHandle(vol);
+    free(root_path_wide);
+    return NULL;
+  }
+
+  uint64_t cluster_bytes = (uint64_t)bps * (uint64_t)spc_u;
+
+  int8_t cpr = (int8_t)boot[0x40];
+  uint32_t record_size = 1024;
+  if (cpr < 0) {
+    int exp = -(int)cpr;
+    if (exp >= 1 && exp <= 31) {
+      record_size = 1u << (unsigned)exp;
+    }
+  } else if (cpr > 0) {
+    uint64_t rs = (uint64_t)(unsigned char)cpr * cluster_bytes;
+    if (rs >= 512 && rs <= (uint64_t)(1024 * 1024)) {
+      record_size = (uint32_t)rs;
+    }
+  }
+
+  NTFS_VOLUME_DATA_BUFFER vol_data;
+  DWORD vol_data_br = 0;
+  if (DeviceIoControl(vol, FSCTL_GET_NTFS_VOLUME_DATA, NULL, 0, &vol_data, sizeof(vol_data), &vol_data_br, NULL) &&
+      vol_data_br >= sizeof(NTFS_VOLUME_DATA_BUFFER)) {
+    if (vol_data.BytesPerSector >= 512u && vol_data.BytesPerSector <= 4096u &&
+        (vol_data.BytesPerSector % 512u) == 0u) {
+      bps = (uint16_t)vol_data.BytesPerSector;
+    }
+    if (vol_data.BytesPerCluster > 0u) {
+      cluster_bytes = (uint64_t)vol_data.BytesPerCluster;
+    }
+    if (vol_data.BytesPerFileRecordSegment >= 512u &&
+        vol_data.BytesPerFileRecordSegment <= (1024u * 1024u)) {
+      record_size = vol_data.BytesPerFileRecordSegment;
+    }
+  }
+
   CloseHandle(vol);
 
-  return true;
+  wchar_t *dump_w = da_mft_utf8_to_wide_alloc(mft_dump_utf8);
+  if (dump_w == NULL) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "invalid dump path encoding");
+    }
+    free(root_path_wide);
+    return NULL;
+  }
+
+  HANDLE fh = CreateFileW(dump_w, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                          OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+  free(dump_w);
+  if (fh == INVALID_HANDLE_VALUE) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "cannot open dump file (error %lu)", (unsigned long)GetLastError());
+    }
+    free(root_path_wide);
+    return NULL;
+  }
+
+  LARGE_INTEGER fsz = {{0}};
+  if (!GetFileSizeEx(fh, &fsz)) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "GetFileSizeEx failed (error %lu)", (unsigned long)GetLastError());
+    }
+    CloseHandle(fh);
+    free(root_path_wide);
+    return NULL;
+  }
+  uint64_t file_bytes = (uint64_t)fsz.QuadPart;
+  if (file_bytes > 1024ULL * 1024 * 1024) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "MFT dump exceeds 1 GiB limit");
+    }
+    CloseHandle(fh);
+    free(root_path_wide);
+    return NULL;
+  }
+  if (record_size == 0 || file_bytes < (uint64_t)record_size) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "dump file too small for NTFS record size (%u bytes)", (unsigned)record_size);
+    }
+    CloseHandle(fh);
+    free(root_path_wide);
+    return NULL;
+  }
+
+  uint64_t stream_total = file_bytes - (file_bytes % (uint64_t)record_size);
+  if (stream_total == 0 || stream_total / (uint64_t)record_size > (uint64_t)SIZE_MAX / 8u) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "invalid MFT dump size");
+    }
+    CloseHandle(fh);
+    free(root_path_wide);
+    return NULL;
+  }
+
+  unsigned char *mft_buf = (unsigned char *)malloc((size_t)stream_total);
+  if (mft_buf == NULL) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "out of memory for MFT buffer");
+    }
+    CloseHandle(fh);
+    free(root_path_wide);
+    return NULL;
+  }
+
+  if (!da_mft_read_all_bytes(fh, mft_buf, stream_total)) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "read dump failed (error %lu)", (unsigned long)GetLastError());
+    }
+    free(mft_buf);
+    CloseHandle(fh);
+    free(root_path_wide);
+    return NULL;
+  }
+  CloseHandle(fh);
+
+  unsigned char *probe = (unsigned char *)malloc((size_t)record_size);
+  if (probe == NULL) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "out of memory");
+    }
+    free(mft_buf);
+    free(root_path_wide);
+    return NULL;
+  }
+  memcpy(probe, mft_buf, (size_t)record_size);
+  if (!ntfs_fixup_record(probe, record_size, bps) || read_u32_le(probe) != NTFS_MAGIC_FILE) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "dump does not look like a raw NTFS $MFT (bad first record)");
+    }
+    free(probe);
+    free(mft_buf);
+    free(root_path_wide);
+    return NULL;
+  }
+  free(probe);
+
+  diskatlas_scan_result_t *r = (diskatlas_scan_result_t *)calloc(1, sizeof(diskatlas_scan_result_t));
+  if (r == NULL) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "out of memory");
+    }
+    free(mft_buf);
+    free(root_path_wide);
+    return NULL;
+  }
+
+  r->options_copy = *opts;
+  r->vol_cluster_bytes = cluster_bytes;
+
+  ntfs_run_list_t runs = {0};
+  if (!mft_parse_emit_mft_common(r, mft_buf, NULL, &runs, stream_total, record_size, bps, cluster_bytes, 0,
+                                 vol_path_full, root_path_wide, root_mft_idx, opts)) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "MFT parse failed");
+    }
+    diskatlas_impl_free_heap(r);
+    free(r);
+    free(root_path_wide);
+    return NULL;
+  }
+  free(root_path_wide);
+
+  diskatlas_finalize_paths(r);
+
+  if (diskatlas_compute_duplicate_clusters(r, r->options_copy.flags) != 0) {
+    if (errbuf != NULL && errbuf_len > 0) {
+      (void)snprintf(errbuf, errbuf_len, "duplicate index build failed");
+    }
+    diskatlas_impl_free_heap(r);
+    free(r);
+    return NULL;
+  }
+
+  atomic_store_explicit(&r->complete, 1u, memory_order_release);
+  return (scan_result_t *)r;
+}
+
+DISKATLAS_API int diskatlas_win32_dump_mft_file(const char *volume_root_utf8, const char *dest_utf8,
+                                                char *errbuf, size_t errlen,
+                                                void (*on_progress)(void *user, int pct, uint64_t done,
+                                                                    uint64_t total),
+                                                void *user) {
+  if (errbuf != NULL && errlen > 0) {
+    errbuf[0] = '\0';
+  }
+  if (volume_root_utf8 == NULL || dest_utf8 == NULL || dest_utf8[0] == '\0') {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "invalid arguments");
+    }
+    return -1;
+  }
+  const char *p = volume_root_utf8;
+  while (*p == ' ' || *p == '\t') {
+    p++;
+  }
+  if (!((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) || p[1] != ':') {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "expected drive letter volume root (e.g. C:\\\\)");
+    }
+    return -1;
+  }
+  wchar_t dl = (wchar_t)toupper((unsigned char)p[0]);
+  enable_backup_privilege_best_effort();
+
+  wchar_t destw[MAX_PATH];
+  if (MultiByteToWideChar(CP_UTF8, 0, dest_utf8, -1, destw, MAX_PATH) <= 0) {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "invalid destination path encoding");
+    }
+    return -1;
+  }
+
+  wchar_t mft_path[40];
+  HANDLE src = INVALID_HANDLE_VALUE;
+  for (int fi = 0; fi < 2 && src == INVALID_HANDLE_VALUE; fi++) {
+    if (fi == 0) {
+      mft_path[0] = L'\\';
+      mft_path[1] = L'\\';
+      mft_path[2] = L'?';
+      mft_path[3] = L'\\';
+      mft_path[4] = dl;
+      mft_path[5] = L':';
+      mft_path[6] = L'\\';
+      mft_path[7] = L'$';
+      mft_path[8] = L'M';
+      mft_path[9] = L'F';
+      mft_path[10] = L'T';
+      mft_path[11] = L'\0';
+    } else {
+      mft_path[0] = L'\\';
+      mft_path[1] = L'\\';
+      mft_path[2] = L'.';
+      mft_path[3] = L'\\';
+      mft_path[4] = dl;
+      mft_path[5] = L':';
+      mft_path[6] = L'\\';
+      mft_path[7] = L'$';
+      mft_path[8] = L'M';
+      mft_path[9] = L'F';
+      mft_path[10] = L'T';
+      mft_path[11] = L'\0';
+    }
+    src = CreateFileW(mft_path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (src != INVALID_HANDLE_VALUE) {
+      break;
+    }
+    src = CreateFileW(mft_path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (src != INVALID_HANDLE_VALUE) {
+      break;
+    }
+  }
+  if (src == INVALID_HANDLE_VALUE) {
+    return mft_dump_via_volume_fallback(dl, destw, errbuf, errlen, on_progress, user);
+  }
+
+  LARGE_INTEGER fsz = {{0}};
+  if (!GetFileSizeEx(src, &fsz)) {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "GetFileSizeEx failed (error %lu)", (unsigned long)GetLastError());
+    }
+    CloseHandle(src);
+    return -1;
+  }
+  uint64_t total = (uint64_t)fsz.QuadPart;
+
+  HANDLE dst = CreateFileW(destw, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (dst == INVALID_HANDLE_VALUE) {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "cannot create output file (error %lu)", (unsigned long)GetLastError());
+    }
+    CloseHandle(src);
+    return -1;
+  }
+
+  enum { k_buf = 1 << 20 };
+  unsigned char *buf = (unsigned char *)malloc(k_buf);
+  if (buf == NULL) {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "out of memory");
+    }
+    CloseHandle(dst);
+    CloseHandle(src);
+    return -1;
+  }
+
+  uint64_t done = 0;
+  if (on_progress != NULL) {
+    on_progress(user, total > 0 ? 0 : 0, 0, total);
+  }
+
+  while (done < total) {
+    DWORD chunk = (DWORD)((total - done) > (uint64_t)k_buf ? (uint64_t)k_buf : (total - done));
+    DWORD got = 0;
+    if (!ReadFile(src, buf, chunk, &got, NULL) || got == 0) {
+      if (errbuf != NULL && errlen > 0) {
+        (void)snprintf(errbuf, errlen, "read $MFT failed at offset %llu (error %lu)",
+                       (unsigned long long)done, (unsigned long)GetLastError());
+      }
+      free(buf);
+      CloseHandle(dst);
+      CloseHandle(src);
+      return -1;
+    }
+    DWORD wrote = 0;
+    if (!WriteFile(dst, buf, got, &wrote, NULL) || wrote != got) {
+      if (errbuf != NULL && errlen > 0) {
+        (void)snprintf(errbuf, errlen, "write failed (error %lu)", (unsigned long)GetLastError());
+      }
+      free(buf);
+      CloseHandle(dst);
+      CloseHandle(src);
+      return -1;
+    }
+    done += (uint64_t)got;
+    if (on_progress != NULL && total > 0) {
+      int pct = (int)((done * 100ull) / total);
+      if (pct > 100) {
+        pct = 100;
+      }
+      on_progress(user, pct, done, total);
+    }
+  }
+
+  free(buf);
+  CloseHandle(dst);
+  CloseHandle(src);
+  if (on_progress != NULL && total > 0) {
+    on_progress(user, 100, total, total);
+  }
+  return 0;
 }
 
 #endif /* _WIN32 */

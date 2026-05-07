@@ -31,6 +31,8 @@ typedef struct _FlatListModel FlatListModel;
 typedef struct AppState {
   GtkApplication *gtk_app;
   GtkWidget *window;
+  /** File menu "Export to CSV…"; sensitivity synced to exportable scan state. */
+  GtkWidget *file_menu_export_csv;
   GtkWidget *scan_source_combo;
   gint scan_source_last_stable_active;
   GtkWidget *scan_btn;
@@ -92,6 +94,9 @@ typedef struct AppState {
   /** Volume/common root from imported paths (e.g. "D:\\"); tree view + treemap root when scan_root_utf8 is "". */
   gchar *csv_derived_root_utf8;
   gboolean csv_import_active;
+  /** TRUE when the active snapshot was loaded from a DiskAtlas binary scan index file (.mft with index magic; vs CSV). */
+  /** When csv_import_active: TRUE if snapshot came from a raw $MFT dump (vs CSV). */
+  gboolean import_snapshot_is_raw_mft;
   size_t *master_indices;
   size_t master_count;
   size_t *filtered_indices;
@@ -106,6 +111,14 @@ typedef struct AppState {
   /** Guard flag to prevent re-entrant A→B→A sync loops between treemap and tree_view. */
   gboolean treemap_tree_sync_in_progress;
   size_t display_max_entries;
+
+  gchar *mft_dump_save_path;
+  gchar *mft_dump_volume_root_utf8;
+  gboolean mft_dump_run_stream_after_scan;
+  gboolean mft_dump_custom_scan_panel;
+  gboolean mft_dump_internal_scan;
+  uint64_t mft_dump_size_total_hint;
+  gboolean mft_dump_banner_after_populate;
 } AppState;
 
 #endif  /* APP_STATE_H */

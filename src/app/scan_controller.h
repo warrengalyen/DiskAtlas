@@ -17,8 +17,20 @@ void scan_controller_sync_file_view_status(AppState *app);
 /** Call after `scan_root_utf8` changes (same side effects as former scan directory picker). */
 void scan_controller_notify_scan_root_changed(AppState *app);
 
-/** Replace current scan with an imported result (e.g. CSV); refreshes list like a finished scan. */
-void scan_controller_apply_imported_scan(AppState *app, scan_result_t *new_scan, const char *csv_source_path_utf8,
-                                          gboolean csv_import_layout);
+/**
+ * Replace current scan with an imported result; refreshes list like a finished scan.
+ * @param raw_mft_snapshot TRUE when the source is a raw $MFT dump (UI labels); FALSE for CSV.
+ */
+void scan_controller_apply_imported_scan(AppState *app, scan_result_t *new_scan, const char *snapshot_path_utf8,
+                                           gboolean snapshot_layout, gboolean raw_mft_snapshot);
 
+/** Duplicate-clustering options aligned with the toolbar (for MFT dump import). */
+void scan_controller_fill_scan_options_for_import(AppState *app, scan_options_t *out);
+
+#if defined(G_OS_WIN32)
+/** After validations in the UI: optionally scan @a volume_root_utf8, then copy $MFT to @a dest_path_utf8. */
+void scan_controller_begin_mft_dump_flow(AppState *app, const gchar *volume_root_utf8,
+                                         const gchar *dest_path_utf8, gboolean need_scan);
 #endif
+
+#endif  /* SCAN_CONTROLLER_H */

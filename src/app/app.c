@@ -52,6 +52,8 @@ int diskatlas_app_run(int argc, char **argv) {
   g_free(app->scan_root_utf8);
   g_free(app->csv_import_path);
   g_free(app->csv_derived_root_utf8);
+  g_free(app->mft_dump_save_path);
+  g_free(app->mft_dump_volume_root_utf8);
   free(app);
   return status;
 }

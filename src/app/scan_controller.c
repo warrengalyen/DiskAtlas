@@ -16,6 +16,7 @@
 #include "format_text.h"
 #include "scan_controller.h"
 #include "scan_source_combo.h"
+#include "ui_window.h"
 #include "volumes.h"
 
 #define DA_FILE_VIEW_NOTEBOOK_PAGE 0
@@ -571,7 +572,8 @@ static void da_treemap_panel_sync_title(AppState *app) {
     return;
   }
   if (app->csv_import_active && app->csv_import_path != NULL && app->csv_import_path[0] != '\0') {
-    gtk_label_set_text(GTK_LABEL(app->treemap_panel_title), "Top level: <CSV File>");
+    gtk_label_set_text(GTK_LABEL(app->treemap_panel_title),
+                       app->import_snapshot_is_raw_mft ? "Top level: <MFT dump>" : "Top level: <CSV File>");
     gtk_widget_set_tooltip_text(app->treemap_panel_title, app->csv_import_path);
     return;
   }
@@ -810,6 +812,7 @@ void scan_controller_notify_scan_root_changed(AppState *app) {
     app->csv_import_path = NULL;
     g_free(app->csv_derived_root_utf8);
     app->csv_derived_root_utf8 = NULL;
+    app->import_snapshot_is_raw_mft = FALSE;
   }
   scan_controller_refresh_volume_labels(app);
   da_refresh_treemap(app);
@@ -880,6 +883,21 @@ static void panel_scan_set_text(AppState *app, const char *text) {
   if (app != NULL && app->panel_scan_label != NULL && text != NULL) {
     gtk_label_set_text(GTK_LABEL(app->panel_scan_label), text);
   }
+}
+
+static void mft_dump_flow_clear(AppState *app) {
+  if (app == NULL) {
+    return;
+  }
+  g_free(app->mft_dump_save_path);
+  app->mft_dump_save_path = NULL;
+  g_free(app->mft_dump_volume_root_utf8);
+  app->mft_dump_volume_root_utf8 = NULL;
+  app->mft_dump_run_stream_after_scan = FALSE;
+  app->mft_dump_custom_scan_panel = FALSE;
+  app->mft_dump_internal_scan = FALSE;
+  app->mft_dump_size_total_hint = 0;
+  app->mft_dump_banner_after_populate = FALSE;
 }
 
 static void scan_progress_set_indeterminate(AppState *app, gboolean on) {
@@ -1113,12 +1131,21 @@ static void begin_populate_list(AppState *app) {
   app->populate_total = 0;
 
   if (v.nodes == NULL || v.count == 0) {
-    char finish_pan[256];
-    scan_progress_t pr_done = scan_get_progress(app->scan);
-    snprintf(finish_pan, sizeof(finish_pan), "Scan complete in %.2f seconds%s",
-             app->last_scan_elapsed_s,
-             pr_done.is_cancel_observed ? " (cancelled)" : "");
-    panel_scan_set_text(app, finish_pan);
+    if (app->mft_dump_banner_after_populate) {
+      panel_scan_set_text(app, "MFT data dump complete.");
+      app->mft_dump_banner_after_populate = FALSE;
+    } else {
+      if (app->csv_import_active) {
+        panel_scan_set_text(app, app->import_snapshot_is_raw_mft ? "Imported from MFT dump." : "Imported from CSV.");
+      } else {
+        char finish_pan[256];
+        scan_progress_t pr_done = scan_get_progress(app->scan);
+        snprintf(finish_pan, sizeof(finish_pan), "Scan complete in %.2f seconds%s",
+                 app->last_scan_elapsed_s,
+                 pr_done.is_cancel_observed ? " (cancelled)" : "");
+        panel_scan_set_text(app, finish_pan);
+      }
+    }
     app->list_populated = TRUE;
     enable_scan_button(app, TRUE);
     da_refresh_treemap(app);
@@ -1181,9 +1208,16 @@ static gboolean on_timer_fill_chunk(gpointer data) {
   app->list_populated = TRUE;
   char finish_pan[256];
   scan_progress_t pr_done = scan_get_progress(app->scan);
-  snprintf(finish_pan, sizeof(finish_pan), "Scan complete in %.2f seconds%s", app->last_scan_elapsed_s,
-           pr_done.is_cancel_observed ? " (cancelled)" : "");
-  panel_scan_set_text(app, finish_pan);
+  if (app->mft_dump_banner_after_populate) {
+    panel_scan_set_text(app, "MFT data dump complete.");
+    app->mft_dump_banner_after_populate = FALSE;
+  } else if (app->csv_import_active) {
+    panel_scan_set_text(app, app->import_snapshot_is_raw_mft ? "Imported from MFT dump." : "Imported from CSV.");
+  } else {
+    snprintf(finish_pan, sizeof(finish_pan), "Scan complete in %.2f seconds%s", app->last_scan_elapsed_s,
+             pr_done.is_cancel_observed ? " (cancelled)" : "");
+    panel_scan_set_text(app, finish_pan);
+  }
   enable_scan_button(app, TRUE);
 
   /* Populate folder tree view (background thread after tv-background-thread task). */
@@ -1202,33 +1236,150 @@ static gboolean on_timer_fill_chunk(gpointer data) {
   return G_SOURCE_REMOVE;
 }
 
+#if defined(G_OS_WIN32)
+static void mft_dump_on_copy_progress(void *user, int pct, uint64_t done, uint64_t total) {
+  AppState *app = (AppState *)user;
+  char buf[512];
+  char a[64], b[64];
+  da_format_bytes(done, a, sizeof a);
+  da_format_bytes(total, b, sizeof b);
+  snprintf(buf, sizeof buf, "Dumping file %d%% (%s/%s)", pct, a, b);
+  panel_scan_set_text(app, buf);
+  if (app->progress != NULL && total > 0) {
+    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(app->progress), (gdouble)pct / 100.0);
+  }
+  /* Dump runs on the UI thread; process pending redraws so the label/bar update live. */
+  if (app->panel_scan_label != NULL) {
+    gtk_widget_queue_draw(app->panel_scan_label);
+  }
+  if (app->progress != NULL) {
+    gtk_widget_queue_draw(app->progress);
+  }
+  while (g_main_context_pending(NULL)) {
+    (void)g_main_context_iteration(NULL, FALSE);
+  }
+}
+
+static void mft_dump_run_stream_copy(AppState *app, gchar *vol_owned, gchar *dest_owned) {
+  char err[512];
+  int rc =
+      diskatlas_win32_dump_mft_file(vol_owned, dest_owned, err, sizeof err, mft_dump_on_copy_progress, app);
+  g_free(vol_owned);
+  if (rc != 0) {
+    scan_progress_reset_idle(app);
+    GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
+                                          GTK_BUTTONS_OK, "%s", err[0] != '\0' ? err : "MFT dump failed.");
+    gtk_dialog_run(GTK_DIALOG(d));
+    gtk_widget_destroy(d);
+    g_free(dest_owned);
+    scan_controller_refresh_volume_labels(app);
+    enable_scan_button(app, TRUE);
+    return;
+  }
+  panel_scan_set_text(app, "MFT data dump complete.");
+  scan_progress_set_full(app);
+  {
+    gchar *msg = g_strdup_printf("MFT data dumped to file %s", dest_owned);
+    GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
+                                          GTK_BUTTONS_OK, "%s", msg);
+    g_free(msg);
+    gtk_dialog_run(GTK_DIALOG(d));
+    gtk_widget_destroy(d);
+  }
+  g_free(dest_owned);
+  scan_controller_refresh_volume_labels(app);
+  enable_scan_button(app, TRUE);
+}
+#endif
+
 static gboolean on_timer_scan_tick(gpointer data) {
   AppState *app = (AppState *)data;
   if (app->scan == NULL) {
     kill_timer(&app->timer_scan);
+    da_ui_sync_file_menu_export_csv(app);
     return G_SOURCE_REMOVE;
   }
   scan_progress_t pr = scan_get_progress(app->scan);
-  char folders_buf[32];
-  char files_buf[32];
-  char buf[512];
-  da_format_uint64_locale(pr.folder_count, folders_buf, sizeof(folders_buf));
-  da_format_uint64_locale(pr.file_count, files_buf, sizeof(files_buf));
-  snprintf(buf, sizeof(buf), "Scanning… (Folders: %s  Files: %s)", folders_buf, files_buf);
-  panel_scan_set_text(app, buf);
-  scan_progress_set_indeterminate(app, TRUE);
 
-  if (pr.is_complete) {
-    kill_timer(&app->timer_scan);
-    gint64 now = g_get_monotonic_time();
-    app->last_scan_elapsed_s = (double)(now - app->scan_start_us) / 1000000.0;
-    scan_progress_set_full(app);
+  if (!pr.is_complete) {
+    char buf[512];
+    if (app->mft_dump_custom_scan_panel) {
+      uint64_t done = pr.bytes_accounted;
+      uint64_t tot = app->mft_dump_size_total_hint;
+      int pct = 0;
+      if (tot > 0) {
+        pct = (int)((done * 100ull) / tot);
+        if (pct > 100) {
+          pct = 100;
+        }
+      }
+      char a[64], b[64];
+      da_format_bytes(done, a, sizeof a);
+      if (tot > 0) {
+        da_format_bytes(tot, b, sizeof b);
+      } else {
+        (void)snprintf(b, sizeof b, "—");
+      }
+      snprintf(buf, sizeof buf, "Dumping file %d%% (%s/%s)", pct, a, b);
+      panel_scan_set_text(app, buf);
+      scan_progress_set_indeterminate(app, FALSE);
+      if (app->progress != NULL && tot > 0) {
+        gdouble fr = (gdouble)((double)done / (double)tot);
+        if (fr > 1.0) {
+          fr = 1.0;
+        }
+        gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(app->progress), fr);
+      }
+    } else {
+      char folders_buf[32];
+      char files_buf[32];
+      da_format_uint64_locale(pr.folder_count, folders_buf, sizeof(folders_buf));
+      da_format_uint64_locale(pr.file_count, files_buf, sizeof(files_buf));
+      snprintf(buf, sizeof(buf), "Scanning… (Folders: %s  Files: %s)", folders_buf, files_buf);
+      panel_scan_set_text(app, buf);
+      scan_progress_set_indeterminate(app, TRUE);
+    }
+    return G_SOURCE_CONTINUE;
+  }
+
+  kill_timer(&app->timer_scan);
+  da_ui_sync_file_menu_export_csv(app);
+  gint64 now = g_get_monotonic_time();
+  app->last_scan_elapsed_s = (double)(now - app->scan_start_us) / 1000000.0;
+
+#if defined(G_OS_WIN32)
+  if (app->mft_dump_run_stream_after_scan && app->mft_dump_save_path != NULL &&
+      app->mft_dump_volume_root_utf8 != NULL) {
+    app->mft_dump_custom_scan_panel = FALSE;
+    gchar *dest = app->mft_dump_save_path;
+    gchar *vol = app->mft_dump_volume_root_utf8;
+    app->mft_dump_save_path = NULL;
+    app->mft_dump_volume_root_utf8 = NULL;
+    app->mft_dump_run_stream_after_scan = FALSE;
+    if (pr.is_cancel_observed) {
+      g_free(dest);
+      g_free(vol);
+      scan_progress_set_full(app);
+      gtk_button_set_label(GTK_BUTTON(app->scan_btn), "Scan");
+      enable_scan_button(app, FALSE);
+      begin_populate_list(app);
+      return G_SOURCE_REMOVE;
+    }
+    scan_progress_reset_idle(app);
+    app->mft_dump_banner_after_populate = TRUE;
+    mft_dump_run_stream_copy(app, vol, dest);
     gtk_button_set_label(GTK_BUTTON(app->scan_btn), "Scan");
     enable_scan_button(app, FALSE);
     begin_populate_list(app);
     return G_SOURCE_REMOVE;
   }
-  return G_SOURCE_CONTINUE;
+#endif
+
+  scan_progress_set_full(app);
+  gtk_button_set_label(GTK_BUTTON(app->scan_btn), "Scan");
+  enable_scan_button(app, FALSE);
+  begin_populate_list(app);
+  return G_SOURCE_REMOVE;
 }
 
 
@@ -1251,11 +1402,16 @@ static void start_scan(AppState *app) {
     return;
   }
 
+  if (!app->mft_dump_internal_scan) {
+    mft_dump_flow_clear(app);
+  }
+
   app->csv_import_active = FALSE;
   g_free(app->csv_import_path);
   app->csv_import_path = NULL;
   g_free(app->csv_derived_root_utf8);
   app->csv_derived_root_utf8 = NULL;
+  app->import_snapshot_is_raw_mft = FALSE;
 
   kill_all_timers(app);
   if (app->flat_list_model != NULL) {
@@ -1286,6 +1442,7 @@ static void start_scan(AppState *app) {
       app->scan = NULL;
     }
   }
+  da_ui_sync_file_menu_export_csv(app);
 
   scan_options_t opt;
   memset(&opt, 0, sizeof(opt));
@@ -1336,9 +1493,11 @@ static void start_scan(AppState *app) {
     enable_scan_button(app, TRUE);
     scan_progress_reset_idle(app);
     panel_scan_set_text(app, "Could not start scan.");
+    da_ui_sync_file_menu_export_csv(app);
     return;
   }
 
+  da_ui_sync_file_menu_export_csv(app);
   app->scan_start_us = g_get_monotonic_time();
   scan_button_set_cancelling_mode(app);
   scan_progress_set_indeterminate(app, TRUE);
@@ -1441,9 +1600,11 @@ void scan_controller_refresh_volume_labels(AppState *app) {
     if (app->flat_list_model != NULL) {
       flat_list_model_invalidate(app->flat_list_model);
     }
-    gchar *sel = g_strdup_printf("<CSV File> %s", app->csv_import_path);
+    gchar *sel = g_strdup_printf("%s %s",
+                                   app->import_snapshot_is_raw_mft ? "<MFT File>" : "<CSV File>",
+                                   app->csv_import_path);
     if (app->stat_sel_val != NULL) {
-      gtk_label_set_text(GTK_LABEL(app->stat_sel_val), sel != NULL ? sel : "<CSV File>");
+      gtk_label_set_text(GTK_LABEL(app->stat_sel_val), sel != NULL ? sel : (app->import_snapshot_is_raw_mft ? "<MFT File>" : "<CSV File>"));
       gtk_label_set_line_wrap(GTK_LABEL(app->stat_sel_val), TRUE);
     }
     g_free(sel);
@@ -1555,8 +1716,42 @@ void scan_controller_attach(AppState *app) {
   }
 }
 
-void scan_controller_apply_imported_scan(AppState *app, scan_result_t *new_scan, const char *csv_source_path_utf8,
-                                         gboolean csv_import_layout) {
+void scan_controller_fill_scan_options_for_import(AppState *app, scan_options_t *out) {
+  if (app == NULL || out == NULL) {
+    return;
+  }
+  memset(out, 0, sizeof(*out));
+  out->struct_version = DISKATLAS_SCAN_OPTIONS_STRUCT_VERSION;
+  out->flags = 0;
+  out->max_depth = 0;
+  out->io_threads = 0;
+  if (app->duplicates_file_combo != NULL) {
+    gint dup_mode = gtk_combo_box_get_active(GTK_COMBO_BOX(app->duplicates_file_combo));
+    if (dup_mode < 0) {
+      dup_mode = 2;
+    }
+    switch (dup_mode) {
+    case 0:
+      out->flags |= DISKATLAS_SCAN_OPTION_SKIP_DUPLICATE_CLUSTERING;
+      break;
+    case 1:
+      break;
+    case 2:
+    default:
+      out->flags |= DISKATLAS_SCAN_OPTION_DUPLICATE_USE_MTIME;
+      break;
+    }
+  } else {
+    out->flags |= DISKATLAS_SCAN_OPTION_DUPLICATE_USE_MTIME;
+  }
+  if ((out->flags & DISKATLAS_SCAN_OPTION_SKIP_DUPLICATE_CLUSTERING) == 0 && app->match_entire_path_radio != NULL &&
+      gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app->match_entire_path_radio))) {
+    out->flags |= DISKATLAS_SCAN_OPTION_DUPLICATE_MATCH_FULL_PATH;
+  }
+}
+
+void scan_controller_apply_imported_scan(AppState *app, scan_result_t *new_scan, const char *snapshot_path_utf8,
+                                         gboolean snapshot_layout, gboolean raw_mft_snapshot) {
   if (app == NULL || new_scan == NULL) {
     return;
   }
@@ -1598,10 +1793,11 @@ void scan_controller_apply_imported_scan(AppState *app, scan_result_t *new_scan,
 
   app->scan = new_scan;
 
-  if (csv_import_layout && csv_source_path_utf8 != NULL && csv_source_path_utf8[0] != '\0') {
+  if (snapshot_layout && snapshot_path_utf8 != NULL && snapshot_path_utf8[0] != '\0') {
     app->csv_import_active = TRUE;
+    app->import_snapshot_is_raw_mft = raw_mft_snapshot;
     g_free(app->csv_import_path);
-    app->csv_import_path = g_strdup(csv_source_path_utf8);
+    app->csv_import_path = g_strdup(snapshot_path_utf8);
     g_free(app->scan_root_utf8);
     app->scan_root_utf8 = g_strdup("");
     {
@@ -1611,28 +1807,73 @@ void scan_controller_apply_imported_scan(AppState *app, scan_result_t *new_scan,
     }
   } else {
     app->csv_import_active = FALSE;
+    app->import_snapshot_is_raw_mft = FALSE;
     g_free(app->csv_import_path);
     app->csv_import_path = NULL;
     g_free(app->csv_derived_root_utf8);
     app->csv_derived_root_utf8 = NULL;
-    if (csv_source_path_utf8 != NULL) {
+    if (snapshot_path_utf8 != NULL) {
       g_free(app->scan_root_utf8);
-      app->scan_root_utf8 = g_strdup(csv_source_path_utf8);
+      app->scan_root_utf8 = g_strdup(snapshot_path_utf8);
     }
   }
 
   scan_progress_set_full(app);
   app->last_scan_elapsed_s = 0.0;
-  panel_scan_set_text(app, "Imported from CSV.");
+  panel_scan_set_text(app, raw_mft_snapshot ? "Imported from MFT dump." : "Imported from CSV.");
   if (app->scan_btn != NULL) {
     gtk_button_set_label(GTK_BUTTON(app->scan_btn), "Scan");
   }
 
   scan_controller_refresh_volume_labels(app);
   da_scan_source_combo_rebuild(app);
+  /* Refresh treemap/list chrome now that scan_root / csv_derived / import flags are set (timer may run later). */
+  da_refresh_treemap(app);
+  if (app->treemap != NULL) {
+    gtk_widget_queue_draw(app->treemap);
+  }
+  da_ui_sync_file_menu_export_csv(app);
   begin_populate_list(app);
 }
 
+#if defined(G_OS_WIN32)
+void scan_controller_begin_mft_dump_flow(AppState *app, const gchar *volume_root_utf8,
+                                         const gchar *dest_path_utf8, gboolean need_scan) {
+  if (app == NULL || volume_root_utf8 == NULL || dest_path_utf8 == NULL) {
+    return;
+  }
+  mft_dump_flow_clear(app);
+  uint64_t tot = 0;
+  uint64_t free_b = 0;
+  uint64_t used_b = 0;
+  if (da_volume_space_for_path(volume_root_utf8, &tot, &free_b, &used_b) == 0) {
+    app->mft_dump_size_total_hint = tot;
+  } else {
+    app->mft_dump_size_total_hint = 0;
+  }
+
+  if (!need_scan) {
+    mft_dump_run_stream_copy(app, g_strdup(volume_root_utf8), g_strdup(dest_path_utf8));
+    return;
+  }
+
+  app->mft_dump_save_path = g_strdup(dest_path_utf8);
+  app->mft_dump_volume_root_utf8 = g_strdup(volume_root_utf8);
+  app->mft_dump_run_stream_after_scan = TRUE;
+  app->mft_dump_custom_scan_panel = TRUE;
+  app->mft_dump_internal_scan = TRUE;
+  g_free(app->scan_root_utf8);
+  app->scan_root_utf8 = g_strdup(volume_root_utf8);
+  scan_controller_notify_scan_root_changed(app);
+  start_scan(app);
+  app->mft_dump_internal_scan = FALSE;
+  if (app->scan == NULL) {
+    mft_dump_flow_clear(app);
+  }
+}
+#endif
+
 void scan_controller_detach(AppState *app) {
   kill_all_timers(app);
+  mft_dump_flow_clear(app);
 }

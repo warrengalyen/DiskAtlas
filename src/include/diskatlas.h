@@ -159,6 +159,28 @@ DISKATLAS_API void scan_result_free(scan_result_t *result);
  */
 DISKATLAS_API scan_result_t *diskatlas_scan_import_csv(const char *utf8_path, char *errbuf, size_t errbuf_len);
 
+#if defined(_WIN32)
+/**
+ * Parse a raw NTFS $MFT dump into a completed scan_result_t.
+ * @a root_hint_utf8 is any path on the volume (e.g. current scan root); used with GetVolumePathNameW for the
+ * volume boot sector and to scope paths under the same root as a live MFT scan.
+ */
+DISKATLAS_API scan_result_t *diskatlas_scan_import_raw_mft_file(const char *mft_dump_utf8,
+                                                                const char *root_hint_utf8,
+                                                                const scan_options_t *options,
+                                                                char *errbuf, size_t errbuf_len);
+
+/**
+ * Copy the NTFS $MFT stream for @a volume_root_utf8 (e.g. "C:\\") to @a dest_utf8.
+ * @a on_progress is optional; when set, invoked on the same thread with @a pct in 0–100 and byte counts.
+ */
+DISKATLAS_API int diskatlas_win32_dump_mft_file(const char *volume_root_utf8, const char *dest_utf8,
+                                                char *errbuf, size_t errbuf_len,
+                                                void (*on_progress)(void *user, int pct, uint64_t done,
+                                                                    uint64_t total),
+                                                void *user);
+#endif
+
 /** Highest assigned duplicate_group_id (>0); 0 when no duplicates. Valid after scan completes. */
 DISKATLAS_API uint32_t diskatlas_dup_max_group_id(const scan_result_t *result);
 

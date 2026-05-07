@@ -20,6 +20,21 @@
 #include "flat_list_model.h"
 #include "shell_icon.h"
 
+void da_ui_sync_file_menu_export_csv(AppState *app) {
+  if (app == NULL || app->file_menu_export_csv == NULL) {
+    return;
+  }
+  gboolean ok = FALSE;
+  if (app->scan != NULL) {
+    scan_progress_t pr = scan_get_progress(app->scan);
+    if (pr.is_complete) {
+      scan_results_view_t v = scan_get_results(app->scan);
+      ok = (v.nodes != NULL);
+    }
+  }
+  gtk_widget_set_sensitive(app->file_menu_export_csv, ok);
+}
+
 #if defined(G_OS_WIN32)
 
 static void on_dont_show_admin_ntfs_toggled(GtkToggleButton *tb, gpointer user_data) {
@@ -287,6 +302,85 @@ static void on_file_menu_export_csv_activate(GtkMenuItem *item, gpointer user_da
 static void on_file_menu_import_csv_activate(GtkMenuItem *item, gpointer user_data) {
   (void)item;
   da_scan_source_combo_run_csv_import((AppState *)user_data);
+}
+
+static void on_file_menu_export_mft_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->window == NULL) {
+    return;
+  }
+#if defined(G_OS_WIN32)
+  if (!da_win32_is_process_elevated()) {
+    GtkWidget *d =
+        gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
+                               "%s", "Please restart DiskAtlas as administrator to dump the MFT file.");
+    gtk_dialog_run(GTK_DIALOG(d));
+    gtk_widget_destroy(d);
+    return;
+  }
+  gchar *vol_root = NULL;
+  const gchar *src_path = (app->scan_root_utf8 != NULL && app->scan_root_utf8[0] != '\0') ? app->scan_root_utf8 : "";
+  if (!da_win32_path_get_volume_root_utf8(src_path, &vol_root)) {
+    GtkWidget *d =
+        gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
+                               "%s", "Please select an NTFS formatted drive.");
+    gtk_dialog_run(GTK_DIALOG(d));
+    gtk_widget_destroy(d);
+    return;
+  }
+  if (!da_win32_volume_root_is_ntfs(vol_root)) {
+    g_free(vol_root);
+    GtkWidget *d =
+        gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
+                               "%s", "Please select an NTFS formatted drive.");
+    gtk_dialog_run(GTK_DIALOG(d));
+    gtk_widget_destroy(d);
+    return;
+  }
+
+  GtkFileChooserNative *native =
+      gtk_file_chooser_native_new("Dump MFT file…", GTK_WINDOW(app->window), GTK_FILE_CHOOSER_ACTION_SAVE,
+                                  "_Save", "_Cancel");
+  GtkFileChooser *chooser = GTK_FILE_CHOOSER(native);
+  gtk_file_chooser_set_current_name(chooser, "MFT");
+  gint resp = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
+  if (resp != GTK_RESPONSE_ACCEPT) {
+    g_free(vol_root);
+    gtk_native_dialog_destroy(GTK_NATIVE_DIALOG(native));
+    return;
+  }
+  gchar *fn = gtk_file_chooser_get_filename(chooser);
+  gtk_native_dialog_destroy(GTK_NATIVE_DIALOG(native));
+  if (fn == NULL || fn[0] == '\0') {
+    g_free(vol_root);
+    g_free(fn);
+    return;
+  }
+
+  gboolean need_scan = TRUE;
+  if (app->scan != NULL && !app->csv_import_active) {
+    scan_progress_t pr = scan_get_progress(app->scan);
+    if (pr.is_complete) {
+      gchar *root2 = NULL;
+      if (da_win32_path_get_volume_root_utf8(app->scan_root_utf8, &root2) &&
+          g_ascii_strcasecmp(root2, vol_root) == 0) {
+        need_scan = FALSE;
+      }
+      g_free(root2);
+    }
+  }
+
+  scan_controller_begin_mft_dump_flow(app, vol_root, fn, need_scan);
+  g_free(vol_root);
+  g_free(fn);
+#else
+  GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
+                                        GTK_BUTTONS_OK, "%s",
+                                        "Dumping the NTFS MFT file is only supported on Windows.");
+  gtk_dialog_run(GTK_DIALOG(d));
+  gtk_widget_destroy(d);
+#endif
 }
 
 static void pct_of_drive_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell, GtkTreeModel *model,
@@ -637,6 +731,7 @@ void da_ui_build(AppState *app) {
   }
   {
     GtkWidget *file_menu_export_csv = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_export_csv"));
+    app->file_menu_export_csv = file_menu_export_csv;
     if (file_menu_export_csv != NULL) {
       g_signal_connect(file_menu_export_csv, "activate", G_CALLBACK(on_file_menu_export_csv_activate), app);
     }
@@ -647,12 +742,19 @@ void da_ui_build(AppState *app) {
       g_signal_connect(file_menu_import_csv, "activate", G_CALLBACK(on_file_menu_import_csv_activate), app);
     }
   }
+  {
+    GtkWidget *file_menu_export_mft = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_export_mft"));
+    if (file_menu_export_mft != NULL) {
+      g_signal_connect(file_menu_export_mft, "activate", G_CALLBACK(on_file_menu_export_mft_activate), app);
+    }
+  }
 
   g_object_unref(builder);
 
   scan_controller_sync_display_max_combo(app);
   scan_controller_attach(app);
   scan_controller_refresh_volume_labels(app);
+  da_ui_sync_file_menu_export_csv(app);
 
   gtk_widget_show_all(app->window);
 

@@ -215,6 +215,51 @@ gboolean da_win32_restart_elevated_self(void) {
   return (INT_PTR)hi > 32;
 }
 
+gboolean da_win32_path_get_volume_root_utf8(const gchar *path_utf8, gchar **out_root) {
+  if (out_root != NULL) {
+    *out_root = NULL;
+  }
+  if (path_utf8 == NULL || path_utf8[0] == '\0' || out_root == NULL) {
+    return FALSE;
+  }
+  WCHAR wpath[4096];
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path_utf8, -1, wpath, (int)(sizeof(wpath) / sizeof(wpath[0]))) <=
+      0) {
+    if (MultiByteToWideChar(CP_UTF8, 0, path_utf8, -1, wpath, (int)(sizeof(wpath) / sizeof(wpath[0]))) <= 0) {
+      return FALSE;
+    }
+  }
+  WCHAR wvol[4096];
+  if (!GetVolumePathNameW(wpath, wvol, (DWORD)(sizeof(wvol) / sizeof(wvol[0])))) {
+    return FALSE;
+  }
+  gchar *u = g_utf16_to_utf8((const gunichar2 *)wvol, -1, NULL, NULL, NULL);
+  if (u == NULL || u[0] == '\0') {
+    g_free(u);
+    return FALSE;
+  }
+  *out_root = u;
+  return TRUE;
+}
+
+gboolean da_win32_volume_root_is_ntfs(const gchar *volume_root_utf8) {
+  if (volume_root_utf8 == NULL || volume_root_utf8[0] == '\0') {
+    return FALSE;
+  }
+  WCHAR wr[4096];
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, volume_root_utf8, -1, wr, (int)(sizeof(wr) / sizeof(wr[0]))) <=
+      0) {
+    if (MultiByteToWideChar(CP_UTF8, 0, volume_root_utf8, -1, wr, (int)(sizeof(wr) / sizeof(wr[0]))) <= 0) {
+      return FALSE;
+    }
+  }
+  WCHAR fsname[32];
+  if (!GetVolumeInformationW(wr, NULL, 0, NULL, NULL, NULL, fsname, (DWORD)(sizeof(fsname) / sizeof(fsname[0])))) {
+    return FALSE;
+  }
+  return (_wcsicmp(fsname, L"NTFS") == 0);
+}
+
 static gchar *win32_volume_display_label(WCHAR drive_letter) {
   WCHAR root[4] = {drive_letter, L':', L'\\', L'\0'};
   WCHAR vol[MAX_PATH + 1];

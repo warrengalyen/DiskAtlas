@@ -32,6 +32,9 @@ gboolean da_win32_is_process_elevated(void);
 gboolean da_win32_restart_elevated_self(void);
 gboolean da_win32_admin_ntfs_notice_saved_hidden(void);
 void da_win32_set_admin_ntfs_notice_hidden(gboolean hide);
+/** Resolves @a path_utf8 to its volume root (e.g. "D:\\"); caller frees @a *out_root. */
+gboolean da_win32_path_get_volume_root_utf8(const gchar *path_utf8, gchar **out_root);
+gboolean da_win32_volume_root_is_ntfs(const gchar *volume_root_utf8);
 #endif
 
 /** Returns 0 on success; fills totals in bytes (best effort). */
