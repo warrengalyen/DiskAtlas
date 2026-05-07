@@ -12,6 +12,7 @@
 #include "file_tree_model.h"
 #include "tree_view_model.h"
 #include "scan_controller.h"
+#include "scan_source_combo.h"
 #include "ui_window.h"
 #include "volumes.h"
 #include "da_cell_renderer_progress.h"
@@ -19,7 +20,6 @@
 #include "shell_icon.h"
 
 #if defined(G_OS_WIN32)
-#include "volumes.h"
 
 static void on_dont_show_admin_ntfs_toggled(GtkToggleButton *tb, gpointer user_data) {
   AppState *app = (AppState *)user_data;
@@ -425,6 +425,7 @@ static void da_setup_tree_view(AppState *app) {
 }
 
 void da_ui_build(AppState *app) {
+  da_scan_source_install_gio_log_filter_once();
   da_load_global_app_css();
 
   GtkBuilder *builder = gtk_builder_new();
@@ -436,37 +437,9 @@ void da_ui_build(AppState *app) {
   app->window = GTK_WIDGET(gtk_builder_get_object(builder, "main_window"));
   gtk_window_set_application(GTK_WINDOW(app->window), app->gtk_app);
 
-  app->file_chooser_btn = GTK_WIDGET(gtk_builder_get_object(builder, "file_chooser_btn"));
+  app->scan_source_combo = GTK_WIDGET(gtk_builder_get_object(builder, "scan_source_combo"));
 
-#if defined(_WIN32)
-  {
-    GtkWidget *old_btn = app->file_chooser_btn;
-    gchar *prev = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(old_btn));
-    GtkWidget *grid = gtk_widget_get_parent(old_btn);
-    gtk_container_remove(GTK_CONTAINER(grid), old_btn);
-
-    GtkWidget *dlg =
-        gtk_file_chooser_dialog_new("Scan folder…", GTK_WINDOW(app->window), GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
-                                    "_Cancel", GTK_RESPONSE_CANCEL, "_Select", GTK_RESPONSE_ACCEPT, NULL);
-    da_win32_file_chooser_set_drive_places_only(GTK_FILE_CHOOSER(dlg));
-
-    GtkWidget *new_btn = gtk_file_chooser_button_new_with_dialog(dlg);
-    gtk_widget_set_hexpand(new_btn, TRUE);
-    gtk_widget_set_can_focus(new_btn, FALSE);
-    gtk_file_chooser_button_set_title(GTK_FILE_CHOOSER_BUTTON(new_btn), "Scan folder…");
-
-    gtk_grid_attach(GTK_GRID(grid), new_btn, 1, 0, 1, 1);
-    gtk_widget_show(new_btn);
-
-    if (prev != NULL) {
-      gtk_file_chooser_set_filename(GTK_FILE_CHOOSER(new_btn), prev);
-      g_free(prev);
-    }
-
-    gtk_widget_destroy(old_btn);
-    app->file_chooser_btn = new_btn;
-  }
-#endif
+  da_scan_source_combo_setup(app);
 
   app->scan_btn = GTK_WIDGET(gtk_builder_get_object(builder, "scan_btn"));
   app->panel_scan_label = GTK_WIDGET(gtk_builder_get_object(builder, "panel_scan_label"));
@@ -587,10 +560,6 @@ void da_ui_build(AppState *app) {
 #endif
 
   g_object_unref(builder);
-
-  if (app->scan_root_utf8 != NULL) {
-    gtk_file_chooser_set_filename(GTK_FILE_CHOOSER(app->file_chooser_btn), app->scan_root_utf8);
-  }
 
   scan_controller_sync_display_max_combo(app);
   scan_controller_attach(app);

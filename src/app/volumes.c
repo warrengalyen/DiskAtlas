@@ -68,42 +68,7 @@ void da_volume_selection_label(const char *path_utf8, char *out, size_t out_sz) 
   if (path_utf8 == NULL || path_utf8[0] == '\0') {
     return;
   }
-  WCHAR wpath[4096];
-  if (!utf8_to_wide(path_utf8, wpath, (int)(sizeof(wpath) / sizeof(wpath[0])))) {
-    snprintf(out, out_sz, "%s", path_utf8);
-    return;
-  }
-  if (wpath[0] == L'\\' && wpath[1] == L'\\') {
-    snprintf(out, out_sz, "%s", path_utf8);
-    return;
-  }
-  WCHAR d = wpath[0];
-  if (!((d >= L'A' && d <= L'Z') || (d >= L'a' && d <= L'z')) || wpath[1] != L':') {
-    snprintf(out, out_sz, "%s", path_utf8);
-    return;
-  }
-  if (d >= L'a' && d <= L'z') {
-    d = (WCHAR)(d - L'a' + L'A');
-  }
-  WCHAR root[4] = {d, L':', L'\\', L'\0'};
-  WCHAR vol[MAX_PATH + 1];
-  if (!GetVolumeInformationW(root, vol, MAX_PATH + 1, NULL, NULL, NULL, NULL, 0)) {
-    snprintf(out, out_sz, "[%c:]", (char)d);
-    return;
-  }
-  char letter = (char)d;
-  char vol_utf8[512];
-  vol_utf8[0] = '\0';
-  if (vol[0] != L'\0') {
-    if (WideCharToMultiByte(CP_UTF8, 0, vol, -1, vol_utf8, (int)sizeof(vol_utf8), NULL, NULL) <= 0) {
-      vol_utf8[0] = '\0';
-    }
-  }
-  if (vol_utf8[0] != '\0') {
-    snprintf(out, out_sz, "[%c:] %s", letter, vol_utf8);
-  } else {
-    snprintf(out, out_sz, "[%c:]", letter);
-  }
+  snprintf(out, out_sz, "%s", path_utf8);
 }
 
 static gint cmp_utf8_drive_path(gconstpointer ap, gconstpointer bp) {
@@ -250,10 +215,99 @@ gboolean da_win32_restart_elevated_self(void) {
   return (INT_PTR)hi > 32;
 }
 
+static gchar *win32_volume_display_label(WCHAR drive_letter) {
+  WCHAR root[4] = {drive_letter, L':', L'\\', L'\0'};
+  WCHAR vol[MAX_PATH + 1];
+  WCHAR d = drive_letter;
+  if (d >= L'a' && d <= L'z') {
+    d = (WCHAR)(d - L'a' + L'A');
+  }
+  char letter = (char)d;
+  memset(vol, 0, sizeof(vol));
+  if (!GetVolumeInformationW(root, vol, MAX_PATH + 1, NULL, NULL, NULL, NULL, 0)) {
+    return g_strdup_printf("[%c:]", letter);
+  }
+  char vol_utf8[512];
+  vol_utf8[0] = '\0';
+  if (vol[0] != L'\0') {
+    if (WideCharToMultiByte(CP_UTF8, 0, vol, -1, vol_utf8, (int)sizeof(vol_utf8), NULL, NULL) <= 0) {
+      vol_utf8[0] = '\0';
+    }
+  }
+  if (vol_utf8[0] != '\0') {
+    return g_strdup_printf("[%c:] %s", letter, vol_utf8);
+  }
+  return g_strdup_printf("[%c:]", letter);
+}
+
+static gint cmp_volume_entry_ptr(gconstpointer a, gconstpointer b) {
+  const DaVolumeEntry *ea = *(const DaVolumeEntry *const *)a;
+  const DaVolumeEntry *eb = *(const DaVolumeEntry *const *)b;
+  return g_utf8_collate(ea->root_path, eb->root_path);
+}
+
+int da_volume_enumerate(DaVolumeEntry **entries, gsize *n_out) {
+  if (entries == NULL || n_out == NULL) {
+    return -1;
+  }
+  *entries = NULL;
+  *n_out = 0;
+
+  WCHAR buf[512];
+  DWORD nw = GetLogicalDriveStringsW((DWORD)(sizeof(buf) / sizeof(buf[0])), buf);
+  if (nw == 0 || nw >= sizeof(buf) / sizeof(WCHAR)) {
+    return -1;
+  }
+
+  GPtrArray *pa = g_ptr_array_new();
+  const WCHAR *p = buf;
+  while (*p != L'\0') {
+    int nch = lstrlenW(p);
+    if (nch > 0) {
+      WCHAR dl = p[0];
+      if (((dl >= L'A' && dl <= L'Z') || (dl >= L'a' && dl <= L'z')) && nch >= 2 && p[1] == L':') {
+        gchar *utf8 = g_utf16_to_utf8(p, -1, NULL, NULL, NULL);
+        if (utf8 != NULL) {
+          gchar *with_sep = utf8;
+          if (!g_str_has_suffix(utf8, G_DIR_SEPARATOR_S)) {
+            with_sep = g_strconcat(utf8, G_DIR_SEPARATOR_S, NULL);
+            g_free(utf8);
+          }
+          gchar *lab = win32_volume_display_label(dl);
+          DaVolumeEntry *e = g_new0(DaVolumeEntry, 1);
+          e->root_path = with_sep;
+          e->display_label = lab;
+          g_ptr_array_add(pa, e);
+        }
+      }
+    }
+    p += nch + 1;
+  }
+
+  g_ptr_array_sort(pa, cmp_volume_entry_ptr);
+
+  gsize n = pa->len;
+  DaVolumeEntry *arr = g_new0(DaVolumeEntry, n);
+  for (gsize i = 0; i < n; i++) {
+    DaVolumeEntry *src = g_ptr_array_index(pa, i);
+    arr[i].root_path = src->root_path;
+    arr[i].display_label = src->display_label;
+    g_free(src);
+  }
+  g_ptr_array_free(pa, TRUE);
+
+  *entries = arr;
+  *n_out = n;
+  return 0;
+}
+
 #else /* !_WIN32 */
 
 #include <errno.h>
+#include <stdlib.h>
 #include <sys/statvfs.h>
+
+#include <gio/gio.h>
 
 int da_volume_space_for_path(const char *path_utf8, uint64_t *total, uint64_t *free_bytes,
                              uint64_t *used_bytes) {
@@ -281,6 +335,82 @@ int da_volume_space_for_path(const char *path_utf8, uint64_t *total, uint64_t *f
   return 0;
 }
 
+static gint cmp_volume_entry_ptr_posix(gconstpointer a, gconstpointer b) {
+  const DaVolumeEntry *ea = *(const DaVolumeEntry *const *)a;
+  const DaVolumeEntry *eb = *(const DaVolumeEntry *const *)b;
+  return g_utf8_collate(ea->root_path, eb->root_path);
+}
+
+int da_volume_enumerate(DaVolumeEntry **entries, gsize *n_out) {
+  if (entries == NULL || n_out == NULL) {
+    return -1;
+  }
+  *entries = NULL;
+  *n_out = 0;
+
+  GPtrArray *pa = g_ptr_array_new();
+  GHashTable *seen =
+      g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+
+  GVolumeMonitor *vm = g_volume_monitor_get();
+  GList *mounts = g_volume_monitor_get_mounts(vm);
+  for (GList *l = mounts; l != NULL; l = l->next) {
+    GMount *m = G_MOUNT(l->data);
+    GFile *root = g_mount_get_root(m);
+    gchar *path = root != NULL ? g_file_get_path(root) : NULL;
+    if (root != NULL) {
+      g_object_unref(root);
+    }
+    if (path == NULL || g_hash_table_contains(seen, path)) {
+      g_free(path);
+      continue;
+    }
+
+    gchar *mname = g_mount_get_name(m);
+    gchar *label = g_strdup_printf("[%s] %s", path, mname != NULL ? mname : "");
+    g_free(mname);
+
+    DaVolumeEntry *e = g_new0(DaVolumeEntry, 1);
+    e->root_path = path;
+    e->display_label = label;
+    g_hash_table_insert(seen, g_strdup(path), GINT_TO_POINTER(1));
+    g_ptr_array_add(pa, e);
+  }
+  g_list_free(mounts);
+  g_hash_table_destroy(seen);
+
+  gboolean have_root = FALSE;
+  for (guint i = 0; i < pa->len; i++) {
+    DaVolumeEntry *e = g_ptr_array_index(pa, i);
+    if (g_strcmp0(e->root_path, "/") == 0) {
+      have_root = TRUE;
+      break;
+    }
+  }
+  if (!have_root) {
+    DaVolumeEntry *e = g_new0(DaVolumeEntry, 1);
+    e->root_path = g_strdup("/");
+    e->display_label = g_strdup("[/] /");
+    g_ptr_array_add(pa, e);
+  }
+
+  g_ptr_array_sort(pa, cmp_volume_entry_ptr_posix);
+
+  gsize n = pa->len;
+  DaVolumeEntry *arr = g_new0(DaVolumeEntry, n);
+  for (gsize i = 0; i < n; i++) {
+    DaVolumeEntry *src = g_ptr_array_index(pa, i);
+    arr[i].root_path = src->root_path;
+    arr[i].display_label = src->display_label;
+    g_free(src);
+  }
+  g_ptr_array_free(pa, TRUE);
+
+  *entries = arr;
+  *n_out = n;
+  return 0;
+}
+
 void da_volume_selection_label(const char *path_utf8, char *out, size_t out_sz) {
   if (out == NULL || out_sz == 0) {
     return;
@@ -293,3 +423,78 @@ void da_volume_selection_label(const char *path_utf8, char *out, size_t out_sz) 
 }
 
 #endif /* _WIN32 */
+
+void da_volume_list_free(DaVolumeEntry *entries, gsize n) {
+  if (entries == NULL) {
+    return;
+  }
+  for (gsize i = 0; i < n; i++) {
+    g_free(entries[i].root_path);
+    g_free(entries[i].display_label);
+  }
+  g_free(entries);
+}
+
+gchar *da_volume_system_root_utf8(void) {
+#if defined(_WIN32)
+  const gchar *sd = g_getenv("SystemDrive");
+  if (sd != NULL && sd[0] != '\0' && g_ascii_isalpha((guchar)sd[0])) {
+    char up = (char)g_ascii_toupper((guchar)sd[0]);
+    return g_strdup_printf("%c:\\", up);
+  }
+  return g_strdup("C:\\");
+#else
+  return g_strdup("/");
+#endif
+}
+
+gboolean da_volume_is_exact_root_path(const gchar *path_utf8, const gchar *volume_root_utf8) {
+  if (path_utf8 == NULL || volume_root_utf8 == NULL) {
+    return FALSE;
+  }
+#if defined(_WIN32)
+  gchar *norm_path = g_strdup(path_utf8);
+  gchar *norm_root = g_strdup(volume_root_utf8);
+  for (gchar *s = norm_path; *s != '\0'; s++) {
+    if (*s == '/') {
+      *s = '\\';
+    }
+  }
+  for (gchar *s = norm_root; *s != '\0'; s++) {
+    if (*s == '/') {
+      *s = '\\';
+    }
+  }
+  if (strlen(norm_path) >= 2 && g_ascii_isalpha((guchar)norm_path[0]) && norm_path[1] == ':') {
+    norm_path[0] = (gchar)g_ascii_toupper((guchar)norm_path[0]);
+  }
+  if (strlen(norm_root) >= 2 && g_ascii_isalpha((guchar)norm_root[0]) && norm_root[1] == ':') {
+    norm_root[0] = (gchar)g_ascii_toupper((guchar)norm_root[0]);
+  }
+  size_t lp = strlen(norm_path);
+  size_t lr = strlen(norm_root);
+  if (lp >= 2 && norm_path[lp - 1] != '\\') {
+    gchar *t = g_strconcat(norm_path, "\\", NULL);
+    g_free(norm_path);
+    norm_path = t;
+    lp = strlen(norm_path);
+  }
+  if (lr >= 2 && norm_root[lr - 1] != '\\') {
+    gchar *t = g_strconcat(norm_root, "\\", NULL);
+    g_free(norm_root);
+    norm_root = t;
+    lr = strlen(norm_root);
+  }
+  gboolean eq = (g_strcmp0(norm_path, norm_root) == 0);
+  g_free(norm_path);
+  g_free(norm_root);
+  return eq;
+#else
+  gchar *ca = g_canonicalize_filename(path_utf8, NULL);
+  gchar *cb = g_canonicalize_filename(volume_root_utf8, NULL);
+  gboolean eq = (g_strcmp0(ca, cb) == 0);
+  g_free(ca);
+  g_free(cb);
+  return eq;
+#endif
+}

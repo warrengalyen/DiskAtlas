@@ -14,6 +14,7 @@
 #include "tree_view_model.h"
 #include "format_text.h"
 #include "scan_controller.h"
+#include "scan_source_combo.h"
 #include "volumes.h"
 
 #define DA_FILE_VIEW_NOTEBOOK_PAGE 0
@@ -606,6 +607,11 @@ static void da_refresh_treemap(AppState *app) {
   }
 }
 
+void scan_controller_notify_scan_root_changed(AppState *app) {
+  scan_controller_refresh_volume_labels(app);
+  da_refresh_treemap(app);
+}
+
 static void da_tv_select_path_by_scan_index(AppState *app, gint64 scan_index);
 
 static void on_treemap_selected(GtkWidget *treemap, gint64 scan_index, gpointer user_data) {
@@ -1181,20 +1187,6 @@ static void on_scan_clicked(GtkButton *btn, gpointer user_data) {
   start_scan(app);
 }
 
-static void on_file_set(GtkFileChooserButton *b, gpointer user_data) {
-  (void)b;
-  AppState *app = (AppState *)user_data;
-  gchar *fn = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(app->file_chooser_btn));
-  if (fn == NULL) {
-    return;
-  }
-  free(app->scan_root_utf8);
-  app->scan_root_utf8 = g_strdup(fn);
-  g_free(fn);
-  scan_controller_refresh_volume_labels(app);
-  da_refresh_treemap(app);
-}
-
 static void on_show_folders_toggled(GtkToggleButton *btn, gpointer user_data) {
   (void)btn;
   AppState *app = (AppState *)user_data;
@@ -1280,10 +1272,8 @@ void scan_controller_refresh_volume_labels(AppState *app) {
   da_format_bytes(tot, a, sizeof(a));
   da_format_bytes_with_pct(used_b, tot, use_line, sizeof(use_line));
   da_format_bytes_with_pct(free_b, tot, free_line, sizeof(free_line));
-  char sel_line[640];
-  da_volume_selection_label(app->scan_root_utf8, sel_line, sizeof(sel_line));
   if (app->stat_sel_val) {
-    gtk_label_set_text(GTK_LABEL(app->stat_sel_val), sel_line[0] != '\0' ? sel_line : app->scan_root_utf8);
+    gtk_label_set_text(GTK_LABEL(app->stat_sel_val), app->scan_root_utf8);
   }
   if (app->stat_tot_val) {
     gtk_label_set_text(GTK_LABEL(app->stat_tot_val), a);
@@ -1309,7 +1299,9 @@ static void on_tree_view_row_expanded(GtkTreeView *tv, GtkTreeIter *iter, GtkTre
 
 void scan_controller_attach(AppState *app) {
   g_signal_connect(app->scan_btn, "clicked", G_CALLBACK(on_scan_clicked), app);
-  g_signal_connect(app->file_chooser_btn, "file-set", G_CALLBACK(on_file_set), app);
+  if (app->scan_source_combo != NULL) {
+    g_signal_connect(app->scan_source_combo, "changed", G_CALLBACK(da_scan_source_combo_on_changed), app);
+  }
   g_signal_connect(app->combo_display_max, "changed", G_CALLBACK(on_combo_display_changed), app);
   if (app->duplicates_only_check != NULL) {
     g_signal_connect(app->duplicates_only_check, "toggled", G_CALLBACK(on_duplicates_only_toggled), app);

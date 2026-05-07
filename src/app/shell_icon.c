@@ -142,8 +142,9 @@ GdkPixbuf *da_shell_icon_for_path_gio(const gchar *path_utf8, gint size_px) {
   GFile *f = g_file_new_for_path(path_utf8);
   GError *err = NULL;
   GFileInfo *info = g_file_query_info(
-      f, G_FILE_ATTRIBUTE_STANDARD_ICON "," G_FILE_ATTRIBUTE_STANDARD_SYMBOLIC_ICON, G_FILE_QUERY_INFO_NONE, NULL,
-      &err);
+      f,
+      G_FILE_ATTRIBUTE_STANDARD_TYPE "," G_FILE_ATTRIBUTE_STANDARD_ICON "," G_FILE_ATTRIBUTE_STANDARD_SYMBOLIC_ICON,
+      G_FILE_QUERY_INFO_NONE, NULL, &err);
   g_object_unref(f);
   g_clear_error(&err);
 

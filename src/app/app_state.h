@@ -28,7 +28,8 @@ typedef struct DaTreeViewModel DaTreeViewModel;
 typedef struct AppState {
   GtkApplication *gtk_app;
   GtkWidget *window;
-  GtkWidget *file_chooser_btn;
+  GtkWidget *scan_source_combo;
+  gint scan_source_last_stable_active;
   GtkWidget *scan_btn;
   GtkWidget *panel_scan_label;
   GtkWidget *progress;

@@ -110,12 +110,10 @@
                   </packing>
                 </child>
                 <child>
-                  <object class="GtkFileChooserButton" id="file_chooser_btn">
+                  <object class="GtkComboBox" id="scan_source_combo">
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
                     <property name="hexpand">True</property>
-                    <property name="action">select-folder</property>
-                    <property name="title" translatable="yes">Scan folder…</property>
                   </object>
                   <packing>
                     <property name="left-attach">1</property>

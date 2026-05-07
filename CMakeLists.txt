@@ -146,6 +146,7 @@ if(DISKATLAS_GTK3_FOUND)
     "${DISKATLAS_SRC}/app/scan_controller.c"
     "${DISKATLAS_SRC}/app/shell_icon.c"
     "${DISKATLAS_SRC}/app/format_text.c"
+    "${DISKATLAS_SRC}/app/scan_source_combo.c"
     "${DISKATLAS_SRC}/app/volumes.c"
     ${DISKATLAS_GRESOURCE_C}
   )

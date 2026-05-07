@@ -5,6 +5,7 @@
 
 #include "app.h"
 #include "diskatlas.h"
+#include "volumes.h"
 #include "scan_controller.h"
 #include "ui_window.h"
 
@@ -34,8 +35,11 @@ int diskatlas_app_run(int argc, char **argv) {
   if (argc > 1 && argv[1] != NULL && argv[1][0] != '\0') {
     app->scan_root_utf8 = g_strdup(argv[1]);
   } else {
-    const gchar *h = g_get_home_dir();
-    app->scan_root_utf8 = g_strdup(h != NULL ? h : ".");
+    app->scan_root_utf8 = da_volume_system_root_utf8();
+    if (app->scan_root_utf8 == NULL) {
+      const gchar *h = g_get_home_dir();
+      app->scan_root_utf8 = g_strdup(h != NULL ? h : ".");
+    }
   }
 
   app->gtk_app = gtk_application_new("com.diskatlas.DiskAtlas", G_APPLICATION_NON_UNIQUE);
