@@ -364,3 +364,74 @@ void da_format_uint64_locale(uint64_t n, char *dst, size_t dstsz) {
   }
   dst[out] = '\0';
 }
+
+static gboolean da_filter_has_wildcard(const char *filter) {
+  if (!filter) {
+    return FALSE;
+  }
+  for (const char *s = filter; *s; s = g_utf8_next_char(s)) {
+    gunichar c = g_utf8_get_char(s);
+    if (c == '*' || c == '?') {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+static gboolean utf8_prefix_ci_match(const char *hay, const char *needle, const char **out_end) {
+  const char *h = hay;
+  const char *n = needle;
+  while (*n) {
+    if (*h == '\0') {
+      return FALSE;
+    }
+    gunichar hc = g_utf8_get_char(h);
+    gunichar nc = g_utf8_get_char(n);
+    if (g_unichar_tolower(hc) != g_unichar_tolower(nc)) {
+      return FALSE;
+    }
+    h = g_utf8_next_char(h);
+    n = g_utf8_next_char(n);
+  }
+  if (out_end != NULL) {
+    *out_end = h;
+  }
+  return TRUE;
+}
+
+gchar *da_search_filter_markup(const gchar *display_utf8, const gchar *filter_utf8) {
+  if (filter_utf8 == NULL || filter_utf8[0] == '\0') {
+    return NULL;
+  }
+  if (da_filter_has_wildcard(filter_utf8)) {
+    return NULL;
+  }
+  const char *display = display_utf8 != NULL ? display_utf8 : "";
+  GString *gs = g_string_new(NULL);
+  const char *pending = display;
+  const char *p = display;
+
+  while (*p) {
+    const char *end_match = NULL;
+    if (utf8_prefix_ci_match(p, filter_utf8, &end_match)) {
+      if (p > pending) {
+        gchar *chunk = g_markup_escape_text(pending, (gssize)(p - pending));
+        g_string_append(gs, chunk);
+        g_free(chunk);
+      }
+      gchar *mid = g_markup_escape_text(p, (gssize)(end_match - p));
+      g_string_append_printf(gs, "<b><span foreground=\"#1565C0\">%s</span></b>", mid);
+      g_free(mid);
+      p = end_match;
+      pending = p;
+    } else {
+      p = g_utf8_next_char(p);
+    }
+  }
+  if (*pending != '\0') {
+    gchar *tail = g_markup_escape_text(pending, -1);
+    g_string_append(gs, tail);
+    g_free(tail);
+  }
+  return g_string_free(gs, FALSE);
+}

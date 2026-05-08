@@ -18,6 +18,7 @@
 #include "volumes.h"
 #include "da_cell_renderer_progress.h"
 #include "flat_list_model.h"
+#include "format_text.h"
 #include "shell_icon.h"
 
 void da_ui_sync_file_menu_export_csv(AppState *app) {
@@ -216,6 +217,39 @@ static void file_name_icon_cell_data(GtkTreeViewColumn *column, GtkCellRenderer 
   }
 }
 
+static void file_view_set_search_highlight_cell(GtkCellRenderer *cell, AppState *app, const gchar *plain) {
+  const gchar *s = plain != NULL ? plain : "";
+  if (app != NULL && app->filter_active && app->filter_text[0] != '\0') {
+    gchar *m = da_search_filter_markup(s, app->filter_text);
+    if (m != NULL) {
+      g_object_set(cell, "markup", m, NULL);
+      g_free(m);
+      return;
+    }
+  }
+  g_object_set(cell, "text", s, NULL);
+}
+
+static void file_view_file_name_text_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell,
+                                                GtkTreeModel *model, GtkTreeIter *iter, gpointer user_data) {
+  (void)column;
+  AppState *app = (AppState *)user_data;
+  gchar *plain = NULL;
+  gtk_tree_model_get(model, iter, 0, &plain, -1);
+  file_view_set_search_highlight_cell(cell, app, plain);
+  g_free(plain);
+}
+
+static void file_view_path_text_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell,
+                                          GtkTreeModel *model, GtkTreeIter *iter, gpointer user_data) {
+  (void)column;
+  AppState *app = (AppState *)user_data;
+  gchar *plain = NULL;
+  gtk_tree_model_get(model, iter, 1, &plain, -1);
+  file_view_set_search_highlight_cell(cell, app, plain);
+  g_free(plain);
+}
+
 static void append_file_name_column(GtkTreeView *tv, AppState *app, const char *title, int sort_model_id, int width_px,
                                     int min_width_px) {
   GtkCellRenderer *pix = gtk_cell_renderer_pixbuf_new();
@@ -227,8 +261,25 @@ static void append_file_name_column(GtkTreeView *tv, AppState *app, const char *
   gtk_tree_view_column_pack_start(c, pix, FALSE);
   gtk_tree_view_column_set_cell_data_func(c, pix, file_name_icon_cell_data, app, NULL);
   gtk_tree_view_column_pack_start(c, txt, TRUE);
-  gtk_tree_view_column_add_attribute(c, txt, "text", 0);
+  gtk_tree_view_column_set_cell_data_func(c, txt, file_view_file_name_text_cell_data, app, NULL);
 
+  gtk_tree_view_column_set_alignment(c, 0.0f);
+  gtk_tree_view_column_set_resizable(c, TRUE);
+  gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
+  gtk_tree_view_column_set_min_width(c, min_width_px);
+  gtk_tree_view_column_set_fixed_width(c, width_px);
+  gtk_tree_view_column_set_sort_column_id(c, sort_model_id);
+  gtk_tree_view_append_column(tv, c);
+}
+
+static void append_path_column(GtkTreeView *tv, AppState *app, const char *title, int sort_model_id, int width_px,
+                               int min_width_px) {
+  GtkCellRenderer *r = gtk_cell_renderer_text_new();
+  g_object_set(r, "ellipsize", PANGO_ELLIPSIZE_END, "xalign", 0.0f, NULL);
+  GtkTreeViewColumn *c = gtk_tree_view_column_new();
+  gtk_tree_view_column_set_title(c, title);
+  gtk_tree_view_column_pack_start(c, r, TRUE);
+  gtk_tree_view_column_set_cell_data_func(c, r, file_view_path_text_cell_data, app, NULL);
   gtk_tree_view_column_set_alignment(c, 0.0f);
   gtk_tree_view_column_set_resizable(c, TRUE);
   gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
@@ -683,6 +734,10 @@ void da_ui_build(AppState *app) {
   for (int i = 0; i < DA_COL_COUNT; i++) {
     if (i == 0) {
       append_file_name_column(GTK_TREE_VIEW(app->tree), app, titles[i], col_sort_id[i], col_w[i], col_min_w[i]);
+      continue;
+    }
+    if (i == 1) {
+      append_path_column(GTK_TREE_VIEW(app->tree), app, titles[i], col_sort_id[i], col_w[i], col_min_w[i]);
       continue;
     }
     if (i == 2) {
