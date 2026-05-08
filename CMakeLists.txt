@@ -72,16 +72,38 @@ else()
   list(APPEND DISKATLAS_CORE_SRCS "${DISKATLAS_SRC}/lib/diskatlas_scan_posix.c")
 endif()
 
+# --- Storage abstraction layer (platform + filesystem) ---
+list(APPEND DISKATLAS_CORE_SRCS
+  "${DISKATLAS_SRC}/lib/filesystem/filesystem.c"
+  "${DISKATLAS_SRC}/lib/platform/platform_path.c"
+)
+if(WIN32)
+  list(APPEND DISKATLAS_CORE_SRCS
+    "${DISKATLAS_SRC}/lib/platform/platform_win32.c"
+  )
+else()
+  list(APPEND DISKATLAS_CORE_SRCS
+    "${DISKATLAS_SRC}/lib/platform/platform_posix.c"
+  )
+endif()
+
 add_library(diskatlas_core SHARED ${DISKATLAS_CORE_SRCS})
 target_include_directories(diskatlas_core
   PUBLIC
     $<BUILD_INTERFACE:${DISKATLAS_SRC}/include>
     $<INSTALL_INTERFACE:include>
+  PRIVATE
+    "${DISKATLAS_SRC}/lib/platform"
+    "${DISKATLAS_SRC}/lib/filesystem"
 )
 target_compile_definitions(diskatlas_core PRIVATE DISKATLAS_BUILD_SHARED)
 target_link_libraries(diskatlas_core PRIVATE Threads::Threads)
 if(WIN32)
-  target_link_libraries(diskatlas_core PRIVATE advapi32)
+  # advapi32: registry / security APIs used by existing scan code.
+  # ole32 + oleaut32: CoInitializeEx / CoCreateInstance for WPD/MTP enumeration.
+  # portabledeviceapi is a COM in-proc server loaded at runtime — no static
+  # import library is needed; ole32 is sufficient for CoCreateInstance.
+  target_link_libraries(diskatlas_core PRIVATE advapi32 ole32 oleaut32)
 endif()
 if(NOT WIN32)
   target_compile_options(diskatlas_core PRIVATE -fvisibility=hidden)
