@@ -105,6 +105,8 @@ typedef struct AppState {
   size_t filtered_count;
   size_t filtered_cap;
   gchar filter_text[512];
+  /** Newest-first search strings for file-view combo; NULL until search combo is initialized. */
+  GPtrArray *search_history;
   gboolean filter_active;
   size_t filter_scan_pos;
   gboolean filter_build_running;

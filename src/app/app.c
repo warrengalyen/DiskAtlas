@@ -49,6 +49,10 @@ int diskatlas_app_run(int argc, char **argv) {
   int status = g_application_run(G_APPLICATION(app->gtk_app), argc, argv);
 
   g_object_unref(app->gtk_app);
+  if (app->search_history != NULL) {
+    g_ptr_array_unref(app->search_history);
+    app->search_history = NULL;
+  }
   free(app->master_indices);
   free(app->filtered_indices);
   g_free(app->scan_root_utf8);

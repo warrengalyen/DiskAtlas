@@ -18,9 +18,160 @@
 #include "scan_source_combo.h"
 #include "ui_window.h"
 #include "volumes.h"
+#include "diskatlas_ini.h"
 
 #define DA_FILE_VIEW_NOTEBOOK_PAGE 0
 #define DA_TREE_VIEW_NOTEBOOK_PAGE 1
+
+#define DA_SEARCH_HISTORY_MAX_ENTRIES 64
+
+static void kill_timer(guint *id);
+static void apply_search_filter(AppState *app);
+static void on_search_combo_changed(GtkComboBox *cb, gpointer user_data);
+
+static GtkEntry *da_file_view_search_get_entry(const AppState *app) {
+  if (app == NULL || app->search == NULL) {
+    return NULL;
+  }
+  if (GTK_IS_COMBO_BOX(app->search)) {
+    GtkWidget *ch = gtk_bin_get_child(GTK_BIN(app->search));
+    if (ch != NULL && GTK_IS_ENTRY(ch)) {
+      return GTK_ENTRY(ch);
+    }
+    return NULL;
+  }
+  if (GTK_IS_ENTRY(app->search)) {
+    return GTK_ENTRY(app->search);
+  }
+  return NULL;
+}
+
+static const gchar *da_file_view_search_get_text(const AppState *app) {
+  GtkEntry *e = da_file_view_search_get_entry(app);
+  if (e == NULL) {
+    return "";
+  }
+  const gchar *t = gtk_entry_get_text(e);
+  return t != NULL ? t : "";
+}
+
+static void da_search_combo_model_rebuild(AppState *app) {
+  if (app == NULL || app->search == NULL || !GTK_IS_COMBO_BOX_TEXT(app->search) || app->search_history == NULL) {
+    return;
+  }
+  GtkComboBoxText *cbt = GTK_COMBO_BOX_TEXT(app->search);
+  g_signal_handlers_block_by_func(app->search, G_CALLBACK(on_search_combo_changed), app);
+  gtk_combo_box_text_remove_all(cbt);
+  for (guint i = 0; i < app->search_history->len; i++) {
+    gtk_combo_box_text_append_text(cbt, (const gchar *)g_ptr_array_index(app->search_history, i));
+  }
+  gtk_combo_box_text_append_text(cbt, DA_SEARCH_HISTORY_CLEAR_ITEM);
+  g_signal_handlers_unblock_by_func(app->search, G_CALLBACK(on_search_combo_changed), app);
+  gtk_combo_box_set_active(GTK_COMBO_BOX(cbt), -1);
+}
+
+static void da_search_history_persist_and_refresh(AppState *app) {
+  if (app == NULL || app->search_history == NULL) {
+    return;
+  }
+  const gchar **flat = g_new(const gchar *, app->search_history->len + 1u);
+  for (guint i = 0; i < app->search_history->len; i++) {
+    flat[i] = (const gchar *)g_ptr_array_index(app->search_history, i);
+  }
+  da_ini_search_history_save(flat, app->search_history->len);
+  g_free(flat);
+  da_search_combo_model_rebuild(app);
+}
+
+static void on_search_combo_changed(GtkComboBox *cb, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->search == NULL || !GTK_IS_COMBO_BOX(cb)) {
+    return;
+  }
+  gint active = gtk_combo_box_get_active(cb);
+  if (active < 0) {
+    return;
+  }
+
+  gchar *t = gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(cb));
+  if (t == NULL) {
+    return;
+  }
+
+  if (g_strcmp0(t, DA_SEARCH_HISTORY_CLEAR_ITEM) == 0) {
+    g_free(t);
+    while (app->search_history != NULL && app->search_history->len > 0u) {
+      g_ptr_array_remove_index(app->search_history, 0u);
+    }
+    da_ini_search_history_save(NULL, 0);
+    da_search_combo_model_rebuild(app);
+    GtkEntry *en = da_file_view_search_get_entry(app);
+    if (en != NULL) {
+      gtk_entry_set_text(en, "");
+    }
+    gtk_combo_box_set_active(cb, -1);
+    kill_timer(&app->timer_search);
+    apply_search_filter(app);
+    return;
+  }
+
+  g_free(t);
+  gtk_combo_box_set_active(cb, -1);
+}
+
+static void da_search_history_maybe_record(AppState *app) {
+  if (app == NULL || app->search_history == NULL) {
+    return;
+  }
+  const gchar *q = app->filter_text;
+  if (q == NULL || q[0] == '\0') {
+    return;
+  }
+  if (g_strcmp0(q, DA_SEARCH_HISTORY_CLEAR_ITEM) == 0) {
+    return;
+  }
+
+  for (guint i = 0u; i < app->search_history->len;) {
+    if (g_strcmp0((const gchar *)g_ptr_array_index(app->search_history, i), q) == 0) {
+      g_ptr_array_remove_index(app->search_history, i);
+      continue;
+    }
+    i++;
+  }
+  g_ptr_array_insert(app->search_history, 0, g_strdup(q));
+  while (app->search_history->len > (guint)DA_SEARCH_HISTORY_MAX_ENTRIES) {
+    g_ptr_array_remove_index(app->search_history, app->search_history->len - 1u);
+  }
+  da_search_history_persist_and_refresh(app);
+}
+
+void da_file_view_search_combo_init(AppState *app) {
+  if (app == NULL || app->search == NULL || !GTK_IS_COMBO_BOX_TEXT(app->search)) {
+    return;
+  }
+  if (app->search_history == NULL) {
+    app->search_history = g_ptr_array_new_with_free_func(g_free);
+    gsize n = 0;
+    gchar **items = da_ini_search_history_load(&n);
+    if (items != NULL) {
+      for (gsize i = 0; i < n; i++) {
+        if (items[i] != NULL && items[i][0] != '\0' &&
+            g_strcmp0(items[i], DA_SEARCH_HISTORY_CLEAR_ITEM) != 0) {
+          g_ptr_array_add(app->search_history, g_strdup(items[i]));
+        }
+      }
+      g_strfreev(items);
+    }
+  }
+
+  GtkEntry *en = da_file_view_search_get_entry(app);
+  if (en != NULL) {
+    gtk_entry_set_placeholder_text(en, "Filter (* ? wildcards)…");
+  }
+
+  da_search_combo_model_rebuild(app);
+  g_signal_connect(app->search, "changed", G_CALLBACK(on_search_combo_changed), app);
+}
 
 static gboolean scan_controller_is_file_view_tab(const AppState *app) {
   if (app == NULL || app->main_notebook == NULL) {
@@ -976,7 +1127,7 @@ static void apply_search_filter(AppState *app) {
   }
 
   if (app->search != NULL) {
-    const gchar *t = gtk_entry_get_text(GTK_ENTRY(app->search));
+    const gchar *t = da_file_view_search_get_text(app);
     g_strlcpy(app->filter_text, t ? t : "", sizeof(app->filter_text));
   } else {
     app->filter_text[0] = '\0';
@@ -1224,7 +1375,7 @@ static gboolean on_timer_fill_chunk(gpointer data) {
   da_tree_view_populate(app);
 
   /* Populate flat file-view list — instantaneous, no timer loop needed. */
-  const gchar *peek = gtk_entry_get_text(GTK_ENTRY(app->search));
+  const gchar *peek = da_file_view_search_get_text(app);
   gboolean search_nonempty = (peek != NULL && peek[0] != '\0');
   if (search_nonempty || da_duplicates_only(app)) {
     apply_search_filter(app);
@@ -1388,6 +1539,18 @@ static gboolean on_search_debounce(gpointer data) {
   kill_timer(&app->timer_search);
   apply_search_filter(app);
   return G_SOURCE_REMOVE;
+}
+
+static void on_search_entry_activate(GtkEntry *entry, gpointer user_data) {
+  (void)entry;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL) {
+    return;
+  }
+  /* Enter: apply current text immediately, then add to history (not on every keystroke). */
+  kill_timer(&app->timer_search);
+  apply_search_filter(app);
+  da_search_history_maybe_record(app);
 }
 
 static void on_search_changed(GtkEditable *editable, gpointer user_data) {
@@ -1705,7 +1868,18 @@ void scan_controller_attach(AppState *app) {
   if (app->show_folders_check != NULL) {
     g_signal_connect(app->show_folders_check, "toggled", G_CALLBACK(on_show_folders_toggled), app);
   }
-  g_signal_connect(app->search, "changed", G_CALLBACK(on_search_changed), app);
+  {
+    GtkEntry *sen = da_file_view_search_get_entry(app);
+    if (sen != NULL) {
+      g_signal_connect(sen, "changed", G_CALLBACK(on_search_changed), app);
+      g_signal_connect(sen, "activate", G_CALLBACK(on_search_entry_activate), app);
+    } else if (app->search != NULL) {
+      g_signal_connect(app->search, "changed", G_CALLBACK(on_search_changed), app);
+      if (GTK_IS_ENTRY(app->search)) {
+        g_signal_connect(app->search, "activate", G_CALLBACK(on_search_entry_activate), app);
+      }
+    }
+  }
   if (app->tree_view != NULL) {
     g_signal_connect(app->tree_view, "row-expanded", G_CALLBACK(on_tree_view_row_expanded), app);
     g_signal_connect(app->tree_view, "motion-notify-event", G_CALLBACK(on_tree_view_motion), app);

@@ -293,7 +293,15 @@ static void append_path_column(GtkTreeView *tv, AppState *app, const char *title
 static void on_search_clear_clicked(GtkButton *btn, gpointer user_data) {
   (void)btn;
   AppState *app = (AppState *)user_data;
-  if (app->search != NULL) {
+  if (app->search == NULL) {
+    return;
+  }
+  if (GTK_IS_COMBO_BOX(app->search)) {
+    GtkWidget *ch = gtk_bin_get_child(GTK_BIN(app->search));
+    if (ch != NULL && GTK_IS_ENTRY(ch)) {
+      gtk_entry_set_text(GTK_ENTRY(ch), "");
+    }
+  } else if (GTK_IS_ENTRY(app->search)) {
     gtk_entry_set_text(GTK_ENTRY(app->search), "");
   }
 }
@@ -663,6 +671,7 @@ void da_ui_build(AppState *app) {
   app->panel_scan_label = GTK_WIDGET(gtk_builder_get_object(builder, "panel_scan_label"));
   app->progress = GTK_WIDGET(gtk_builder_get_object(builder, "progress"));
   app->search = GTK_WIDGET(gtk_builder_get_object(builder, "search"));
+  da_file_view_search_combo_init(app);
   app->duplicates_file_combo = GTK_WIDGET(gtk_builder_get_object(builder, "duplicates_file_combo"));
   app->match_filename_only_radio = GTK_WIDGET(gtk_builder_get_object(builder, "match_filename_only_radio"));
   app->match_entire_path_radio = GTK_WIDGET(gtk_builder_get_object(builder, "match_entire_path_radio"));

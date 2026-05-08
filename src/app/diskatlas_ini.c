@@ -18,6 +18,8 @@
 
 #define DA_INI_NAME "diskatlas.ini"
 #define DA_SEC_FILETREE "filetree"
+#define DA_SEC_SEARCH_HISTORY "search_history"
+#define DA_KEY_SEARCH_QUERIES "queries"
 
 static gchar *da_exe_dir_utf8(void) {
 #if defined(G_OS_WIN32)
@@ -78,6 +80,8 @@ static gboolean da_key_file_load_merged(GKeyFile *kf, const gchar *path) {
   if (kf == NULL || path == NULL) {
     return FALSE;
   }
+  /* Colon separates list values (e.g. `search_history` `queries`); semicolon may appear in filter text. */
+  g_key_file_set_list_separator(kf, ':');
   return g_key_file_load_from_file(kf, path, G_KEY_FILE_KEEP_COMMENTS | G_KEY_FILE_KEEP_TRANSLATIONS, NULL);
 }
 
@@ -215,6 +219,77 @@ void da_ini_save_filetree(const AppState *app) {
     g_free(dir);
   }
 
+  GError *werr = NULL;
+  g_file_set_contents(path, data, (gssize)len, &werr);
+  g_clear_error(&werr);
+  g_free(data);
+  g_free(path);
+}
+
+gchar **da_ini_search_history_load(gsize *n_out) {
+  if (n_out != NULL) {
+    *n_out = 0;
+  }
+  gchar *path = da_ini_path();
+  if (path == NULL) {
+    return NULL;
+  }
+  GKeyFile *kf = g_key_file_new();
+  if (!da_key_file_load_merged(kf, path)) {
+    g_key_file_unref(kf);
+    g_free(path);
+    return NULL;
+  }
+  g_free(path);
+  if (!g_key_file_has_group(kf, DA_SEC_SEARCH_HISTORY) ||
+      !g_key_file_has_key(kf, DA_SEC_SEARCH_HISTORY, DA_KEY_SEARCH_QUERIES, NULL)) {
+    g_key_file_unref(kf);
+    return NULL;
+  }
+  GError *err = NULL;
+  gsize n = 0;
+  gchar **list = g_key_file_get_string_list(kf, DA_SEC_SEARCH_HISTORY, DA_KEY_SEARCH_QUERIES, &n, &err);
+  g_key_file_unref(kf);
+  if (err != NULL) {
+    g_clear_error(&err);
+    g_strfreev(list);
+    return NULL;
+  }
+  if (n_out != NULL) {
+    *n_out = n;
+  }
+  return list;
+}
+
+void da_ini_search_history_save(const gchar *const *items, gsize n) {
+  gchar *path = da_ini_path();
+  if (path == NULL) {
+    return;
+  }
+  GKeyFile *kf = g_key_file_new();
+  (void)da_key_file_load_merged(kf, path);
+  if (n == 0) {
+    g_key_file_remove_group(kf, DA_SEC_SEARCH_HISTORY, NULL);
+  } else {
+    if (items == NULL) {
+      g_key_file_unref(kf);
+      g_free(path);
+      return;
+    }
+    g_key_file_set_string_list(kf, DA_SEC_SEARCH_HISTORY, DA_KEY_SEARCH_QUERIES, items, n);
+  }
+  gsize len = 0;
+  gchar *data = g_key_file_to_data(kf, &len, NULL);
+  g_key_file_unref(kf);
+  if (data == NULL) {
+    g_free(path);
+    return;
+  }
+  gchar *dir = g_path_get_dirname(path);
+  if (dir != NULL) {
+    g_mkdir_with_parents(dir, 0755);
+    g_free(dir);
+  }
   GError *werr = NULL;
   g_file_set_contents(path, data, (gssize)len, &werr);
   g_clear_error(&werr);

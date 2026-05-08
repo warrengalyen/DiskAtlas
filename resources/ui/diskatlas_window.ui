@@ -600,11 +600,11 @@
                       </packing>
                     </child>
                     <child>
-                      <object class="GtkEntry" id="search">
+                      <object class="GtkComboBoxText" id="search">
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
                         <property name="hexpand">True</property>
-                        <property name="placeholder-text" translatable="yes">Filter (* ? wildcards)…</property>
+                        <property name="has-entry">True</property>
                       </object>
                       <packing>
                         <property name="expand">True</property>
