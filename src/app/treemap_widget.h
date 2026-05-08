@@ -45,4 +45,7 @@ void treemap_widget_set_selection_by_scan_index(TreemapWidget *w, gint64 scan_in
  */
 void treemap_widget_add_to_selection_by_scan_index(TreemapWidget *w, gint64 scan_index);
 
+/** Append unique scan node indices for selected rects/dir headers (no-op if layout not ready). */
+void treemap_widget_append_selected_scan_indices(TreemapWidget *w, GArray *out_nids);
+
 #endif

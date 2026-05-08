@@ -21,18 +21,20 @@
 #include "shell_icon.h"
 
 void da_ui_sync_file_menu_export_csv(AppState *app) {
-  if (app == NULL || app->file_menu_export_csv == NULL) {
-    return;
-  }
   gboolean ok = FALSE;
-  if (app->scan != NULL) {
+  if (app != NULL && app->scan != NULL) {
     scan_progress_t pr = scan_get_progress(app->scan);
     if (pr.is_complete) {
       scan_results_view_t v = scan_get_results(app->scan);
       ok = (v.nodes != NULL);
     }
   }
-  gtk_widget_set_sensitive(app->file_menu_export_csv, ok);
+  if (app != NULL && app->file_menu_export_csv != NULL) {
+    gtk_widget_set_sensitive(app->file_menu_export_csv, ok);
+  }
+  if (app != NULL && app->file_menu_copy_clipboard != NULL) {
+    gtk_widget_set_sensitive(app->file_menu_copy_clipboard, ok);
+  }
 }
 
 #if defined(G_OS_WIN32)
@@ -297,6 +299,15 @@ static void on_file_menu_export_csv_activate(GtkMenuItem *item, gpointer user_da
     }
   }
   gtk_native_dialog_destroy(GTK_NATIVE_DIALOG(native));
+}
+
+static void on_file_menu_copy_clipboard_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->window == NULL) {
+    return;
+  }
+  scan_controller_copy_scan_paths_sizes_to_clipboard(app);
 }
 
 static void on_file_menu_import_csv_activate(GtkMenuItem *item, gpointer user_data) {
@@ -734,6 +745,13 @@ void da_ui_build(AppState *app) {
     app->file_menu_export_csv = file_menu_export_csv;
     if (file_menu_export_csv != NULL) {
       g_signal_connect(file_menu_export_csv, "activate", G_CALLBACK(on_file_menu_export_csv_activate), app);
+    }
+  }
+  {
+    GtkWidget *file_menu_copy_clipboard = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_copy_clipboard"));
+    app->file_menu_copy_clipboard = file_menu_copy_clipboard;
+    if (file_menu_copy_clipboard != NULL) {
+      g_signal_connect(file_menu_copy_clipboard, "activate", G_CALLBACK(on_file_menu_copy_clipboard_activate), app);
     }
   }
   {

@@ -11,6 +11,13 @@
 #include "format_text.h"
 #include "treemap_widget.h"
 
+void treemap_widget_append_selected_scan_indices(TreemapWidget *w, GArray *out_nids);
+void treemap_widget_add_to_selection_by_scan_index(TreemapWidget *w, gint64 scan_index);
+
+static void treemap_collect_selected_scan_nids_from_rects(const TreemapWidget *w, GArray *out_nids);
+static void treemap_persist_sync_from_visual(TreemapWidget *self);
+static void treemap_append_unique_nid(GArray *out, size_t nid);
+
 /* ---- visual constants ---------------------------------------------------- */
 #define DIR_HEADER_H    16.0  /* pixel height reserved for folder header strip  */
 #define MIN_LABEL_W     72.0  /* min rect width  to show any text               */
@@ -75,6 +82,9 @@ struct _TreemapWidget {
   gpointer on_hover_data;
   void (*on_selected)(GtkWidget *, gint64, gpointer);
   gpointer on_selected_data;
+
+  /* Logical multi-selection (scan indices) survives set_data / relayout when the same scan buffer is reused. */
+  GArray *persist_sel_nids;
 
   PangoLayout *pango_layout;    /* normal font – large rects            */
   PangoLayout *pango_layout_sm; /* small  font – medium rects           */
@@ -766,10 +776,61 @@ static void treemap_dir_toggle(TreemapWidget *self, gint idx) {
   g_array_append_val(self->selected_dir_indices, idx);
 }
 
+/* Fills out_nids from current rect/dir index selection (no persist fallback). */
+static void treemap_collect_selected_scan_nids_from_rects(const TreemapWidget *w, GArray *out_nids) {
+  guint i;
+  if (w->selected_rect_indices != NULL) {
+    for (i = 0; i < w->selected_rect_indices->len; i++) {
+      gint ri = g_array_index(w->selected_rect_indices, gint, i);
+      if (ri >= 0 && (size_t)ri < w->rect_count) {
+        size_t nid = w->rects[ri].node_index;
+        if (nid < w->node_count) {
+          treemap_append_unique_nid(out_nids, nid);
+        }
+      }
+    }
+  }
+  if (w->selected_dir_indices != NULL) {
+    for (i = 0; i < w->selected_dir_indices->len; i++) {
+      gint di = g_array_index(w->selected_dir_indices, gint, i);
+      if (di >= 0 && (size_t)di < w->dir_label_count) {
+        size_t ix = w->dir_labels[di].scan_ix;
+        if (ix != (size_t)-1 && ix < w->node_count) {
+          treemap_append_unique_nid(out_nids, ix);
+        }
+      }
+    }
+  }
+}
+
+static void treemap_persist_sync_from_visual(TreemapWidget *self) {
+  if (self->persist_sel_nids == NULL) {
+    return;
+  }
+  g_array_set_size(self->persist_sel_nids, 0);
+  if (self->layout_ok && self->rects != NULL && self->nodes != NULL) {
+    treemap_collect_selected_scan_nids_from_rects(self, self->persist_sel_nids);
+  }
+}
+
 /* ---- layout entry point -------------------------------------------------- */
 
 static void treemap_run_layout(TreemapWidget *self, int wid, int hei) {
   LayoutOut out = {0};
+  GArray *preserve_scan_nids = g_array_new(FALSE, FALSE, sizeof(size_t));
+  guint pi;
+
+  /* Snapshot logical selection before tearing down rects. */
+  if (self->layout_ok && self->rects != NULL && self->nodes != NULL) {
+    treemap_collect_selected_scan_nids_from_rects(self, preserve_scan_nids);
+  } else if (self->persist_sel_nids != NULL && self->persist_sel_nids->len > 0 && self->nodes != NULL) {
+    for (pi = 0; pi < self->persist_sel_nids->len; pi++) {
+      size_t nid = g_array_index(self->persist_sel_nids, size_t, pi);
+      if (nid < self->node_count) {
+        treemap_append_unique_nid(preserve_scan_nids, nid);
+      }
+    }
+  }
 
   treemap_clear_layout_buffers(self);
   self->layout_ok = FALSE;
@@ -780,6 +841,16 @@ static void treemap_run_layout(TreemapWidget *self, int wid, int hei) {
   self->anchor_rect_index = -1;
 
   if (self->tree_root == NULL || wid < 2 || hei < 2) {
+    if (self->persist_sel_nids != NULL) {
+      g_array_set_size(self->persist_sel_nids, 0);
+      for (pi = 0; pi < preserve_scan_nids->len; pi++) {
+        size_t nid = g_array_index(preserve_scan_nids, size_t, pi);
+        if (self->nodes != NULL && nid < self->node_count) {
+          treemap_append_unique_nid(self->persist_sel_nids, nid);
+        }
+      }
+    }
+    g_array_free(preserve_scan_nids, TRUE);
     gtk_widget_queue_draw(GTK_WIDGET(self));
     return;
   }
@@ -795,6 +866,13 @@ static void treemap_run_layout(TreemapWidget *self, int wid, int hei) {
   self->alloc_h = hei;
   self->layout_ok = TRUE;
 
+  for (pi = 0; pi < preserve_scan_nids->len; pi++) {
+    size_t nid = g_array_index(preserve_scan_nids, size_t, pi);
+    treemap_widget_add_to_selection_by_scan_index(self, (gint64)nid);
+  }
+  g_array_free(preserve_scan_nids, TRUE);
+
+  treemap_persist_sync_from_visual(self);
   gtk_widget_queue_draw(GTK_WIDGET(self));
 }
 
@@ -1072,6 +1150,8 @@ static gboolean treemap_button_press(GtkWidget *w, GdkEventButton *ev, gpointer 
     ix = -1;
   }
 
+  treemap_persist_sync_from_visual(self);
+
   gtk_widget_queue_draw(GTK_WIDGET(self));
   if (self->on_selected != NULL) {
     self->on_selected(GTK_WIDGET(self), ix, self->on_selected_data);
@@ -1162,6 +1242,10 @@ static void treemap_widget_finalize(GObject *object) {
     g_array_free(self->selected_dir_indices, TRUE);
     self->selected_dir_indices = NULL;
   }
+  if (self->persist_sel_nids != NULL) {
+    g_array_free(self->persist_sel_nids, TRUE);
+    self->persist_sel_nids = NULL;
+  }
   g_clear_object(&self->pango_layout);
   g_clear_object(&self->pango_layout_sm);
   g_clear_object(&self->pango_layout_hdr);
@@ -1183,6 +1267,7 @@ static void treemap_widget_init(TreemapWidget *self) {
   self->hovered_dir_index    = -1;
   self->selected_rect_indices = g_array_new(FALSE, FALSE, sizeof(gint));
   self->selected_dir_indices  = g_array_new(FALSE, FALSE, sizeof(gint));
+  self->persist_sel_nids      = g_array_new(FALSE, FALSE, sizeof(size_t));
   self->anchor_rect_index    = -1;
   self->alloc_w = -1;
   self->alloc_h = -1;
@@ -1203,8 +1288,20 @@ GtkWidget *treemap_widget_new(void) {
 void treemap_widget_set_data(TreemapWidget *widget, const char *root_utf8, const file_node_t *nodes,
                              size_t count) {
   GtkAllocation a;
+  const file_node_t *prev_nodes;
+  size_t prev_count;
 
   g_return_if_fail(TREEMAP_IS_WIDGET(widget));
+
+  prev_nodes = widget->nodes;
+  prev_count = widget->node_count;
+  if (prev_nodes != nodes || prev_count != count) {
+    if (widget->persist_sel_nids != NULL) {
+      g_array_set_size(widget->persist_sel_nids, 0);
+    }
+  } else {
+    treemap_persist_sync_from_visual(widget);
+  }
 
   g_free(widget->root_utf8);
   widget->root_utf8 = g_strdup(root_utf8 != NULL ? root_utf8 : "");
@@ -1297,6 +1394,7 @@ void treemap_widget_set_selection_by_scan_index(TreemapWidget *w, gint64 scan_in
 
   if (scan_index < 0 || !w->layout_ok) {
     gtk_widget_queue_draw(GTK_WIDGET(w));
+    treemap_persist_sync_from_visual(w);
     return;
   }
 
@@ -1307,6 +1405,7 @@ void treemap_widget_set_selection_by_scan_index(TreemapWidget *w, gint64 scan_in
       g_array_append_val(w->selected_rect_indices, idx);
       w->anchor_rect_index = idx;
       gtk_widget_queue_draw(GTK_WIDGET(w));
+      treemap_persist_sync_from_visual(w);
       return;
     }
   }
@@ -1318,10 +1417,39 @@ void treemap_widget_set_selection_by_scan_index(TreemapWidget *w, gint64 scan_in
       gint idx = (gint)i;
       g_array_append_val(w->selected_dir_indices, idx);
       gtk_widget_queue_draw(GTK_WIDGET(w));
+      treemap_persist_sync_from_visual(w);
       return;
     }
   }
 
   /* No matching tile — redraw to reflect cleared selection. */
   gtk_widget_queue_draw(GTK_WIDGET(w));
+  treemap_persist_sync_from_visual(w);
+}
+
+static void treemap_append_unique_nid(GArray *out, size_t nid) {
+  guint i;
+  for (i = 0; i < out->len; i++) {
+    if (g_array_index(out, size_t, i) == nid) {
+      return;
+    }
+  }
+  g_array_append_val(out, nid);
+}
+
+void treemap_widget_append_selected_scan_indices(TreemapWidget *w, GArray *out_nids) {
+  guint i;
+  g_return_if_fail(TREEMAP_IS_WIDGET(w));
+  g_return_if_fail(out_nids != NULL);
+  if (w->layout_ok && w->nodes != NULL && w->rects != NULL) {
+    treemap_collect_selected_scan_nids_from_rects(w, out_nids);
+  }
+  if (out_nids->len == 0 && w->persist_sel_nids != NULL && w->node_count > 0) {
+    for (i = 0; i < w->persist_sel_nids->len; i++) {
+      size_t nid = g_array_index(w->persist_sel_nids, size_t, i);
+      if (nid < w->node_count) {
+        treemap_append_unique_nid(out_nids, nid);
+      }
+    }
+  }
 }

@@ -27,6 +27,9 @@ void scan_controller_apply_imported_scan(AppState *app, scan_result_t *new_scan,
 /** Duplicate-clustering options aligned with the toolbar (for MFT dump import). */
 void scan_controller_fill_scan_options_for_import(AppState *app, scan_options_t *out);
 
+/** Copy size (column 1, right-aligned) and full path (column 2) for current selection or entire scan/list. */
+void scan_controller_copy_scan_paths_sizes_to_clipboard(AppState *app);
+
 #if defined(G_OS_WIN32)
 /** After validations in the UI: optionally scan @a volume_root_utf8, then copy $MFT to @a dest_path_utf8. */
 void scan_controller_begin_mft_dump_flow(AppState *app, const gchar *volume_root_utf8,

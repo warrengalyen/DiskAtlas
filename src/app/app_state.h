@@ -33,6 +33,8 @@ typedef struct AppState {
   GtkWidget *window;
   /** File menu "Export to CSV…"; sensitivity synced to exportable scan state. */
   GtkWidget *file_menu_export_csv;
+  /** File menu "Copy file and size info…"; same sensitivity as export CSV. */
+  GtkWidget *file_menu_copy_clipboard;
   GtkWidget *scan_source_combo;
   gint scan_source_last_stable_active;
   GtkWidget *scan_btn;
