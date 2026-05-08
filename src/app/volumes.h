@@ -44,4 +44,11 @@ int da_volume_space_for_path(const char *path_utf8, uint64_t *total, uint64_t *f
 /** Fills `out` with `path_utf8` (truncated to `out_sz`). Used for combo row labels; status panel uses the raw path. */
 void da_volume_selection_label(const char *path_utf8, char *out, size_t out_sz);
 
+/**
+ * Label for the status bar "selected" field: if @a path_utf8 is exactly a volume/mount root, returns
+ * `[X:] VolumeName` on Windows (no backslash after the letter) or `[mount] name` on POSIX; otherwise
+ * `<Folder> ` plus @a path_utf8. Caller must g_free the result. Returns NULL only when @a path_utf8 is NULL or empty.
+ */
+gchar *da_volume_status_selected_label(const gchar *path_utf8);
+
 #endif  /* VOLUMES_H */

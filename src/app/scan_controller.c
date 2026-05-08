@@ -1666,7 +1666,9 @@ void scan_controller_refresh_volume_labels(AppState *app) {
   da_format_bytes_with_pct(used_b, tot, use_line, sizeof(use_line));
   da_format_bytes_with_pct(free_b, tot, free_line, sizeof(free_line));
   if (app->stat_sel_val) {
-    gtk_label_set_text(GTK_LABEL(app->stat_sel_val), app->scan_root_utf8);
+    gchar *sel_lbl = da_volume_status_selected_label(app->scan_root_utf8);
+    gtk_label_set_text(GTK_LABEL(app->stat_sel_val), sel_lbl != NULL ? sel_lbl : app->scan_root_utf8);
+    g_free(sel_lbl);
   }
   if (app->stat_tot_val) {
     gtk_label_set_text(GTK_LABEL(app->stat_tot_val), a);

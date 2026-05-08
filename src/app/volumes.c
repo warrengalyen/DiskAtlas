@@ -543,3 +543,139 @@ gboolean da_volume_is_exact_root_path(const gchar *path_utf8, const gchar *volum
   return eq;
 #endif
 }
+
+#if !defined(_WIN32)
+static gchar *da_bracket_volume_root_display(const gchar *root_path_utf8) {
+  if (root_path_utf8 == NULL || root_path_utf8[0] == '\0') {
+    return g_strdup("[]");
+  }
+  if (g_strcmp0(root_path_utf8, "/") == 0) {
+    return g_strdup("[/]");
+  }
+  gchar *s = g_strdup(root_path_utf8);
+  size_t len = strlen(s);
+  while (len > 1u && s[len - 1u] == G_DIR_SEPARATOR) {
+    s[len - 1u] = '\0';
+    len--;
+  }
+  gchar *b = g_strdup_printf("[%s]", s);
+  g_free(s);
+  return b;
+}
+#endif
+
+#if defined(_WIN32)
+/** Bracket for status line: `[X:]` for drive-letter roots; otherwise `[root]` with trailing `\\` removed. */
+static gchar *da_win32_volume_bracket_display(const gchar *vol_root_with_sep) {
+  if (vol_root_with_sep == NULL || vol_root_with_sep[0] == '\0') {
+    return g_strdup("[]");
+  }
+  if (g_ascii_isalpha((guchar)vol_root_with_sep[0]) && vol_root_with_sep[1] == ':') {
+    return g_strdup_printf("[%c:]", (int)g_ascii_toupper((guchar)vol_root_with_sep[0]));
+  }
+  gchar *s = g_strdup(vol_root_with_sep);
+  size_t len = strlen(s);
+  while (len > 1u && (s[len - 1u] == '\\' || s[len - 1u] == '/')) {
+    s[len - 1u] = '\0';
+    len--;
+  }
+  gchar *b = g_strdup_printf("[%s]", s);
+  g_free(s);
+  return b;
+}
+#endif
+
+gchar *da_volume_status_selected_label(const gchar *path_utf8) {
+  if (path_utf8 == NULL || path_utf8[0] == '\0') {
+    return NULL;
+  }
+#if defined(_WIN32)
+  gchar *vol_root = NULL;
+  if (!da_win32_path_get_volume_root_utf8(path_utf8, &vol_root)) {
+    return g_strdup_printf("<Folder> %s", path_utf8);
+  }
+  for (gchar *s = vol_root; *s != '\0'; s++) {
+    if (*s == '/') {
+      *s = '\\';
+    }
+  }
+  if (!g_str_has_suffix(vol_root, "\\")) {
+    gchar *t = g_strconcat(vol_root, "\\", NULL);
+    g_free(vol_root);
+    vol_root = t;
+  }
+  if (!da_volume_is_exact_root_path(path_utf8, vol_root)) {
+    g_free(vol_root);
+    return g_strdup_printf("<Folder> %s", path_utf8);
+  }
+  WCHAR wroot[4096];
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, vol_root, -1, wroot,
+                          (int)(sizeof(wroot) / sizeof(wroot[0]))) <= 0) {
+    if (MultiByteToWideChar(CP_UTF8, 0, vol_root, -1, wroot, (int)(sizeof(wroot) / sizeof(wroot[0]))) <= 0) {
+      gchar *br = da_win32_volume_bracket_display(vol_root);
+      g_free(vol_root);
+      return br;
+    }
+  }
+  WCHAR voln[MAX_PATH + 1];
+  memset(voln, 0, sizeof(voln));
+  if (!GetVolumeInformationW(wroot, voln, (DWORD)(sizeof(voln) / sizeof(voln[0])), NULL, NULL, NULL, NULL, 0)) {
+    gchar *br = da_win32_volume_bracket_display(vol_root);
+    g_free(vol_root);
+    return br;
+  }
+  gchar *name = g_utf16_to_utf8((const gunichar2 *)voln, -1, NULL, NULL, NULL);
+  gchar *bracket = da_win32_volume_bracket_display(vol_root);
+  g_free(vol_root);
+  gchar *out;
+  if (name != NULL && name[0] != '\0') {
+    out = g_strdup_printf("%s %s", bracket, name);
+  } else {
+    out = g_strdup(bracket);
+  }
+  g_free(bracket);
+  g_free(name);
+  return out;
+#else
+  DaVolumeEntry *vols = NULL;
+  gsize n = 0;
+  if (da_volume_enumerate(&vols, &n) != 0) {
+    return g_strdup_printf("<Folder> %s", path_utf8);
+  }
+  const DaVolumeEntry *match = NULL;
+  for (gsize i = 0; i < n; i++) {
+    if (da_volume_is_exact_root_path(path_utf8, vols[i].root_path)) {
+      match = &vols[i];
+      break;
+    }
+  }
+  if (match == NULL) {
+    da_volume_list_free(vols, n);
+    return g_strdup_printf("<Folder> %s", path_utf8);
+  }
+  gchar *bracket = da_bracket_volume_root_display(match->root_path);
+  gchar *name = NULL;
+  if (match->display_label != NULL) {
+    const gchar *p = strchr(match->display_label, ']');
+    if (p != NULL) {
+      p++;
+      while (*p == ' ') {
+        p++;
+      }
+      if (*p != '\0') {
+        name = g_strdup(p);
+      }
+    }
+  }
+  gchar *out;
+  if (name != NULL && name[0] != '\0') {
+    out = g_strdup_printf("%s %s", bracket, name);
+  } else {
+    out = g_strdup(bracket);
+  }
+  g_free(bracket);
+  g_free(name);
+  da_volume_list_free(vols, n);
+  return out;
+#endif
+}
