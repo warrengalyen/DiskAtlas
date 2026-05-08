@@ -604,7 +604,7 @@
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
                         <property name="hexpand">True</property>
-                        <property name="placeholder-text" translatable="yes">Filter by file name…</property>
+                        <property name="placeholder-text" translatable="yes">Filter (* ? wildcards)…</property>
                       </object>
                       <packing>
                         <property name="expand">True</property>

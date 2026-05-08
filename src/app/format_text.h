@@ -16,9 +16,9 @@ void da_format_win32_attr_letters(uint32_t wa, char *dst, size_t dstsz);
 void da_format_uint64_locale(uint64_t n, char *dst, size_t dstsz);
 
 /**
- * Pango markup for file-view search highlighting: case-insensitive occurrences of
- * filter_utf8 are bold and blue; other text is escaped. Returns NULL when filter_utf8 is
- * empty or contains * or ? (caller should show plain display_utf8 instead).
+ * Pango markup for file-view search highlighting: case-insensitive matches are bold and
+ * blue (substring search, or glob-aligned spans when filter uses * / ?). Returns NULL
+ * only when filter_utf8 is empty (caller should show plain display_utf8).
  */
 gchar *da_search_filter_markup(const gchar *display_utf8, const gchar *filter_utf8);
 

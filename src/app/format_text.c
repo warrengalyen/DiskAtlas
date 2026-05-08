@@ -399,14 +399,81 @@ static gboolean utf8_prefix_ci_match(const char *hay, const char *needle, const 
   return TRUE;
 }
 
-gchar *da_search_filter_markup(const gchar *display_utf8, const gchar *filter_utf8) {
-  if (filter_utf8 == NULL || filter_utf8[0] == '\0') {
-    return NULL;
+/* Glob on UTF-8 case-folded strings; marks each *byte* of str for matched literals and ?. */
+static gboolean wild_match_fold_mark(const char *pat, const char *str, gboolean *mark, const char *str_base,
+                                     gsize mark_len, int depth) {
+  if (depth++ > 10000) {
+    return FALSE;
   }
-  if (da_filter_has_wildcard(filter_utf8)) {
-    return NULL;
+  if (*pat == '\0') {
+    return *str == '\0';
   }
-  const char *display = display_utf8 != NULL ? display_utf8 : "";
+
+  gunichar pc = g_utf8_get_char(pat);
+  if (pc == '*') {
+    const char *next_pat = g_utf8_next_char(pat);
+    if (*next_pat == '\0') {
+      return TRUE;
+    }
+    for (;;) {
+      if (wild_match_fold_mark(next_pat, str, mark, str_base, mark_len, depth)) {
+        return TRUE;
+      }
+      if (*str == '\0') {
+        return FALSE;
+      }
+      str = g_utf8_next_char(str);
+    }
+  }
+  if (pc == '?') {
+    if (*str == '\0') {
+      return FALSE;
+    }
+    const char *next_s = g_utf8_next_char(str);
+    if (!wild_match_fold_mark(g_utf8_next_char(pat), next_s, mark, str_base, mark_len, depth)) {
+      return FALSE;
+    }
+    for (const char *q = str; q < next_s; q++) {
+      size_t off = (size_t)(q - str_base);
+      if (off < mark_len) {
+        mark[off] = TRUE;
+      }
+    }
+    return TRUE;
+  }
+  if (*str == '\0') {
+    return FALSE;
+  }
+  gunichar sc = g_utf8_get_char(str);
+  if (pc != sc) {
+    return FALSE;
+  }
+  {
+    const char *next_s = g_utf8_next_char(str);
+    if (!wild_match_fold_mark(g_utf8_next_char(pat), next_s, mark, str_base, mark_len, depth)) {
+      return FALSE;
+    }
+    for (const char *q = str; q < next_s; q++) {
+      size_t off = (size_t)(q - str_base);
+      if (off < mark_len) {
+        mark[off] = TRUE;
+      }
+    }
+    return TRUE;
+  }
+}
+
+static void mark_display_utf8_char(gboolean *dmark, const char *disp, gsize dlen, const char *p) {
+  const char *next = g_utf8_next_char(p);
+  for (const char *q = p; q < next; q++) {
+    size_t off = (size_t)(q - disp);
+    if (off < dlen) {
+      dmark[off] = TRUE;
+    }
+  }
+}
+
+static gchar *da_search_filter_markup_plain_substrings(const char *display, const char *filter_utf8) {
   GString *gs = g_string_new(NULL);
   const char *pending = display;
   const char *p = display;
@@ -416,11 +483,17 @@ gchar *da_search_filter_markup(const gchar *display_utf8, const gchar *filter_ut
     if (utf8_prefix_ci_match(p, filter_utf8, &end_match)) {
       if (p > pending) {
         gchar *chunk = g_markup_escape_text(pending, (gssize)(p - pending));
-        g_string_append(gs, chunk);
+        if (chunk != NULL) {
+          g_string_append(gs, chunk);
+        }
         g_free(chunk);
       }
       gchar *mid = g_markup_escape_text(p, (gssize)(end_match - p));
-      g_string_append_printf(gs, "<b><span foreground=\"#1565C0\">%s</span></b>", mid);
+      g_string_append(gs, "<b><span foreground=\"#1565C0\">");
+      if (mid != NULL) {
+        g_string_append(gs, mid);
+      }
+      g_string_append(gs, "</span></b>");
       g_free(mid);
       p = end_match;
       pending = p;
@@ -430,8 +503,180 @@ gchar *da_search_filter_markup(const gchar *display_utf8, const gchar *filter_ut
   }
   if (*pending != '\0') {
     gchar *tail = g_markup_escape_text(pending, -1);
-    g_string_append(gs, tail);
+    if (tail != NULL) {
+      g_string_append(gs, tail);
+    }
     g_free(tail);
   }
-  return g_string_free(gs, FALSE);
+  gchar *out = g_strdup(gs->str);
+  g_string_free(gs, TRUE);
+  return out;
+}
+
+static gchar *da_search_filter_markup_wildcard(const char *display, const char *filter_utf8) {
+  gchar *fold_str = g_utf8_casefold(display, -1);
+  if (fold_str == NULL) {
+    return g_markup_escape_text(display, -1);
+  }
+
+  gsize flen = strlen(fold_str);
+  GArray *map = g_array_new(FALSE, FALSE, sizeof(gint));
+  const char *fp = fold_str;
+  gboolean mapping_ok = TRUE;
+
+  for (const char *p = display; *p; p = g_utf8_next_char(p)) {
+    const char *next = g_utf8_next_char(p);
+    gint ds = (gint)(p - display);
+    gchar *cf = g_utf8_casefold(p, (gssize)(next - p));
+    if (cf == NULL) {
+      mapping_ok = FALSE;
+      break;
+    }
+    gsize clen = strlen(cf);
+    gsize consumed = (gsize)(fp - fold_str);
+    if (flen < consumed + clen || strncmp(fp, cf, clen) != 0) {
+      mapping_ok = FALSE;
+      g_free(cf);
+      break;
+    }
+    for (gsize j = 0; j < clen; j++) {
+      gint v = ds;
+      g_array_append_val(map, v);
+    }
+    fp += clen;
+    g_free(cf);
+  }
+
+  if (!mapping_ok || (size_t)(fp - fold_str) != flen || (gsize)map->len != flen) {
+    g_free(fold_str);
+    g_array_free(map, TRUE);
+    return g_markup_escape_text(display, -1);
+  }
+
+  gchar *pat_fold = g_utf8_casefold(filter_utf8, -1);
+  if (pat_fold == NULL) {
+    g_free(fold_str);
+    g_array_free(map, TRUE);
+    return g_markup_escape_text(display, -1);
+  }
+
+  gboolean *fmark = g_malloc0((flen + 1u) * sizeof(gboolean));
+  gboolean ok = wild_match_fold_mark(pat_fold, fold_str, fmark, fold_str, flen, 0);
+  g_free(pat_fold);
+  g_free(fold_str);
+
+  gsize dlen = strlen(display);
+  gboolean *dmark = g_malloc0((dlen + 1u) * sizeof(gboolean));
+  if (ok) {
+    for (gsize i = 0; i < flen; i++) {
+      if (fmark[i]) {
+        gint ds = g_array_index(map, gint, i);
+        if (ds >= 0 && (gsize)ds < dlen) {
+          mark_display_utf8_char(dmark, display, dlen, display + (size_t)ds);
+        }
+      }
+    }
+  }
+
+  GString *gs = g_string_new(NULL);
+  const char *const disp_end = display + dlen;
+  for (const char *p = display; *p != '\0' && p < disp_end;) {
+    if (!g_utf8_validate(p, (gssize)(disp_end - p), NULL)) {
+      gchar *t = g_markup_escape_text(p, (gssize)(disp_end - p));
+      if (t != NULL) {
+        g_string_append(gs, t);
+      }
+      g_free(t);
+      break;
+    }
+    const char *next = g_utf8_next_char(p);
+    if (next <= p || next > disp_end) {
+      gchar *t = g_markup_escape_text(p, (gssize)(disp_end - p));
+      if (t != NULL) {
+        g_string_append(gs, t);
+      }
+      g_free(t);
+      break;
+    }
+    gboolean hl = FALSE;
+    for (const char *q = p; q < next; q++) {
+      size_t off = (size_t)(q - display);
+      if (off < dlen && dmark[off]) {
+        hl = TRUE;
+        break;
+      }
+    }
+    const char *q = next;
+    while (q < disp_end && *q != '\0') {
+      const char *qn = g_utf8_next_char(q);
+      if (qn <= q || qn > disp_end) {
+        break;
+      }
+      gboolean h2 = FALSE;
+      for (const char *r = q; r < qn; r++) {
+        size_t off = (size_t)(r - display);
+        if (off < dlen && dmark[off]) {
+          h2 = TRUE;
+          break;
+        }
+      }
+      if (h2 != hl) {
+        break;
+      }
+      q = qn;
+    }
+    if (q > disp_end) {
+      q = disp_end;
+    }
+    gssize chunk_len = (gssize)(q - p);
+    gssize max_span = (gssize)(disp_end - p);
+    if (chunk_len > max_span) {
+      chunk_len = max_span;
+      q = p + (size_t)max_span;
+    }
+    if (chunk_len <= 0) {
+      if (*p == '\0') {
+        break;
+      }
+      p = g_utf8_next_char(p);
+      continue;
+    }
+    gchar *escaped = g_markup_escape_text(p, chunk_len);
+    gchar *chunk = escaped != NULL ? g_strdup(escaped) : NULL;
+    g_free(escaped);
+    if (hl) {
+      g_string_append(gs, "<b><span foreground=\"#1565C0\">");
+      if (chunk != NULL) {
+        g_string_append(gs, chunk);
+      }
+      g_string_append(gs, "</span></b>");
+    } else {
+      if (chunk != NULL) {
+        g_string_append(gs, chunk);
+      }
+    }
+    g_free(chunk);
+    p = q;
+  }
+
+  gchar *out = g_strdup(gs->str);
+  g_string_free(gs, TRUE);
+  g_free(fmark);
+  g_free(dmark);
+  g_array_free(map, TRUE);
+  return out;
+}
+
+gchar *da_search_filter_markup(const gchar *display_utf8, const gchar *filter_utf8) {
+  if (filter_utf8 == NULL || filter_utf8[0] == '\0') {
+    return NULL;
+  }
+  const char *display = display_utf8 != NULL ? display_utf8 : "";
+  if (!g_utf8_validate(display, -1, NULL)) {
+    return g_markup_escape_text(display, -1);
+  }
+  if (da_filter_has_wildcard(filter_utf8)) {
+    return da_search_filter_markup_wildcard(display, filter_utf8);
+  }
+  return da_search_filter_markup_plain_substrings(display, filter_utf8);
 }

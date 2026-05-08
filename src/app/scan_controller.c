@@ -1057,7 +1057,7 @@ static gboolean on_timer_filter_chunk(gpointer data) {
         v.nodes[nid].duplicate_group_id == DISKATLAS_DUPLICATE_GROUP_NONE) {
       continue;
     }
-    if (app->filter_active && !da_utf8_basename_matches_filter(v.nodes[nid].path, app->filter_text)) {
+    if (app->filter_active && !da_utf8_file_view_filter_matches(app, v.nodes[nid].path)) {
       continue;
     }
 
@@ -1554,6 +1554,12 @@ static void on_duplicates_only_toggled(GtkToggleButton *btn, gpointer user_data)
   apply_search_filter(app);
 }
 
+static void on_match_scope_toggled(GtkToggleButton *btn, gpointer user_data) {
+  (void)btn;
+  AppState *app = (AppState *)user_data;
+  apply_search_filter(app);
+}
+
 static void on_combo_display_changed(GtkComboBox *cb, gpointer user_data) {
   (void)cb;
   AppState *app = (AppState *)user_data;
@@ -1687,6 +1693,12 @@ void scan_controller_attach(AppState *app) {
   g_signal_connect(app->combo_display_max, "changed", G_CALLBACK(on_combo_display_changed), app);
   if (app->duplicates_only_check != NULL) {
     g_signal_connect(app->duplicates_only_check, "toggled", G_CALLBACK(on_duplicates_only_toggled), app);
+  }
+  if (app->match_filename_only_radio != NULL) {
+    g_signal_connect(app->match_filename_only_radio, "toggled", G_CALLBACK(on_match_scope_toggled), app);
+  }
+  if (app->match_entire_path_radio != NULL) {
+    g_signal_connect(app->match_entire_path_radio, "toggled", G_CALLBACK(on_match_scope_toggled), app);
   }
   if (app->show_folders_check != NULL) {
     g_signal_connect(app->show_folders_check, "toggled", G_CALLBACK(on_show_folders_toggled), app);

@@ -11,6 +11,9 @@
 
 gboolean da_utf8_basename_matches_filter(const char *path_utf8, const char *filter_utf8);
 
+/** File View filter: basename or full path per toolbar radios; supports * and ? (UTF-8 aware). */
+gboolean da_utf8_file_view_filter_matches(const AppState *app, const char *path_utf8);
+
 gboolean da_duplicates_only(const AppState *app);
 gboolean da_view_uses_filtered_pool(const AppState *app);
 

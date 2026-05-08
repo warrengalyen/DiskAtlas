@@ -43,32 +43,45 @@ static gboolean utf8_contains_ci_folded(const char *hay_fold, const char *needle
   return strstr(hay_fold, needle_fold) != NULL;
 }
 
-static gboolean wild_match_ci_folded_recursive(const char *pat, const char *str, int depth) {
+/* Glob on UTF-8 case-folded strings: '*' = any substring, '?' = one Unicode character. */
+static gboolean wild_match_folded_utf8(const char *pat, const char *str, int depth) {
   if (depth++ > 10000) {
     return FALSE;
   }
   if (*pat == '\0') {
     return *str == '\0';
   }
-  if (*pat == '*') {
-    if (pat[1] == '\0') {
+
+  gunichar pc = g_utf8_get_char(pat);
+  if (pc == '*') {
+    const char *next_pat = g_utf8_next_char(pat);
+    if (*next_pat == '\0') {
       return TRUE;
     }
-    while (*str != '\0') {
-      if (wild_match_ci_folded_recursive(pat + 1, str, depth)) {
+    for (;;) {
+      if (wild_match_folded_utf8(next_pat, str, depth)) {
         return TRUE;
       }
-      str++;
+      if (*str == '\0') {
+        return FALSE;
+      }
+      str = g_utf8_next_char(str);
     }
-    return wild_match_ci_folded_recursive(pat + 1, str, depth);
   }
-  if (*pat == '?') {
-    return (*str != '\0') && wild_match_ci_folded_recursive(pat + 1, str + 1, depth);
+  if (pc == '?') {
+    if (*str == '\0') {
+      return FALSE;
+    }
+    return wild_match_folded_utf8(g_utf8_next_char(pat), g_utf8_next_char(str), depth);
   }
-  if (*pat != *str) {
+  if (*str == '\0') {
     return FALSE;
   }
-  return wild_match_ci_folded_recursive(pat + 1, str + 1, depth);
+  gunichar sc = g_utf8_get_char(str);
+  if (pc != sc) {
+    return FALSE;
+  }
+  return wild_match_folded_utf8(g_utf8_next_char(pat), g_utf8_next_char(str), depth);
 }
 
 gboolean da_duplicates_only(const AppState *app) {
@@ -139,28 +152,45 @@ static gboolean ascii_contains_ci(const char *hay, const char *needle) {
   return FALSE;
 }
 
-gboolean da_utf8_basename_matches_filter(const char *path_utf8, const char *filter_utf8) {
+static gboolean utf8_folded_matches_filter(const char *hay_utf8, const char *filter_utf8) {
   if (!filter_utf8 || !filter_utf8[0]) {
     return TRUE;
   }
-  const char *bn = utf8_basename_ptr(path_utf8);
+  const char *hay = hay_utf8 ? hay_utf8 : "";
 
   /* ASCII fast-path: avoid two heap allocations for the common all-ASCII case. */
-  if (!filter_has_wildcard(filter_utf8) && str_is_ascii(bn) && str_is_ascii(filter_utf8)) {
-    return ascii_contains_ci(bn, filter_utf8);
+  if (!filter_has_wildcard(filter_utf8) && str_is_ascii(hay) && str_is_ascii(filter_utf8)) {
+    return ascii_contains_ci(hay, filter_utf8);
   }
 
-  gchar *bn_fold = g_utf8_casefold(bn, -1);
+  gchar *hay_fold = g_utf8_casefold(hay, -1);
   gchar *fi_fold = g_utf8_casefold(filter_utf8, -1);
   gboolean ok;
   if (filter_has_wildcard(filter_utf8)) {
-    ok = wild_match_ci_folded_recursive(fi_fold, bn_fold, 0);
+    ok = wild_match_folded_utf8(fi_fold, hay_fold, 0);
   } else {
-    ok = utf8_contains_ci_folded(bn_fold, fi_fold);
+    ok = utf8_contains_ci_folded(hay_fold, fi_fold);
   }
-  g_free(bn_fold);
+  g_free(hay_fold);
   g_free(fi_fold);
   return ok;
+}
+
+gboolean da_utf8_basename_matches_filter(const char *path_utf8, const char *filter_utf8) {
+  return utf8_folded_matches_filter(utf8_basename_ptr(path_utf8), filter_utf8);
+}
+
+gboolean da_utf8_file_view_filter_matches(const AppState *app, const char *path_utf8) {
+  if (app == NULL) {
+    return FALSE;
+  }
+  const char *path = path_utf8 != NULL ? path_utf8 : "";
+  gboolean entire = (app->match_entire_path_radio != NULL &&
+                     gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app->match_entire_path_radio)));
+  if (entire) {
+    return utf8_folded_matches_filter(path, app->filter_text);
+  }
+  return utf8_folded_matches_filter(utf8_basename_ptr(path), app->filter_text);
 }
 
 size_t da_source_pool_count(const AppState *app) {
