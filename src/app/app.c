@@ -6,12 +6,14 @@
 #include "app.h"
 #include "diskatlas.h"
 #include "volumes.h"
+#include "diskatlas_ini.h"
 #include "scan_controller.h"
 #include "ui_window.h"
 
 static void on_window_destroy(GtkWidget *w, gpointer user_data) {
   (void)w;
   AppState *app = (AppState *)user_data;
+  da_ini_save_filetree(app);
   scan_controller_detach(app);
   if (app->scan != NULL) {
     scan_result_free(app->scan);

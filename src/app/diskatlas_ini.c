@@ -1,0 +1,223 @@
+#include <stddef.h>
+
+#include <glib.h>
+#include <gtk/gtk.h>
+
+#include "diskatlas_ini.h"
+
+#if defined(G_OS_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#elif defined(__linux__)
+#include <unistd.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
+
+#define DA_INI_NAME "diskatlas.ini"
+#define DA_SEC_FILETREE "filetree"
+
+static gchar *da_exe_dir_utf8(void) {
+#if defined(G_OS_WIN32)
+  WCHAR wbuf[32768];
+  DWORD n = GetModuleFileNameW(NULL, wbuf, (DWORD)(G_N_ELEMENTS(wbuf) - 1));
+  if (n == 0 || n >= G_N_ELEMENTS(wbuf) - 1) {
+    return NULL;
+  }
+  wbuf[n] = L'\0';
+  gchar *exe = g_utf16_to_utf8((const gunichar2 *)wbuf, -1, NULL, NULL, NULL);
+  if (exe == NULL) {
+    return NULL;
+  }
+  gchar *dir = g_path_get_dirname(exe);
+  g_free(exe);
+  return dir;
+#elif defined(__linux__)
+  char buf[4096];
+  ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1u);
+  if (len <= 0) {
+    return NULL;
+  }
+  buf[(size_t)len] = '\0';
+  return g_path_get_dirname(buf);
+#elif defined(__APPLE__)
+  char stack[4096];
+  uint32_t size = (uint32_t)sizeof(stack);
+  if (_NSGetExecutablePath(stack, &size) == 0) {
+    return g_path_get_dirname(stack);
+  }
+  gchar *dyn = g_malloc((gsize)size);
+  if (dyn == NULL) {
+    return NULL;
+  }
+  if (_NSGetExecutablePath(dyn, &size) != 0) {
+    g_free(dyn);
+    return NULL;
+  }
+  gchar *dir = g_path_get_dirname(dyn);
+  g_free(dyn);
+  return dir;
+#else
+  return NULL;
+#endif
+}
+
+gchar *da_ini_path(void) {
+  gchar *dir = da_exe_dir_utf8();
+  if (dir == NULL) {
+    return NULL;
+  }
+  gchar *path = g_build_filename(dir, DA_INI_NAME, NULL);
+  g_free(dir);
+  return path;
+}
+
+static gboolean da_key_file_load_merged(GKeyFile *kf, const gchar *path) {
+  if (kf == NULL || path == NULL) {
+    return FALSE;
+  }
+  return g_key_file_load_from_file(kf, path, G_KEY_FILE_KEEP_COMMENTS | G_KEY_FILE_KEEP_TRANSLATIONS, NULL);
+}
+
+void da_ini_load_filetree(AppState *app) {
+  if (app == NULL) {
+    return;
+  }
+  gchar *path = da_ini_path();
+  if (path == NULL) {
+    return;
+  }
+  GKeyFile *kf = g_key_file_new();
+  if (!da_key_file_load_merged(kf, path)) {
+    g_key_file_unref(kf);
+    g_free(path);
+    return;
+  }
+  g_free(path);
+
+  if (!g_key_file_has_group(kf, DA_SEC_FILETREE)) {
+    g_key_file_unref(kf);
+    return;
+  }
+
+  GError *err = NULL;
+
+  if (g_key_file_has_key(kf, DA_SEC_FILETREE, "match_entire_path", NULL)) {
+    gboolean entire = g_key_file_get_boolean(kf, DA_SEC_FILETREE, "match_entire_path", &err);
+    g_clear_error(&err);
+    if (app->match_entire_path_radio != NULL && GTK_IS_TOGGLE_BUTTON(app->match_entire_path_radio)) {
+      gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app->match_entire_path_radio), entire);
+    } else if (app->match_filename_only_radio != NULL && GTK_IS_TOGGLE_BUTTON(app->match_filename_only_radio)) {
+      gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app->match_filename_only_radio), !entire);
+    }
+  }
+
+  if (g_key_file_has_key(kf, DA_SEC_FILETREE, "display_max_index", NULL)) {
+    gint ix = g_key_file_get_integer(kf, DA_SEC_FILETREE, "display_max_index", &err);
+    g_clear_error(&err);
+    if (app->combo_display_max != NULL && GTK_IS_COMBO_BOX(app->combo_display_max)) {
+      if (ix >= 0 && ix <= 4) {
+        gtk_combo_box_set_active(GTK_COMBO_BOX(app->combo_display_max), ix);
+      }
+    }
+  }
+
+  if (g_key_file_has_key(kf, DA_SEC_FILETREE, "show_folders", NULL)) {
+    gboolean v = g_key_file_get_boolean(kf, DA_SEC_FILETREE, "show_folders", &err);
+    g_clear_error(&err);
+    if (app->show_folders_check != NULL && GTK_IS_TOGGLE_BUTTON(app->show_folders_check)) {
+      gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app->show_folders_check), v);
+    }
+  }
+
+  if (g_key_file_has_key(kf, DA_SEC_FILETREE, "duplicates_mode", NULL)) {
+    gint mode = g_key_file_get_integer(kf, DA_SEC_FILETREE, "duplicates_mode", &err);
+    g_clear_error(&err);
+    if (app->duplicates_file_combo != NULL && GTK_IS_COMBO_BOX(app->duplicates_file_combo)) {
+      if (mode >= 0 && mode <= 2) {
+        gtk_combo_box_set_active(GTK_COMBO_BOX(app->duplicates_file_combo), mode);
+      }
+    }
+  }
+
+  if (g_key_file_has_key(kf, DA_SEC_FILETREE, "duplicates_only", NULL)) {
+    gboolean v = g_key_file_get_boolean(kf, DA_SEC_FILETREE, "duplicates_only", &err);
+    g_clear_error(&err);
+    if (app->duplicates_only_check != NULL && GTK_IS_TOGGLE_BUTTON(app->duplicates_only_check)) {
+      gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app->duplicates_only_check), v);
+    }
+  }
+
+  g_key_file_unref(kf);
+}
+
+void da_ini_save_filetree(const AppState *app) {
+  if (app == NULL) {
+    return;
+  }
+  gchar *path = da_ini_path();
+  if (path == NULL) {
+    return;
+  }
+
+  GKeyFile *kf = g_key_file_new();
+  (void)da_key_file_load_merged(kf, path);
+
+  gboolean entire = FALSE;
+  if (app->match_entire_path_radio != NULL && GTK_IS_TOGGLE_BUTTON(app->match_entire_path_radio)) {
+    entire = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app->match_entire_path_radio));
+  }
+  g_key_file_set_boolean(kf, DA_SEC_FILETREE, "match_entire_path", entire);
+
+  gint display_ix = 3;
+  if (app->combo_display_max != NULL && GTK_IS_COMBO_BOX(app->combo_display_max)) {
+    gint ix = gtk_combo_box_get_active(GTK_COMBO_BOX(app->combo_display_max));
+    if (ix >= 0 && ix <= 4) {
+      display_ix = ix;
+    }
+  }
+  g_key_file_set_integer(kf, DA_SEC_FILETREE, "display_max_index", display_ix);
+
+  gboolean show_folders = FALSE;
+  if (app->show_folders_check != NULL && GTK_IS_TOGGLE_BUTTON(app->show_folders_check)) {
+    show_folders = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app->show_folders_check));
+  }
+  g_key_file_set_boolean(kf, DA_SEC_FILETREE, "show_folders", show_folders);
+
+  gint dup_mode = 2;
+  if (app->duplicates_file_combo != NULL && GTK_IS_COMBO_BOX(app->duplicates_file_combo)) {
+    gint m = gtk_combo_box_get_active(GTK_COMBO_BOX(app->duplicates_file_combo));
+    if (m >= 0 && m <= 2) {
+      dup_mode = m;
+    }
+  }
+  g_key_file_set_integer(kf, DA_SEC_FILETREE, "duplicates_mode", dup_mode);
+
+  gboolean dup_only = FALSE;
+  if (app->duplicates_only_check != NULL && GTK_IS_TOGGLE_BUTTON(app->duplicates_only_check)) {
+    dup_only = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app->duplicates_only_check));
+  }
+  g_key_file_set_boolean(kf, DA_SEC_FILETREE, "duplicates_only", dup_only);
+
+  gsize len = 0;
+  gchar *data = g_key_file_to_data(kf, &len, NULL);
+  g_key_file_unref(kf);
+  if (data == NULL) {
+    g_free(path);
+    return;
+  }
+
+  gchar *dir = g_path_get_dirname(path);
+  if (dir != NULL) {
+    g_mkdir_with_parents(dir, 0755);
+    g_free(dir);
+  }
+
+  GError *werr = NULL;
+  g_file_set_contents(path, data, (gssize)len, &werr);
+  g_clear_error(&werr);
+  g_free(data);
+  g_free(path);
+}

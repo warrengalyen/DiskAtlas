@@ -16,6 +16,7 @@
 #include "csv_export.h"
 #include "ui_window.h"
 #include "volumes.h"
+#include "diskatlas_ini.h"
 #include "da_cell_renderer_progress.h"
 #include "flat_list_model.h"
 #include "format_text.h"
@@ -719,6 +720,8 @@ void da_ui_build(AppState *app) {
   gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(app->combo_display_max), "10000");
   gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(app->combo_display_max), "100000");
   gtk_combo_box_set_active(GTK_COMBO_BOX(app->combo_display_max), 3);
+
+  da_ini_load_filetree(app);
 
   app->flat_list_model = flat_list_model_new(app);
   gtk_tree_view_set_model(GTK_TREE_VIEW(app->tree), GTK_TREE_MODEL(app->flat_list_model));

@@ -151,6 +151,7 @@ if(DISKATLAS_GTK3_FOUND)
     "${DISKATLAS_SRC}/app/scan_source_combo.c"
     "${DISKATLAS_SRC}/app/csv_export.c"
     "${DISKATLAS_SRC}/app/volumes.c"
+    "${DISKATLAS_SRC}/app/diskatlas_ini.c"
     ${DISKATLAS_GRESOURCE_C}
   )
   set_target_properties(diskatlas_app PROPERTIES OUTPUT_NAME diskatlas)
