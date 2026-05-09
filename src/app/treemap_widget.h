@@ -4,6 +4,7 @@
 #include <gtk/gtk.h>
 
 #include "diskatlas.h"
+#include "dm_treemap_colors.h"
 
 #define TREEMAP_TYPE_WIDGET (treemap_widget_get_type())
 G_DECLARE_FINAL_TYPE(TreemapWidget, treemap_widget, TREEMAP, WIDGET, GtkDrawingArea)
@@ -23,6 +24,12 @@ GtkWidget *treemap_widget_new(void);
  */
 void treemap_widget_set_data(TreemapWidget *widget, const char *root_utf8, const file_node_t *nodes,
                              size_t count);
+
+/** Full treemap appearance (radial lighting, borders, thresholds). */
+void treemap_widget_set_style(TreemapWidget *w, const DmTreemapStyle *s);
+
+/** Toggle only `enable_tile_gradients` (same as clearing `enable_tile_gradients` in style). */
+void treemap_widget_set_gradient_fill(TreemapWidget *w, gboolean gradient);
 
 void treemap_widget_set_hover_callback(TreemapWidget *w,
                                        void (*cb)(GtkWidget *widget, gint64 scan_index, gpointer data),

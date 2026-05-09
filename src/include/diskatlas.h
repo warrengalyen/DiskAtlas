@@ -29,7 +29,7 @@ DISKATLAS_API int diskatlas_init(void);
 /* -------------------------------------------------------------------------- */
 
 #define DISKATLAS_SCAN_OPTIONS_STRUCT_VERSION 1u
-#define DISKATLAS_FILE_NODE_STRUCT_VERSION 4u
+#define DISKATLAS_FILE_NODE_STRUCT_VERSION 5u
 #define DISKATLAS_SCAN_PROGRESS_STRUCT_VERSION 2u
 #define DISKATLAS_SCAN_RESULTS_VIEW_STRUCT_VERSION 1u
 
@@ -88,6 +88,10 @@ typedef struct file_node {
   uint8_t  _mime_pad[3];
   /** Packed color 0xRRGGBBAA from the matched MIME category; 0 = unclassified (use fallback). */
   uint32_t mime_color_rgba;
+  /** Precomputed treemap highlight (toward white); valid when mime_color_rgba is set for files. */
+  uint32_t gradient_light_rgba;
+  /** Precomputed treemap shadow (toward black); valid when mime_color_rgba is set for files. */
+  uint32_t gradient_dark_rgba;
 } file_node_t;
 
 /** Sentinel: file is unique or unmatched for duplicate clustering. */

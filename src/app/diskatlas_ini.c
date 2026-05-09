@@ -4,6 +4,7 @@
 #include <gtk/gtk.h>
 
 #include "diskatlas_ini.h"
+#include "dm_treemap_colors.h"
 #include "da_default_mime_categories.h"
 #include "format_text.h"
 
@@ -25,6 +26,7 @@
 #define DA_SEC_MIME_CATEGORIES "mime_categories"
 #define DA_SEC_INTERFACE "interface"
 #define DA_KEY_SIZE_DECIMAL_PLACES "size_decimal_places"
+#define DA_KEY_TREEMAP_TILE_GRADIENTS "treemap_tile_gradients"
 
 static gchar *da_exe_dir_utf8(void) {
 #if defined(G_OS_WIN32)
@@ -231,17 +233,25 @@ void da_ini_load_interface(AppState *app) {
   if (app == NULL) {
     return;
   }
+  app->treemap_style = DM_TREEMAP_STYLE_INIT_DEFAULT;
+
   gint places = 1;
   gchar *path = da_ini_path();
   if (path != NULL) {
     GKeyFile *kf = g_key_file_new();
-    if (da_key_file_load_merged(kf, path) && g_key_file_has_group(kf, DA_SEC_INTERFACE) &&
-        g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DECIMAL_PLACES, NULL)) {
+    if (da_key_file_load_merged(kf, path) && g_key_file_has_group(kf, DA_SEC_INTERFACE)) {
       GError *err = NULL;
-      gint v = g_key_file_get_integer(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DECIMAL_PLACES, &err);
-      g_clear_error(&err);
-      if (v >= 0 && v <= 4) {
-        places = v;
+      if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DECIMAL_PLACES, NULL)) {
+        gint v = g_key_file_get_integer(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DECIMAL_PLACES, &err);
+        g_clear_error(&err);
+        if (v >= 0 && v <= 4) {
+          places = v;
+        }
+      }
+      if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_TREEMAP_TILE_GRADIENTS, NULL)) {
+        gboolean tg = g_key_file_get_boolean(kf, DA_SEC_INTERFACE, DA_KEY_TREEMAP_TILE_GRADIENTS, &err);
+        g_clear_error(&err);
+        app->treemap_style.enable_tile_gradients = tg;
       }
     }
     g_key_file_unref(kf);
@@ -269,6 +279,8 @@ void da_ini_save_interface(const AppState *app) {
   GKeyFile *kf = g_key_file_new();
   (void)da_key_file_load_merged(kf, path);
   g_key_file_set_integer(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DECIMAL_PLACES, places);
+  g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_TREEMAP_TILE_GRADIENTS,
+                         app->treemap_style.enable_tile_gradients);
 
   gsize len = 0;
   gchar *data = g_key_file_to_data(kf, &len, NULL);

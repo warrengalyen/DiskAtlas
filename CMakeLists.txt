@@ -168,6 +168,7 @@ if(DISKATLAS_GTK3_FOUND)
     "${DISKATLAS_SRC}/app/flat_list_model.c"
     "${DISKATLAS_SRC}/app/tree_view_model.c"
     "${DISKATLAS_SRC}/app/treemap_widget.c"
+    "${DISKATLAS_SRC}/app/dm_treemap_colors.c"
     "${DISKATLAS_SRC}/app/scan_controller.c"
     "${DISKATLAS_SRC}/app/shell_icon.c"
     "${DISKATLAS_SRC}/app/format_text.c"

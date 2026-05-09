@@ -1312,6 +1312,9 @@ static void da_mime_classify_scan_nodes(AppState *app) {
   file_node_t *nodes = scan_result_nodes_mutable(app->scan, &count);
   if (nodes != NULL && count > 0) {
     dm_mime_db_classify_nodes(app->mime_db, nodes, count);
+    double shadow = app->treemap_style.gradient_strength *
+                    (DM_TREEMAP_DEFAULT_SHADOW_STRENGTH / DM_TREEMAP_DEFAULT_GRADIENT_STRENGTH);
+    dm_file_nodes_refresh_gradient_colors(nodes, count, app->treemap_style.gradient_strength, shadow);
   }
 }
 

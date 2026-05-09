@@ -9,6 +9,7 @@
 
 #include "diskatlas.h"
 #include "format_text.h"
+#include "dm_treemap_colors.h"
 #include "treemap_widget.h"
 
 void treemap_widget_append_selected_scan_indices(TreemapWidget *w, GArray *out_nids);
@@ -89,6 +90,8 @@ struct _TreemapWidget {
   PangoLayout *pango_layout;    /* normal font – large rects            */
   PangoLayout *pango_layout_sm; /* small  font – medium rects           */
   PangoLayout *pango_layout_hdr;/* bold font sized to DIR_HEADER_H – dir headers */
+  /** WinDirStat/WizTree-style treemap lighting (gradient fills, optional borders). */
+  DmTreemapStyle treemap_style;
 };
 
 G_DEFINE_TYPE(TreemapWidget, treemap_widget, GTK_TYPE_DRAWING_AREA)
@@ -907,7 +910,17 @@ static int treemap_hit_dir_header(const TreemapWidget *self, double px, double p
   return -1;
 }
 
+/**
+ * Directory tiles use synthetic MIME-like RGB in dm_treemap_draw_dir_gradient_tile.
+ */
+
 /* ---- drawing ------------------------------------------------------------- */
+
+#ifdef DA_TREEMAP_GRADIENT_DEBUG
+#define DA_TREEMAP_DBG(...) g_debug(__VA_ARGS__)
+#else
+#define DA_TREEMAP_DBG(...) ((void)0)
+#endif
 
 static gboolean treemap_draw(GtkWidget *widget, cairo_t *cr) {
   TreemapWidget *self = TREEMAP_WIDGET(widget);
@@ -920,12 +933,12 @@ static gboolean treemap_draw(GtkWidget *widget, cairo_t *cr) {
     return FALSE;
   }
 
-  /* --- Pass 1: fill all file/dir rects with colour + border --- */
+  DA_TREEMAP_DBG("[g] Treemap gradient enabled=%d", self->treemap_style.enable_tile_gradients ? 1 : 0);
+
+  /* --- Pass 1: fill all file/dir rects --- */
   for (i = 0; i < self->rect_count; i++) {
     const treemap_rect_t *R = &self->rects[i];
     const file_node_t *fn;
-    double rf, gf, bf;
-    double br, bg, bb;
     uint32_t kind;
 
     if (R->w < 1.0 || R->h < 1.0) {
@@ -937,28 +950,10 @@ static gboolean treemap_draw(GtkWidget *widget, cairo_t *cr) {
     fn = &self->nodes[R->node_index];
     kind = fn->attributes & DISKATLAS_NODE_KIND_MASK;
     if (kind == DISKATLAS_NODE_KIND_DIR) {
-      rf = 0.28;
-      gf = 0.28;
-      bf = 0.30;
+      dm_treemap_draw_dir_gradient_tile(cr, R->x, R->y, R->w, R->h, &self->treemap_style);
     } else {
-      uint32_t rgba = fn->mime_color_rgba;
-      if (rgba == 0) rgba = DISKATLAS_MIME_COLOR_FALLBACK;
-      rf = ((rgba >> 24) & 0xFFu) / 255.0;
-      gf = ((rgba >> 16) & 0xFFu) / 255.0;
-      bf = ((rgba >>  8) & 0xFFu) / 255.0;
+      dm_treemap_draw_gradient_tile(cr, fn, R->x, R->y, R->w, R->h, &self->treemap_style);
     }
-
-    cairo_set_source_rgb(cr, rf, gf, bf);
-    cairo_rectangle(cr, R->x, R->y, R->w, R->h);
-    cairo_fill(cr);
-
-    br = rf * 0.50;
-    bg = gf * 0.50;
-    bb = bf * 0.50;
-    cairo_set_source_rgb(cr, br, bg, bb);
-    cairo_set_line_width(cr, 0.5);
-    cairo_rectangle(cr, R->x + 0.25, R->y + 0.25, R->w - 0.5, R->h - 0.5);
-    cairo_stroke(cr);
   }
 
   /* --- Pass 2: directory header strip backgrounds --- */
@@ -969,7 +964,9 @@ static gboolean treemap_draw(GtkWidget *widget, cairo_t *cr) {
     cairo_fill(cr);
   }
 
-  /* --- Pass 3: hover / selected border on file/dir rects --- */
+  /* --- Pass 3: hover / selected border on file/dir rects ---
+   * Clip each stroke to its tile: cairo strokes half-width outward would otherwise paint into
+   * neighboring rects and make shared edges appear to jump when hover toggles. */
   cairo_set_source_rgba(cr, HOVER_BORDER_R, HOVER_BORDER_G, HOVER_BORDER_B, HOVER_BORDER_A);
   for (i = 0; i < self->rect_count; i++) {
     const treemap_rect_t *R = &self->rects[i];
@@ -981,9 +978,13 @@ static gboolean treemap_draw(GtkWidget *widget, cairo_t *cr) {
     }
     bw  = sel ? SELECT_BORDER_W : HOVER_BORDER_W;
     off = bw / 2.0;
+    cairo_save(cr);
+    cairo_rectangle(cr, R->x, R->y, R->w, R->h);
+    cairo_clip(cr);
     cairo_set_line_width(cr, bw);
     cairo_rectangle(cr, R->x + off, R->y + off, R->w - bw, R->h - bw);
     cairo_stroke(cr);
+    cairo_restore(cr);
   }
 
   /* --- Pass 3b: folder group outlines (selected = thick, hovered = thin) --- */
@@ -998,9 +999,13 @@ static gboolean treemap_draw(GtkWidget *widget, cairo_t *cr) {
     }
     bw  = sel ? SELECT_BORDER_W : HOVER_BORDER_W;
     off = bw / 2.0;
+    cairo_save(cr);
+    cairo_rectangle(cr, HL->x, HL->y, HL->w, HL->dir_h);
+    cairo_clip(cr);
     cairo_set_line_width(cr, bw);
     cairo_rectangle(cr, HL->x + off, HL->y + off, HL->w - bw, HL->dir_h - bw);
     cairo_stroke(cr);
+    cairo_restore(cr);
   }
 
   /* --- Pass 4: file rect labels (dynamic font size based on rect area) --- */
@@ -1167,10 +1172,16 @@ static gboolean treemap_button_press(GtkWidget *w, GdkEventButton *ev, gpointer 
 
 static void treemap_size_allocate(GtkWidget *widget, GdkRectangle *allocation, gpointer user_data) {
   TreemapWidget *self = TREEMAP_WIDGET(user_data);
+  gint nw = allocation->width;
+  gint nh = allocation->height;
   (void)widget;
-  if (allocation->width != self->alloc_w || allocation->height != self->alloc_h || !self->layout_ok) {
-    if (self->tree_root != NULL && allocation->width >= 2 && allocation->height >= 2) {
-      treemap_run_layout(self, allocation->width, allocation->height);
+  if (nw != self->alloc_w || nh != self->alloc_h || !self->layout_ok) {
+    if (self->tree_root != NULL && nw >= 2 && nh >= 2) {
+      treemap_run_layout(self, nw, nh);
+    } else {
+      /* Keep cached dimensions in sync so we do not re-enter layout on identical allocates. */
+      self->alloc_w = nw;
+      self->alloc_h = nh;
     }
   }
 }
@@ -1265,6 +1276,7 @@ static void treemap_widget_class_init(TreemapWidgetClass *klass) {
 
 static void treemap_widget_init(TreemapWidget *self) {
   gtk_widget_set_has_window(GTK_WIDGET(self), TRUE);
+  gtk_widget_set_can_focus(GTK_WIDGET(self), FALSE);
   gtk_widget_add_events(GTK_WIDGET(self),
                         GDK_POINTER_MOTION_MASK | GDK_BUTTON_PRESS_MASK | GDK_LEAVE_NOTIFY_MASK);
   self->hovered_index        = -1;
@@ -1275,6 +1287,7 @@ static void treemap_widget_init(TreemapWidget *self) {
   self->anchor_rect_index    = -1;
   self->alloc_w = -1;
   self->alloc_h = -1;
+  self->treemap_style = DM_TREEMAP_STYLE_INIT_DEFAULT;
   g_signal_connect(self, "size-allocate", G_CALLBACK(treemap_size_allocate), self);
   g_signal_connect(self, "realize", G_CALLBACK(treemap_realize), self);
   g_signal_connect(self, "unrealize", G_CALLBACK(treemap_unrealize), self);
@@ -1287,6 +1300,19 @@ static void treemap_widget_init(TreemapWidget *self) {
 
 GtkWidget *treemap_widget_new(void) {
   return GTK_WIDGET(g_object_new(TREEMAP_TYPE_WIDGET, NULL));
+}
+
+void treemap_widget_set_gradient_fill(TreemapWidget *w, gboolean gradient) {
+  g_return_if_fail(TREEMAP_IS_WIDGET(w));
+  w->treemap_style.enable_tile_gradients = gradient;
+  gtk_widget_queue_draw(GTK_WIDGET(w));
+}
+
+void treemap_widget_set_style(TreemapWidget *w, const DmTreemapStyle *s) {
+  g_return_if_fail(TREEMAP_IS_WIDGET(w));
+  g_return_if_fail(s != NULL);
+  w->treemap_style = *s;
+  gtk_widget_queue_draw(GTK_WIDGET(w));
 }
 
 void treemap_widget_set_data(TreemapWidget *widget, const char *root_utf8, const file_node_t *nodes,

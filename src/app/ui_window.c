@@ -7,6 +7,7 @@
 #include <gtk/gtk.h>
 
 #include "diskatlas.h"
+#include "dm_treemap_colors.h"
 
 #include "treemap_widget.h"
 #include "file_tree_model.h"
@@ -463,7 +464,26 @@ typedef struct {
   AppState        *app;
   gboolean         mime_saved;
   GtkWidget       *decimal_places_spin;
+  GtkWidget       *treemap_gradient_check;
 } DaSettingsDlgHandles;
+
+static void da_ui_apply_treemap_style(AppState *app) {
+  if (app == NULL) {
+    return;
+  }
+  if (app->treemap != NULL) {
+    treemap_widget_set_style(TREEMAP_WIDGET(app->treemap), &app->treemap_style);
+  }
+  if (app->scan != NULL) {
+    size_t count = 0;
+    file_node_t *nodes = scan_result_nodes_mutable(app->scan, &count);
+    if (nodes != NULL && count > 0u) {
+      double shadow = app->treemap_style.gradient_strength *
+                      (DM_TREEMAP_DEFAULT_SHADOW_STRENGTH / DM_TREEMAP_DEFAULT_GRADIENT_STRENGTH);
+      dm_file_nodes_refresh_gradient_colors(nodes, count, app->treemap_style.gradient_strength, shadow);
+    }
+  }
+}
 
 static void da_settings_apply_interface_tab(DaSettingsDlgHandles *h) {
   if (h == NULL || h->app == NULL) {
@@ -479,8 +499,15 @@ static void da_settings_apply_interface_tab(DaSettingsDlgHandles *h) {
     v = 4;
   }
   h->app->size_decimal_places = v;
+
+  if (h->treemap_gradient_check != NULL && GTK_IS_TOGGLE_BUTTON(h->treemap_gradient_check)) {
+    h->app->treemap_style.enable_tile_gradients =
+        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(h->treemap_gradient_check));
+  }
+
   da_ini_save_interface(h->app);
   scan_controller_refresh_size_display_format(h->app);
+  da_ui_apply_treemap_style(h->app);
 }
 
 static void on_settings_ok_clicked(GtkButton *btn, gpointer user_data) {
@@ -554,6 +581,11 @@ static void on_tools_menu_settings_activate(GtkMenuItem *item, gpointer user_dat
   handles->decimal_places_spin = GTK_WIDGET(gtk_builder_get_object(builder, "decimal_places_spin"));
   if (handles->decimal_places_spin != NULL && GTK_IS_SPIN_BUTTON(handles->decimal_places_spin)) {
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(handles->decimal_places_spin), (gdouble)app->size_decimal_places);
+  }
+  handles->treemap_gradient_check = GTK_WIDGET(gtk_builder_get_object(builder, "treemap_gradient_check"));
+  if (handles->treemap_gradient_check != NULL && GTK_IS_TOGGLE_BUTTON(handles->treemap_gradient_check)) {
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(handles->treemap_gradient_check),
+                                 app->treemap_style.enable_tile_gradients);
   }
 
   GtkWidget *ok_btn = GTK_WIDGET(gtk_builder_get_object(builder, "ok_btn"));
@@ -841,6 +873,11 @@ void da_ui_build(AppState *app) {
   app->status_label_left = GTK_WIDGET(gtk_builder_get_object(builder, "status_label_left"));
   app->status_label_center = GTK_WIDGET(gtk_builder_get_object(builder, "status_label_center"));
   app->status_label_right = GTK_WIDGET(gtk_builder_get_object(builder, "status_label_right"));
+  /* Keeps status bar + treemap header height stable when paths ellipsize (hover updates center). */
+  gtk_label_set_single_line_mode(GTK_LABEL(app->treemap_panel_title), TRUE);
+  gtk_label_set_single_line_mode(GTK_LABEL(app->status_label_left), TRUE);
+  gtk_label_set_single_line_mode(GTK_LABEL(app->status_label_center), TRUE);
+  gtk_label_set_single_line_mode(GTK_LABEL(app->status_label_right), TRUE);
 
   app->stat_sel_val = GTK_WIDGET(gtk_builder_get_object(builder, "stat_sel_val"));
   app->stat_tot_val = GTK_WIDGET(gtk_builder_get_object(builder, "stat_tot_val"));
@@ -870,6 +907,8 @@ void da_ui_build(AppState *app) {
 
   da_ini_load_filetree(app);
   da_ini_load_interface(app);
+
+  treemap_widget_set_style(TREEMAP_WIDGET(app->treemap), &app->treemap_style);
 
   app->flat_list_model = flat_list_model_new(app);
   gtk_tree_view_set_model(GTK_TREE_VIEW(app->tree), GTK_TREE_MODEL(app->flat_list_model));

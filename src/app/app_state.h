@@ -8,6 +8,8 @@
 
 #include "diskatlas.h"
 
+#include "dm_treemap_colors.h"
+
 /** Opaque tree-view model (defined in tree_view_model.c). */
 typedef struct DaTreeViewModel DaTreeViewModel;
 
@@ -121,6 +123,9 @@ typedef struct AppState {
 
   /** Formatted size strings (KiB+): decimal fraction digits, 0–4; persisted under `[interface]` in diskatlas.ini. */
   gint size_decimal_places;
+
+  /** Treemap lighting/borders; `enable_tile_gradients` persisted as `treemap_tile_gradients` in `[interface]`. */
+  DmTreemapStyle treemap_style;
 
   /** Runtime MIME classification database; built at startup and rebuilt after settings changes. */
   struct DmMimeDatabase *mime_db;

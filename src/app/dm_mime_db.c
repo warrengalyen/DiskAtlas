@@ -1,5 +1,6 @@
 #include "dm_mime_db.h"
 #include "diskatlas_ini.h"
+#include "dm_treemap_colors.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -169,6 +170,12 @@ static const char *dm_get_basename(const char *path) {
   return path;
 }
 
+/** Assign MIME color and treemap gradient caches for a non-directory node. */
+static void dm_set_node_mime_rgba(file_node_t *fn, uint32_t rgba) {
+  fn->mime_color_rgba = rgba;
+  dm_file_node_compute_gradient_colors(fn, DM_TREEMAP_DEFAULT_GRADIENT_STRENGTH, DM_TREEMAP_DEFAULT_SHADOW_STRENGTH);
+}
+
 void dm_mime_db_classify_nodes(const DmMimeDatabase *db,
                                file_node_t *nodes, size_t count) {
   if (db == NULL || nodes == NULL || count == 0) return;
@@ -183,14 +190,14 @@ void dm_mime_db_classify_nodes(const DmMimeDatabase *db,
     const char *path = fn->path;
     if (path == NULL) {
       fn->mime_category_id = DISKATLAS_MIME_CATEGORY_UNKNOWN;
-      fn->mime_color_rgba  = DISKATLAS_MIME_COLOR_FALLBACK;
+      dm_set_node_mime_rgba(fn, DISKATLAS_MIME_COLOR_FALLBACK);
       continue;
     }
 
     const char *base = dm_get_basename(path);
     if (base == NULL || *base == '\0') {
       fn->mime_category_id = DISKATLAS_MIME_CATEGORY_UNKNOWN;
-      fn->mime_color_rgba  = DISKATLAS_MIME_COLOR_FALLBACK;
+      dm_set_node_mime_rgba(fn, DISKATLAS_MIME_COLOR_FALLBACK);
       continue;
     }
 
@@ -206,7 +213,7 @@ void dm_mime_db_classify_nodes(const DmMimeDatabase *db,
       gint idx = GPOINTER_TO_INT(val);
       DmMimeCategory *cat = (DmMimeCategory *)g_ptr_array_index(db->categories, (guint)idx);
       fn->mime_category_id = (uint8_t)(idx <= 0xFE ? idx : 0xFE);
-      fn->mime_color_rgba  = cat->color_rgba;
+      dm_set_node_mime_rgba(fn, cat->color_rgba);
       continue;
     }
 
@@ -214,7 +221,7 @@ void dm_mime_db_classify_nodes(const DmMimeDatabase *db,
     const char *ext = dm_filename_get_extension(base);
     if (ext == NULL) {
       fn->mime_category_id = DISKATLAS_MIME_CATEGORY_UNKNOWN;
-      fn->mime_color_rgba  = DISKATLAS_MIME_COLOR_FALLBACK;
+      dm_set_node_mime_rgba(fn, DISKATLAS_MIME_COLOR_FALLBACK);
       continue;
     }
 
@@ -226,10 +233,10 @@ void dm_mime_db_classify_nodes(const DmMimeDatabase *db,
       gint idx = GPOINTER_TO_INT(val);
       DmMimeCategory *cat = (DmMimeCategory *)g_ptr_array_index(db->categories, (guint)idx);
       fn->mime_category_id = (uint8_t)(idx <= 0xFE ? idx : 0xFE);
-      fn->mime_color_rgba  = cat->color_rgba;
+      dm_set_node_mime_rgba(fn, cat->color_rgba);
     } else {
       fn->mime_category_id = DISKATLAS_MIME_CATEGORY_UNKNOWN;
-      fn->mime_color_rgba  = DISKATLAS_MIME_COLOR_FALLBACK;
+      dm_set_node_mime_rgba(fn, DISKATLAS_MIME_COLOR_FALLBACK);
     }
   }
 }
