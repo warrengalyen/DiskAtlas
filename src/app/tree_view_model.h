@@ -39,6 +39,9 @@ void da_tree_view_populate(AppState *app);
 /** Clear the tree view store and release the internal entry array. */
 void da_tree_view_clear(AppState *app);
 
+/** Recompute Size / Alloc / % columns from raw entry stats (e.g. after size decimal-place preference changes). */
+void da_tree_view_refresh_size_columns(AppState *app);
+
 /**
  * GtkTreeView "row-expanded" signal handler.  Replaces the placeholder
  * child row with the actual children of the expanded entry.

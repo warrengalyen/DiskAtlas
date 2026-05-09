@@ -12,6 +12,8 @@ void da_file_view_search_combo_init(AppState *app);
 /** Start a new scan, or cancel the current one if still running (same as the Scan toolbar button). */
 void scan_controller_request_scan(AppState *app);
 void scan_controller_refresh_volume_labels(AppState *app);
+/** After changing size decimal-place preference: refresh all on-screen byte strings. */
+void scan_controller_refresh_size_display_format(AppState *app);
 void scan_controller_sync_display_max_combo(AppState *app);
 
 /** Updates the three-part status bar when the File View tab is active (selection, hover path, list totals). */

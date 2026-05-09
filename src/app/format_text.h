@@ -5,6 +5,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/** Clamp to 0–4; affects all `da_format_bytes` / `da_format_bytes_with_pct` output for fractional units. */
+void da_format_bytes_set_decimal_places(int places);
+int da_format_bytes_get_decimal_places(void);
+
 void da_format_bytes(uint64_t n, char *dst, size_t dstsz);
 void da_format_bytes_with_pct(uint64_t bytes, uint64_t vol_total, char *dst, size_t dstsz);
 void da_format_pct_of_volume(uint64_t file_bytes, uint64_t vol_total, char *dst, size_t dstsz);

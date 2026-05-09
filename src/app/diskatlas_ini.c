@@ -5,6 +5,7 @@
 
 #include "diskatlas_ini.h"
 #include "da_default_mime_categories.h"
+#include "format_text.h"
 
 #if defined(G_OS_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -22,6 +23,8 @@
 #define DA_SEC_SEARCH_HISTORY "search_history"
 #define DA_KEY_SEARCH_QUERIES "queries"
 #define DA_SEC_MIME_CATEGORIES "mime_categories"
+#define DA_SEC_INTERFACE "interface"
+#define DA_KEY_SIZE_DECIMAL_PLACES "size_decimal_places"
 
 static gchar *da_exe_dir_utf8(void) {
 #if defined(G_OS_WIN32)
@@ -202,6 +205,70 @@ void da_ini_mime_categories_save(const GPtrArray *categories) {
     g_free(ik);
     g_free(sk);
   }
+
+  gsize len = 0;
+  gchar *data = g_key_file_to_data(kf, &len, NULL);
+  g_key_file_unref(kf);
+  if (data == NULL) {
+    g_free(path);
+    return;
+  }
+
+  gchar *dir = g_path_get_dirname(path);
+  if (dir != NULL) {
+    g_mkdir_with_parents(dir, 0755);
+    g_free(dir);
+  }
+
+  GError *werr = NULL;
+  g_file_set_contents(path, data, (gssize)len, &werr);
+  g_clear_error(&werr);
+  g_free(data);
+  g_free(path);
+}
+
+void da_ini_load_interface(AppState *app) {
+  if (app == NULL) {
+    return;
+  }
+  gint places = 1;
+  gchar *path = da_ini_path();
+  if (path != NULL) {
+    GKeyFile *kf = g_key_file_new();
+    if (da_key_file_load_merged(kf, path) && g_key_file_has_group(kf, DA_SEC_INTERFACE) &&
+        g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DECIMAL_PLACES, NULL)) {
+      GError *err = NULL;
+      gint v = g_key_file_get_integer(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DECIMAL_PLACES, &err);
+      g_clear_error(&err);
+      if (v >= 0 && v <= 4) {
+        places = v;
+      }
+    }
+    g_key_file_unref(kf);
+    g_free(path);
+  }
+  app->size_decimal_places = places;
+  da_format_bytes_set_decimal_places(places);
+}
+
+void da_ini_save_interface(const AppState *app) {
+  if (app == NULL) {
+    return;
+  }
+  gchar *path = da_ini_path();
+  if (path == NULL) {
+    return;
+  }
+  gint places = app->size_decimal_places;
+  if (places < 0) {
+    places = 0;
+  } else if (places > 4) {
+    places = 4;
+  }
+
+  GKeyFile *kf = g_key_file_new();
+  (void)da_key_file_load_merged(kf, path);
+  g_key_file_set_integer(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DECIMAL_PLACES, places);
 
   gsize len = 0;
   gchar *data = g_key_file_to_data(kf, &len, NULL);

@@ -148,30 +148,44 @@ GtkTreeStore *da_tree_view_store_new(void) {
 
 /* ---- Insert a single entry (and placeholder if it has children) ---- */
 
-static void da_tv_insert_entry(AppState *app, GtkTreeIter *parent_iter, int32_t eid) {
-  DaTreeViewModel *m = app->tree_view_model;
+/** Fills formatted strings for tree-view columns derived from entry @a eid. */
+static void da_tv_format_row_strings(const DaTreeViewModel *m, int32_t eid, char *pct_label,
+                                     size_t pct_sz, char *size_str, size_t size_sz, char *alloc_str,
+                                     size_t alloc_sz, gint *out_pct_val) {
   const DaTvEntry *e = &m->entries[eid];
 
-  /* Compute % of parent */
   gint pct_val = -1;
-  char pct_label[48];
   if (e->parent_id >= 0) {
     uint64_t psz = m->entries[e->parent_id].size_bytes;
-    da_format_pct_progress_label(e->size_bytes, psz, pct_label, sizeof(pct_label));
+    da_format_pct_progress_label(e->size_bytes, psz, pct_label, pct_sz);
     if (psz > 0) {
       double p = (double)e->size_bytes / (double)psz * 100.0;
       pct_val = (p > 100.0) ? 100 : (gint)p;
     }
   } else {
     pct_val = 100;
-    g_strlcpy(pct_label, "100.0 %", sizeof(pct_label));
+    g_strlcpy(pct_label, "100.0 %", pct_sz);
+  }
+  if (out_pct_val != NULL) {
+    *out_pct_val = pct_val;
   }
 
-  char size_str[64], alloc_str[64], items_str[64];
-  char files_str[64], folders_str[64], mtime_str[64], attrs_str[32];
+  da_format_bytes(e->size_bytes, size_str, size_sz);
+  da_format_bytes(e->alloc_bytes, alloc_str, alloc_sz);
+}
 
-  da_format_bytes(e->size_bytes, size_str, sizeof(size_str));
-  da_format_bytes(e->alloc_bytes, alloc_str, sizeof(alloc_str));
+static void da_tv_insert_entry(AppState *app, GtkTreeIter *parent_iter, int32_t eid) {
+  DaTreeViewModel *m = app->tree_view_model;
+  char pct_label[48];
+  char size_str[64], alloc_str[64];
+  char items_str[64], files_str[64], folders_str[64], mtime_str[64], attrs_str[32];
+  gint pct_val;
+
+  da_tv_format_row_strings(m, eid, pct_label, sizeof(pct_label), size_str, sizeof(size_str), alloc_str,
+                           sizeof(alloc_str), &pct_val);
+
+  const DaTvEntry *e = &m->entries[eid];
+
   da_format_uint64_locale(e->file_count + e->folder_count, items_str, sizeof(items_str));
   da_format_uint64_locale(e->file_count, files_str, sizeof(files_str));
   da_format_uint64_locale(e->folder_count, folders_str, sizeof(folders_str));
@@ -598,6 +612,37 @@ void da_tree_view_clear(AppState *app) {
     app->tree_view_model = NULL;
   }
   app->tree_view_populated = FALSE;
+}
+
+static void da_tv_refresh_size_columns_branch(GtkTreeModel *model, GtkTreeIter *iter, AppState *app) {
+  gint64 eid;
+  gtk_tree_model_get(model, iter, DA_TV_COL_IDX_ID, &eid, -1);
+  if (eid >= 0 && eid != DA_TV_LP_PLACEHOLDER && app->tree_view_model != NULL &&
+      (gsize)eid < app->tree_view_model->count) {
+    char pct_label[48], size_str[64], alloc_str[64];
+    gint pct_val;
+    da_tv_format_row_strings(app->tree_view_model, (int32_t)eid, pct_label, sizeof(pct_label), size_str,
+                             sizeof(size_str), alloc_str, sizeof(alloc_str), &pct_val);
+    gtk_tree_store_set(GTK_TREE_STORE(model), iter, DA_TV_COL_PCT_LABEL, pct_label, DA_TV_COL_SIZE, size_str,
+                       DA_TV_COL_ALLOC, alloc_str, DA_TV_COL_PCT_VAL, pct_val, -1);
+  }
+  GtkTreeIter child;
+  if (gtk_tree_model_iter_children(model, &child, iter)) {
+    do {
+      da_tv_refresh_size_columns_branch(model, &child, app);
+    } while (gtk_tree_model_iter_next(model, &child));
+  }
+}
+
+void da_tree_view_refresh_size_columns(AppState *app) {
+  if (app == NULL || app->tree_view_store == NULL || app->tree_view_model == NULL || !app->tree_view_populated) {
+    return;
+  }
+  GtkTreeModel *model = GTK_TREE_MODEL(app->tree_view_store);
+  GtkTreeIter iter;
+  for (gboolean ok = gtk_tree_model_get_iter_first(model, &iter); ok; ok = gtk_tree_model_iter_next(model, &iter)) {
+    da_tv_refresh_size_columns_branch(model, &iter, app);
+  }
 }
 
 /* ---- Public: row-expanded (lazy load children) ---- */

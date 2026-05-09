@@ -119,6 +119,9 @@ typedef struct AppState {
   gboolean treemap_tree_sync_in_progress;
   size_t display_max_entries;
 
+  /** Formatted size strings (KiB+): decimal fraction digits, 0–4; persisted under `[interface]` in diskatlas.ini. */
+  gint size_decimal_places;
+
   /** Runtime MIME classification database; built at startup and rebuilt after settings changes. */
   struct DmMimeDatabase *mime_db;
 

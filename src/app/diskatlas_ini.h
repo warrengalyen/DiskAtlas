@@ -29,6 +29,11 @@ void da_ini_mime_categories_save(const GPtrArray *categories);
 void da_ini_load_filetree(AppState *app);
 void da_ini_save_filetree(const AppState *app);
 
+/** Load `[interface]` `size_decimal_places` into `app->size_decimal_places` and apply formatting. Default 1. */
+void da_ini_load_interface(AppState *app);
+/** Persist `app->size_decimal_places` under `[interface]` (merge write). */
+void da_ini_save_interface(const AppState *app);
+
 /** Load `[search_history]` `queries` (colon-separated list in the file); caller must `g_strfreev`. Returns NULL if none. */
 gchar **da_ini_search_history_load(gsize *n_out);
 

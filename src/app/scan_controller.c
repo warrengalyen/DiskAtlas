@@ -1075,6 +1075,54 @@ static void scan_progress_reset_idle(AppState *app) {
   gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(app->progress), 0.0);
 }
 
+/** Updates the scan toolbar panel when an active scan reports progress (folder/file counts or dump bytes). */
+static void scan_controller_repaint_scan_progress_panel(AppState *app) {
+  if (app == NULL || app->scan == NULL) {
+    return;
+  }
+  scan_progress_t pr = scan_get_progress(app->scan);
+  if (pr.is_complete) {
+    return;
+  }
+  char buf[512];
+  if (app->mft_dump_custom_scan_panel) {
+    uint64_t done = pr.bytes_accounted;
+    uint64_t tot = app->mft_dump_size_total_hint;
+    int pct = 0;
+    if (tot > 0) {
+      pct = (int)((done * 100ull) / tot);
+      if (pct > 100) {
+        pct = 100;
+      }
+    }
+    char a[64], b[64];
+    da_format_bytes(done, a, sizeof a);
+    if (tot > 0) {
+      da_format_bytes(tot, b, sizeof b);
+    } else {
+      (void)snprintf(b, sizeof b, "—");
+    }
+    snprintf(buf, sizeof buf, "Dumping file %d%% (%s/%s)", pct, a, b);
+    panel_scan_set_text(app, buf);
+    scan_progress_set_indeterminate(app, FALSE);
+    if (app->progress != NULL && tot > 0) {
+      gdouble fr = (gdouble)((double)done / (double)tot);
+      if (fr > 1.0) {
+        fr = 1.0;
+      }
+      gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(app->progress), fr);
+    }
+  } else {
+    char folders_buf[32];
+    char files_buf[32];
+    da_format_uint64_locale(pr.folder_count, folders_buf, sizeof(folders_buf));
+    da_format_uint64_locale(pr.file_count, files_buf, sizeof(files_buf));
+    snprintf(buf, sizeof(buf), "Scanning… (Folders: %s  Files: %s)", folders_buf, files_buf);
+    panel_scan_set_text(app, buf);
+    scan_progress_set_indeterminate(app, TRUE);
+  }
+}
+
 static void enable_scan_button(AppState *app, gboolean enable) {
   if (app != NULL && app->scan_btn != NULL) {
     gtk_widget_set_sensitive(app->scan_btn, enable);
@@ -1474,43 +1522,7 @@ static gboolean on_timer_scan_tick(gpointer data) {
   scan_progress_t pr = scan_get_progress(app->scan);
 
   if (!pr.is_complete) {
-    char buf[512];
-    if (app->mft_dump_custom_scan_panel) {
-      uint64_t done = pr.bytes_accounted;
-      uint64_t tot = app->mft_dump_size_total_hint;
-      int pct = 0;
-      if (tot > 0) {
-        pct = (int)((done * 100ull) / tot);
-        if (pct > 100) {
-          pct = 100;
-        }
-      }
-      char a[64], b[64];
-      da_format_bytes(done, a, sizeof a);
-      if (tot > 0) {
-        da_format_bytes(tot, b, sizeof b);
-      } else {
-        (void)snprintf(b, sizeof b, "—");
-      }
-      snprintf(buf, sizeof buf, "Dumping file %d%% (%s/%s)", pct, a, b);
-      panel_scan_set_text(app, buf);
-      scan_progress_set_indeterminate(app, FALSE);
-      if (app->progress != NULL && tot > 0) {
-        gdouble fr = (gdouble)((double)done / (double)tot);
-        if (fr > 1.0) {
-          fr = 1.0;
-        }
-        gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(app->progress), fr);
-      }
-    } else {
-      char folders_buf[32];
-      char files_buf[32];
-      da_format_uint64_locale(pr.folder_count, folders_buf, sizeof(folders_buf));
-      da_format_uint64_locale(pr.file_count, files_buf, sizeof(files_buf));
-      snprintf(buf, sizeof(buf), "Scanning… (Folders: %s  Files: %s)", folders_buf, files_buf);
-      panel_scan_set_text(app, buf);
-      scan_progress_set_indeterminate(app, TRUE);
-    }
+    scan_controller_repaint_scan_progress_panel(app);
     return G_SOURCE_CONTINUE;
   }
 
@@ -1864,6 +1876,26 @@ void scan_controller_refresh_volume_labels(AppState *app) {
     gtk_label_set_text(GTK_LABEL(app->stat_free_val), free_line);
   }
   scan_controller_sync_file_view_status(app);
+}
+
+/**
+ * Reapply the active byte-formatting preference across lists, tree view, volume/status labels,
+ * treemap, and the scan progress panel (when a scan is running).
+ */
+void scan_controller_refresh_size_display_format(AppState *app) {
+  if (app == NULL) {
+    return;
+  }
+  da_format_bytes_set_decimal_places(app->size_decimal_places);
+  if (app->flat_list_model != NULL) {
+    flat_list_model_invalidate(app->flat_list_model);
+  }
+  da_tree_view_refresh_size_columns(app);
+  scan_controller_refresh_volume_labels(app);
+  scan_controller_repaint_scan_progress_panel(app);
+  if (app->treemap != NULL) {
+    gtk_widget_queue_draw(app->treemap);
+  }
 }
 
 static void on_tree_view_row_expanded(GtkTreeView *tv, GtkTreeIter *iter, GtkTreePath *path,

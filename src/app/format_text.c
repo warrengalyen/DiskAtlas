@@ -25,27 +25,43 @@
 
 #include "format_text.h"
 
+static int da_bytes_decimal_places = 1;
+
+void da_format_bytes_set_decimal_places(int places) {
+  if (places < 0) {
+    places = 0;
+  } else if (places > 4) {
+    places = 4;
+  }
+  da_bytes_decimal_places = places;
+}
+
+int da_format_bytes_get_decimal_places(void) {
+  return da_bytes_decimal_places;
+}
+
 void da_format_bytes(uint64_t n, char *dst, size_t dstsz) {
   if (!dst || dstsz == 0) {
     return;
   }
+  int d = da_bytes_decimal_places;
   if (n < 1024ull) {
     snprintf(dst, dstsz, "%" PRIu64 " B", n);
     return;
   }
   if (n < 1024ull * 1024ull) {
-    snprintf(dst, dstsz, "%.2f KiB", (double)n / 1024.0);
+    snprintf(dst, dstsz, "%.*f KiB", d, (double)n / 1024.0);
     return;
   }
   if (n < 1024ull * 1024ull * 1024ull) {
-    snprintf(dst, dstsz, "%.2f MiB", (double)n / (1024.0 * 1024.0));
+    snprintf(dst, dstsz, "%.*f MiB", d, (double)n / (1024.0 * 1024.0));
     return;
   }
   if (n < 1024ull * 1024ull * 1024ull * 1024ull) {
-    snprintf(dst, dstsz, "%.2f GiB", (double)n / (1024.0 * 1024.0 * 1024.0));
+    snprintf(dst, dstsz, "%.*f GiB", d, (double)n / (1024.0 * 1024.0 * 1024.0));
     return;
   }
-  snprintf(dst, dstsz, "%.2f TiB",
+  snprintf(dst, dstsz, "%.*f TiB", d,
            (double)n / (1024.0 * 1024.0 * 1024.0 * 1024.0));
 }
 

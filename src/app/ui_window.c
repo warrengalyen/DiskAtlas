@@ -462,7 +462,26 @@ typedef struct {
   DaSettingsMimeCtx *mime;
   AppState        *app;
   gboolean         mime_saved;
+  GtkWidget       *decimal_places_spin;
 } DaSettingsDlgHandles;
+
+static void da_settings_apply_interface_tab(DaSettingsDlgHandles *h) {
+  if (h == NULL || h->app == NULL) {
+    return;
+  }
+  gint v = h->app->size_decimal_places;
+  if (h->decimal_places_spin != NULL && GTK_IS_SPIN_BUTTON(h->decimal_places_spin)) {
+    v = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(h->decimal_places_spin));
+  }
+  if (v < 0) {
+    v = 0;
+  } else if (v > 4) {
+    v = 4;
+  }
+  h->app->size_decimal_places = v;
+  da_ini_save_interface(h->app);
+  scan_controller_refresh_size_display_format(h->app);
+}
 
 static void on_settings_ok_clicked(GtkButton *btn, gpointer user_data) {
   (void)btn;
@@ -471,6 +490,7 @@ static void on_settings_ok_clicked(GtkButton *btn, gpointer user_data) {
     return;
   }
   h->mime_saved = TRUE;
+  da_settings_apply_interface_tab(h);
   gtk_dialog_response(h->dialog, GTK_RESPONSE_OK);
 }
 
@@ -481,6 +501,7 @@ static void on_settings_apply_clicked(GtkButton *btn, gpointer user_data) {
     return;
   }
   h->mime_saved = TRUE;
+  da_settings_apply_interface_tab(h);
   gtk_dialog_response(h->dialog, GTK_RESPONSE_APPLY);
 }
 
@@ -530,6 +551,10 @@ static void on_tools_menu_settings_activate(GtkMenuItem *item, gpointer user_dat
   handles->mime = da_settings_mime_tab_bind(builder);
   handles->app = app;
   handles->mime_saved = FALSE;
+  handles->decimal_places_spin = GTK_WIDGET(gtk_builder_get_object(builder, "decimal_places_spin"));
+  if (handles->decimal_places_spin != NULL && GTK_IS_SPIN_BUTTON(handles->decimal_places_spin)) {
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(handles->decimal_places_spin), (gdouble)app->size_decimal_places);
+  }
 
   GtkWidget *ok_btn = GTK_WIDGET(gtk_builder_get_object(builder, "ok_btn"));
   GtkWidget *apply_btn = GTK_WIDGET(gtk_builder_get_object(builder, "apply_btn"));
@@ -844,6 +869,7 @@ void da_ui_build(AppState *app) {
   gtk_combo_box_set_active(GTK_COMBO_BOX(app->combo_display_max), 3);
 
   da_ini_load_filetree(app);
+  da_ini_load_interface(app);
 
   app->flat_list_model = flat_list_model_new(app);
   gtk_tree_view_set_model(GTK_TREE_VIEW(app->tree), GTK_TREE_MODEL(app->flat_list_model));
