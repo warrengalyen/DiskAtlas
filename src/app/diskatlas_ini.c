@@ -4,6 +4,7 @@
 #include <gtk/gtk.h>
 
 #include "diskatlas_ini.h"
+#include "da_default_mime_categories.h"
 
 #if defined(G_OS_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -20,6 +21,7 @@
 #define DA_SEC_FILETREE "filetree"
 #define DA_SEC_SEARCH_HISTORY "search_history"
 #define DA_KEY_SEARCH_QUERIES "queries"
+#define DA_SEC_MIME_CATEGORIES "mime_categories"
 
 static gchar *da_exe_dir_utf8(void) {
 #if defined(G_OS_WIN32)
@@ -83,6 +85,143 @@ static gboolean da_key_file_load_merged(GKeyFile *kf, const gchar *path) {
   /* Colon separates list values (e.g. `search_history` `queries`); semicolon may appear in filter text. */
   g_key_file_set_list_separator(kf, ':');
   return g_key_file_load_from_file(kf, path, G_KEY_FILE_KEEP_COMMENTS | G_KEY_FILE_KEEP_TRANSLATIONS, NULL);
+}
+
+void da_ini_mime_category_destroy(gpointer cat) {
+  DaIniMimeCategory *c = (DaIniMimeCategory *)cat;
+  if (c == NULL) {
+    return;
+  }
+  g_free(c->name);
+  g_free(c->color_hex);
+  g_free(c->patterns_insensitive);
+  g_free(c->patterns_sensitive);
+  g_free(c);
+}
+
+GPtrArray *da_ini_mime_categories_load(void) {
+  GPtrArray *arr = g_ptr_array_new_with_free_func(da_ini_mime_category_destroy);
+  gchar *path = da_ini_path();
+  if (path == NULL) {
+    da_default_mime_categories_append_seeds(arr);
+    return arr;
+  }
+  GKeyFile *kf = g_key_file_new();
+  if (!da_key_file_load_merged(kf, path)) {
+    g_key_file_unref(kf);
+    g_free(path);
+    da_default_mime_categories_append_seeds(arr);
+    return arr;
+  }
+  g_free(path);
+
+  if (!g_key_file_has_group(kf, DA_SEC_MIME_CATEGORIES)) {
+    g_key_file_unref(kf);
+    da_default_mime_categories_append_seeds(arr);
+    return arr;
+  }
+
+  GError *err = NULL;
+  gint count = g_key_file_get_integer(kf, DA_SEC_MIME_CATEGORIES, "count", &err);
+  if (err != NULL) {
+    g_clear_error(&err);
+    count = 0;
+  }
+  if (count < 0) {
+    count = 0;
+  }
+
+  for (gint i = 0; i < count; i++) {
+    gchar *nk = g_strdup_printf("name%d", i);
+    gchar *ck = g_strdup_printf("color%d", i);
+    gchar *ik = g_strdup_printf("patterns_insensitive%d", i);
+    gchar *sk = g_strdup_printf("patterns_sensitive%d", i);
+
+    DaIniMimeCategory *c = g_new0(DaIniMimeCategory, 1);
+    c->name = g_key_file_get_string(kf, DA_SEC_MIME_CATEGORIES, nk, &err);
+    if (err != NULL) {
+      g_clear_error(&err);
+      c->name = g_strdup("");
+    }
+    c->color_hex = g_key_file_get_string(kf, DA_SEC_MIME_CATEGORIES, ck, &err);
+    if (err != NULL) {
+      g_clear_error(&err);
+      c->color_hex = g_strdup("#808080");
+    }
+    c->patterns_insensitive = g_key_file_get_string(kf, DA_SEC_MIME_CATEGORIES, ik, &err);
+    if (err != NULL) {
+      g_clear_error(&err);
+      c->patterns_insensitive = g_strdup("");
+    }
+    c->patterns_sensitive = g_key_file_get_string(kf, DA_SEC_MIME_CATEGORIES, sk, &err);
+    if (err != NULL) {
+      g_clear_error(&err);
+      c->patterns_sensitive = g_strdup("");
+    }
+
+    g_ptr_array_add(arr, c);
+    g_free(nk);
+    g_free(ck);
+    g_free(ik);
+    g_free(sk);
+  }
+
+  g_key_file_unref(kf);
+  return arr;
+}
+
+void da_ini_mime_categories_save(const GPtrArray *categories) {
+  gchar *path = da_ini_path();
+  if (path == NULL) {
+    return;
+  }
+  GKeyFile *kf = g_key_file_new();
+  (void)da_key_file_load_merged(kf, path);
+
+  GError *rm_err = NULL;
+  g_key_file_remove_group(kf, DA_SEC_MIME_CATEGORIES, &rm_err);
+  g_clear_error(&rm_err);
+
+  gsize n = (categories != NULL) ? categories->len : 0;
+  g_key_file_set_integer(kf, DA_SEC_MIME_CATEGORIES, "count", (gint)n);
+
+  for (gsize i = 0; i < n; i++) {
+    DaIniMimeCategory *c = g_ptr_array_index(categories, i);
+    gchar *nk = g_strdup_printf("name%zu", i);
+    gchar *ck = g_strdup_printf("color%zu", i);
+    gchar *ik = g_strdup_printf("patterns_insensitive%zu", i);
+    gchar *sk = g_strdup_printf("patterns_sensitive%zu", i);
+    g_key_file_set_string(kf, DA_SEC_MIME_CATEGORIES, nk, c->name != NULL ? c->name : "");
+    g_key_file_set_string(kf, DA_SEC_MIME_CATEGORIES, ck, c->color_hex != NULL ? c->color_hex : "");
+    g_key_file_set_string(kf, DA_SEC_MIME_CATEGORIES, ik,
+                          c->patterns_insensitive != NULL ? c->patterns_insensitive : "");
+    g_key_file_set_string(kf, DA_SEC_MIME_CATEGORIES, sk,
+                          c->patterns_sensitive != NULL ? c->patterns_sensitive : "");
+    g_free(nk);
+    g_free(ck);
+    g_free(ik);
+    g_free(sk);
+  }
+
+  gsize len = 0;
+  gchar *data = g_key_file_to_data(kf, &len, NULL);
+  g_key_file_unref(kf);
+  if (data == NULL) {
+    g_free(path);
+    return;
+  }
+
+  gchar *dir = g_path_get_dirname(path);
+  if (dir != NULL) {
+    g_mkdir_with_parents(dir, 0755);
+    g_free(dir);
+  }
+
+  GError *werr = NULL;
+  g_file_set_contents(path, data, (gssize)len, &werr);
+  g_clear_error(&werr);
+  g_free(data);
+  g_free(path);
 }
 
 void da_ini_load_filetree(AppState *app) {

@@ -152,6 +152,7 @@ if(DISKATLAS_GTK3_FOUND)
     DEPENDS
       ${DISKATLAS_GRESOURCE_XML}
       ${DISKATLAS_RES_DIR}/ui/diskatlas_window.ui
+      ${DISKATLAS_RES_DIR}/ui/settings_dialog.glade
       ${DISKATLAS_RES_DIR}/app.css
     COMMENT "glib-compile-resources diskatlas"
     VERBATIM
@@ -174,6 +175,8 @@ if(DISKATLAS_GTK3_FOUND)
     "${DISKATLAS_SRC}/app/csv_export.c"
     "${DISKATLAS_SRC}/app/volumes.c"
     "${DISKATLAS_SRC}/app/diskatlas_ini.c"
+    "${DISKATLAS_SRC}/app/da_default_mime_categories.c"
+    "${DISKATLAS_SRC}/app/settings_mime_tab.c"
     ${DISKATLAS_GRESOURCE_C}
   )
   set_target_properties(diskatlas_app PROPERTIES OUTPUT_NAME diskatlas)

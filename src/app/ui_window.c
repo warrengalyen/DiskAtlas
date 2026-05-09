@@ -17,6 +17,7 @@
 #include "ui_window.h"
 #include "volumes.h"
 #include "diskatlas_ini.h"
+#include "settings_mime_tab.h"
 #include "da_cell_renderer_progress.h"
 #include "flat_list_model.h"
 #include "format_text.h"
@@ -145,6 +146,7 @@ static void da_file_view_paned_on_allocate(GtkWidget *widget, GdkRectangle *allo
 }
 
 #define DISKATLAS_WINDOW_UI_RESOURCE "/ui/diskatlas_window.ui"
+#define DISKATLAS_SETTINGS_DIALOG_RESOURCE "/ui/settings_dialog.glade"
 #define DISKATLAS_APP_CSS_RESOURCE "/app.css"
 /** gtk_style_context_add_class for percent-column progress CSS (file list + Tree View tabs). */
 #define DISKATLAS_TREE_PROGRESS_STYLE_CLASS "diskatlas-tree-progress"
@@ -452,6 +454,93 @@ static void on_file_menu_export_mft_activate(GtkMenuItem *item, gpointer user_da
   gtk_dialog_run(GTK_DIALOG(d));
   gtk_widget_destroy(d);
 #endif
+}
+
+typedef struct {
+  GtkDialog *dialog;
+  DaSettingsMimeCtx *mime;
+} DaSettingsDlgHandles;
+
+static void on_settings_ok_clicked(GtkButton *btn, gpointer user_data) {
+  (void)btn;
+  DaSettingsDlgHandles *h = (DaSettingsDlgHandles *)user_data;
+  if (h->mime != NULL && !da_settings_mime_tab_save(h->mime, GTK_WINDOW(h->dialog))) {
+    return;
+  }
+  gtk_dialog_response(h->dialog, GTK_RESPONSE_OK);
+}
+
+static void on_settings_apply_clicked(GtkButton *btn, gpointer user_data) {
+  (void)btn;
+  DaSettingsDlgHandles *h = (DaSettingsDlgHandles *)user_data;
+  if (h->mime != NULL && !da_settings_mime_tab_save(h->mime, GTK_WINDOW(h->dialog))) {
+    return;
+  }
+  gtk_dialog_response(h->dialog, GTK_RESPONSE_APPLY);
+}
+
+static void on_settings_cancel_clicked(GtkButton *btn, gpointer user_data) {
+  (void)btn;
+  DaSettingsDlgHandles *h = (DaSettingsDlgHandles *)user_data;
+  gtk_dialog_response(h->dialog, GTK_RESPONSE_CANCEL);
+}
+
+static void on_tools_menu_settings_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->window == NULL) {
+    return;
+  }
+
+  GError *err = NULL;
+  GtkBuilder *builder = gtk_builder_new();
+  if (!gtk_builder_add_from_resource(builder, DISKATLAS_SETTINGS_DIALOG_RESOURCE, &err)) {
+    g_warning("Failed to load settings UI (%s): %s", DISKATLAS_SETTINGS_DIALOG_RESOURCE, err->message);
+    g_clear_error(&err);
+    g_object_unref(builder);
+    return;
+  }
+
+  GObject *obj = gtk_builder_get_object(builder, "settings_dialog");
+  if (obj == NULL || !GTK_IS_DIALOG(obj)) {
+    g_warning("settings_dialog object missing or not a GtkDialog");
+    g_object_unref(builder);
+    return;
+  }
+
+  GtkDialog *dialog = GTK_DIALOG(obj);
+  gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(app->window));
+
+  DaSettingsDlgHandles *handles = g_new0(DaSettingsDlgHandles, 1);
+  handles->dialog = dialog;
+  handles->mime = da_settings_mime_tab_bind(builder);
+
+  GtkWidget *ok_btn = GTK_WIDGET(gtk_builder_get_object(builder, "ok_btn"));
+  GtkWidget *apply_btn = GTK_WIDGET(gtk_builder_get_object(builder, "apply_btn"));
+  GtkWidget *cancel_btn = GTK_WIDGET(gtk_builder_get_object(builder, "cancel_btn"));
+  if (ok_btn != NULL) {
+    g_signal_connect(ok_btn, "clicked", G_CALLBACK(on_settings_ok_clicked), handles);
+  }
+  if (apply_btn != NULL) {
+    g_signal_connect(apply_btn, "clicked", G_CALLBACK(on_settings_apply_clicked), handles);
+  }
+  if (cancel_btn != NULL) {
+    g_signal_connect(cancel_btn, "clicked", G_CALLBACK(on_settings_cancel_clicked), handles);
+  }
+
+  for (;;) {
+    gint resp = gtk_dialog_run(dialog);
+    if (resp == GTK_RESPONSE_APPLY) {
+      gtk_widget_show(GTK_WIDGET(dialog));
+      continue;
+    }
+    break;
+  }
+
+  gtk_widget_destroy(GTK_WIDGET(dialog));
+  da_settings_mime_tab_free(handles->mime);
+  g_free(handles);
+  g_object_unref(builder);
 }
 
 static void pct_of_drive_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell, GtkTreeModel *model,
@@ -831,6 +920,12 @@ void da_ui_build(AppState *app) {
     GtkWidget *file_menu_export_mft = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_export_mft"));
     if (file_menu_export_mft != NULL) {
       g_signal_connect(file_menu_export_mft, "activate", G_CALLBACK(on_file_menu_export_mft_activate), app);
+    }
+  }
+  {
+    GtkWidget *tools_menu_settings = GTK_WIDGET(gtk_builder_get_object(builder, "tools_menu_settings"));
+    if (tools_menu_settings != NULL) {
+      g_signal_connect(tools_menu_settings, "activate", G_CALLBACK(on_tools_menu_settings_activate), app);
     }
   }
 

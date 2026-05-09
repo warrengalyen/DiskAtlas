@@ -9,6 +9,23 @@ gchar *da_ini_path(void);
 /** Label of the last row in the file-view search combo; selecting it clears saved history. */
 #define DA_SEARCH_HISTORY_CLEAR_ITEM "<clear>"
 
+typedef struct {
+  gchar *name;
+  gchar *color_hex;
+  gchar *patterns_insensitive;
+  gchar *patterns_sensitive;
+} DaIniMimeCategory;
+
+void da_ini_mime_category_destroy(gpointer cat);
+
+/** Load `[mime_categories]` from `diskatlas.ini`; owns returned `GPtrArray` and elements (`DaIniMimeCategory`).
+ * If the INI file cannot be read or has no `[mime_categories]` group, returns the built-in default categories
+ * (see `da_default_mime_category_seeds.h`). */
+GPtrArray *da_ini_mime_categories_load(void);
+
+/** Replace `[mime_categories]` in `diskatlas.ini` (merges with other sections). `categories` may be empty. */
+void da_ini_mime_categories_save(const GPtrArray *categories);
+
 void da_ini_load_filetree(AppState *app);
 void da_ini_save_filetree(const AppState *app);
 
