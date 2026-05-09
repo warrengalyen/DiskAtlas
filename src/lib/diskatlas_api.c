@@ -62,6 +62,24 @@ DISKATLAS_API void scan_result_free(scan_result_t *result) {
   free(r);
 }
 
+DISKATLAS_API file_node_t *scan_result_nodes_mutable(scan_result_t *result, size_t *count_out) {
+  if (count_out != NULL) {
+    *count_out = 0;
+  }
+  if (!result) {
+    return NULL;
+  }
+  diskatlas_scan_result_t *r = (diskatlas_scan_result_t *)result;
+  if (!atomic_load_explicit(&r->complete, memory_order_acquire)) {
+    return NULL;
+  }
+  atomic_thread_fence(memory_order_acquire);
+  if (count_out != NULL) {
+    *count_out = r->node_count;
+  }
+  return r->nodes;
+}
+
 DISKATLAS_API uint32_t diskatlas_dup_max_group_id(const scan_result_t *result) {
   if (!result) {
     return 0;

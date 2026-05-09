@@ -14,6 +14,9 @@ typedef struct DaTreeViewModel DaTreeViewModel;
 /** Forward declaration — full type in flat_list_model.h. */
 typedef struct _FlatListModel FlatListModel;
 
+/** Forward declaration — full type in dm_mime_db.h. */
+struct DmMimeDatabase;
+
 #define DA_COL_COUNT 9
 /** String column index: formatted allocated size (matches file list `titles` / model column 4). */
 #define DA_COL_ALLOCATED 4
@@ -115,6 +118,9 @@ typedef struct AppState {
   /** Guard flag to prevent re-entrant A→B→A sync loops between treemap and tree_view. */
   gboolean treemap_tree_sync_in_progress;
   size_t display_max_entries;
+
+  /** Runtime MIME classification database; built at startup and rebuilt after settings changes. */
+  struct DmMimeDatabase *mime_db;
 
   gchar *mft_dump_save_path;
   gchar *mft_dump_volume_root_utf8;

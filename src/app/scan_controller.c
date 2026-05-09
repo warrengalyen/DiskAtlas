@@ -10,6 +10,7 @@
 
 #include "treemap_widget.h"
 #include "diskatlas.h"
+#include "dm_mime_db.h"
 #include "file_tree_model.h"
 #include "flat_list_model.h"
 #include "tree_view_model.h"
@@ -1256,8 +1257,28 @@ static gboolean on_timer_filter_chunk(gpointer data) {
   return G_SOURCE_CONTINUE;
 }
 
+/** Classify all file nodes with MIME category colors using the active mime_db. No-op if not ready. */
+static void da_mime_classify_scan_nodes(AppState *app) {
+  if (app->mime_db == NULL || app->scan == NULL) return;
+  size_t count = 0;
+  file_node_t *nodes = scan_result_nodes_mutable(app->scan, &count);
+  if (nodes != NULL && count > 0) {
+    dm_mime_db_classify_nodes(app->mime_db, nodes, count);
+  }
+}
+
+/** Reclassify current scan nodes with the active mime_db and queue a treemap redraw. */
+void scan_controller_reclassify_mime(AppState *app) {
+  da_mime_classify_scan_nodes(app);
+  if (app->treemap != NULL) {
+    gtk_widget_queue_draw(app->treemap);
+  }
+}
+
 static void begin_populate_list(AppState *app) {
   scan_results_view_t v = scan_get_results(app->scan);
+
+  da_mime_classify_scan_nodes(app);
 
   kill_timer(&app->timer_fill);
   kill_timer(&app->timer_filter);

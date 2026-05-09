@@ -29,7 +29,7 @@ DISKATLAS_API int diskatlas_init(void);
 /* -------------------------------------------------------------------------- */
 
 #define DISKATLAS_SCAN_OPTIONS_STRUCT_VERSION 1u
-#define DISKATLAS_FILE_NODE_STRUCT_VERSION 3u
+#define DISKATLAS_FILE_NODE_STRUCT_VERSION 4u
 #define DISKATLAS_SCAN_PROGRESS_STRUCT_VERSION 2u
 #define DISKATLAS_SCAN_RESULTS_VIEW_STRUCT_VERSION 1u
 
@@ -83,10 +83,20 @@ typedef struct file_node {
   uint32_t duplicate_group_id;
   /** Windows FILE_ATTRIBUTE_* from FindFirstFile when scanning on Win32; 0 if unset. */
   uint32_t win32_attributes;
+  /** Index into the active DmMimeDatabase categories; DISKATLAS_MIME_CATEGORY_UNKNOWN (0xFF) if unclassified. */
+  uint8_t  mime_category_id;
+  uint8_t  _mime_pad[3];
+  /** Packed color 0xRRGGBBAA from the matched MIME category; 0 = unclassified (use fallback). */
+  uint32_t mime_color_rgba;
 } file_node_t;
 
 /** Sentinel: file is unique or unmatched for duplicate clustering. */
 #define DISKATLAS_DUPLICATE_GROUP_NONE (0u)
+
+/** Fallback RGBA color for files with no matching MIME category (dark gray, matches treemap dir background). */
+#define DISKATLAS_MIME_COLOR_FALLBACK   0x47474DFFu
+/** mime_category_id sentinel: node has not been classified or has no matching category. */
+#define DISKATLAS_MIME_CATEGORY_UNKNOWN 0xFFu
 
 #define DISKATLAS_NODE_KIND_MASK (7u << 0)
 #define DISKATLAS_NODE_KIND_UNKNOWN 0u
@@ -152,6 +162,9 @@ DISKATLAS_API scan_progress_t scan_get_progress(scan_result_t *result);
 DISKATLAS_API scan_results_view_t scan_get_results(scan_result_t *result);
 
 DISKATLAS_API void scan_result_free(scan_result_t *result);
+
+/** Returns the mutable node array; only valid after scan_get_progress().is_complete is true. */
+DISKATLAS_API file_node_t *scan_result_nodes_mutable(scan_result_t *result, size_t *count_out);
 
 /**
  * Import scan results from a UTF-8 CSV file in the DiskAtlas GUI export format (see csv_export). Reads

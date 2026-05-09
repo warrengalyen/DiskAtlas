@@ -17,6 +17,7 @@
 #include "ui_window.h"
 #include "volumes.h"
 #include "diskatlas_ini.h"
+#include "dm_mime_db.h"
 #include "settings_mime_tab.h"
 #include "da_cell_renderer_progress.h"
 #include "flat_list_model.h"
@@ -457,8 +458,10 @@ static void on_file_menu_export_mft_activate(GtkMenuItem *item, gpointer user_da
 }
 
 typedef struct {
-  GtkDialog *dialog;
+  GtkDialog       *dialog;
   DaSettingsMimeCtx *mime;
+  AppState        *app;
+  gboolean         mime_saved;
 } DaSettingsDlgHandles;
 
 static void on_settings_ok_clicked(GtkButton *btn, gpointer user_data) {
@@ -467,6 +470,7 @@ static void on_settings_ok_clicked(GtkButton *btn, gpointer user_data) {
   if (h->mime != NULL && !da_settings_mime_tab_save(h->mime, GTK_WINDOW(h->dialog))) {
     return;
   }
+  h->mime_saved = TRUE;
   gtk_dialog_response(h->dialog, GTK_RESPONSE_OK);
 }
 
@@ -476,6 +480,7 @@ static void on_settings_apply_clicked(GtkButton *btn, gpointer user_data) {
   if (h->mime != NULL && !da_settings_mime_tab_save(h->mime, GTK_WINDOW(h->dialog))) {
     return;
   }
+  h->mime_saved = TRUE;
   gtk_dialog_response(h->dialog, GTK_RESPONSE_APPLY);
 }
 
@@ -483,6 +488,15 @@ static void on_settings_cancel_clicked(GtkButton *btn, gpointer user_data) {
   (void)btn;
   DaSettingsDlgHandles *h = (DaSettingsDlgHandles *)user_data;
   gtk_dialog_response(h->dialog, GTK_RESPONSE_CANCEL);
+}
+
+/** Rebuild the runtime MIME database from the saved INI and reclassify all scan nodes. */
+static void da_ui_rebuild_mime_db_and_reclassify(AppState *app) {
+  dm_mime_db_free(app->mime_db);
+  GPtrArray *cats = da_ini_mime_categories_load();
+  app->mime_db = dm_mime_db_build(cats);
+  g_ptr_array_unref(cats);
+  scan_controller_reclassify_mime(app);
 }
 
 static void on_tools_menu_settings_activate(GtkMenuItem *item, gpointer user_data) {
@@ -514,6 +528,8 @@ static void on_tools_menu_settings_activate(GtkMenuItem *item, gpointer user_dat
   DaSettingsDlgHandles *handles = g_new0(DaSettingsDlgHandles, 1);
   handles->dialog = dialog;
   handles->mime = da_settings_mime_tab_bind(builder);
+  handles->app = app;
+  handles->mime_saved = FALSE;
 
   GtkWidget *ok_btn = GTK_WIDGET(gtk_builder_get_object(builder, "ok_btn"));
   GtkWidget *apply_btn = GTK_WIDGET(gtk_builder_get_object(builder, "apply_btn"));
@@ -531,10 +547,18 @@ static void on_tools_menu_settings_activate(GtkMenuItem *item, gpointer user_dat
   for (;;) {
     gint resp = gtk_dialog_run(dialog);
     if (resp == GTK_RESPONSE_APPLY) {
+      if (handles->mime_saved) {
+        da_ui_rebuild_mime_db_and_reclassify(app);
+        handles->mime_saved = FALSE;
+      }
       gtk_widget_show(GTK_WIDGET(dialog));
       continue;
     }
     break;
+  }
+
+  if (handles->mime_saved) {
+    da_ui_rebuild_mime_db_and_reclassify(app);
   }
 
   gtk_widget_destroy(GTK_WIDGET(dialog));

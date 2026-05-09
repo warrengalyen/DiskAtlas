@@ -7,6 +7,7 @@
 #include "diskatlas.h"
 #include "volumes.h"
 #include "diskatlas_ini.h"
+#include "dm_mime_db.h"
 #include "scan_controller.h"
 #include "ui_window.h"
 
@@ -44,10 +45,16 @@ int diskatlas_app_run(int argc, char **argv) {
     }
   }
 
+  GPtrArray *ini_cats = da_ini_mime_categories_load();
+  app->mime_db = dm_mime_db_build(ini_cats);
+  g_ptr_array_unref(ini_cats);
+
   app->gtk_app = gtk_application_new("com.diskatlas.DiskAtlas", G_APPLICATION_NON_UNIQUE);
   g_signal_connect(app->gtk_app, "activate", G_CALLBACK(activate), app);
   int status = g_application_run(G_APPLICATION(app->gtk_app), argc, argv);
 
+  dm_mime_db_free(app->mime_db);
+  app->mime_db = NULL;
   g_object_unref(app->gtk_app);
   if (app->search_history != NULL) {
     g_ptr_array_unref(app->search_history);

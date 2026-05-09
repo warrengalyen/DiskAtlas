@@ -33,6 +33,12 @@ void scan_controller_fill_scan_options_for_import(AppState *app, scan_options_t 
 /** Copy size (column 1, right-aligned) and full path (column 2) for current selection or entire scan/list. */
 void scan_controller_copy_scan_paths_sizes_to_clipboard(AppState *app);
 
+/**
+ * Reclassify all currently loaded scan nodes using app->mime_db and queue a treemap redraw.
+ * No-op when no scan is loaded or mime_db is NULL.
+ */
+void scan_controller_reclassify_mime(AppState *app);
+
 #if defined(G_OS_WIN32)
 /** After validations in the UI: optionally scan @a volume_root_utf8, then copy $MFT to @a dest_path_utf8. */
 void scan_controller_begin_mft_dump_flow(AppState *app, const gchar *volume_root_utf8,

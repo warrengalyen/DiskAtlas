@@ -941,7 +941,11 @@ static gboolean treemap_draw(GtkWidget *widget, cairo_t *cr) {
       gf = 0.28;
       bf = 0.30;
     } else {
-      color_for_path(fn->path, &rf, &gf, &bf);
+      uint32_t rgba = fn->mime_color_rgba;
+      if (rgba == 0) rgba = DISKATLAS_MIME_COLOR_FALLBACK;
+      rf = ((rgba >> 24) & 0xFFu) / 255.0;
+      gf = ((rgba >> 16) & 0xFFu) / 255.0;
+      bf = ((rgba >>  8) & 0xFFu) / 255.0;
     }
 
     cairo_set_source_rgb(cr, rf, gf, bf);
