@@ -108,6 +108,69 @@ GdkPixbuf *da_shell_icon_for_path(const gchar *path_utf8, gint size_px) {
   return pb;
 }
 
+GdkPixbuf *da_shell_icon_for_extension(const gchar *ext_or_name, gint size_px) {
+  if (ext_or_name == NULL || ext_or_name[0] == '\0' || size_px <= 0) {
+    return NULL;
+  }
+
+  /* Build a synthetic filename: ".mp3" → "file.mp3", "Makefile" → "Makefile". */
+  gchar fake_name[256];
+  if (ext_or_name[0] == '.') {
+    g_snprintf(fake_name, sizeof(fake_name), "file%s", ext_or_name);
+  } else {
+    g_strlcpy(fake_name, ext_or_name, sizeof(fake_name));
+  }
+
+  gunichar2 *wpath = g_utf8_to_utf16(fake_name, -1, NULL, NULL, NULL);
+  if (wpath == NULL) {
+    return NULL;
+  }
+
+  SHFILEINFOW sfi;
+  memset(&sfi, 0, sizeof(sfi));
+  DWORD_PTR hr = SHGetFileInfoW((LPCWSTR)wpath, FILE_ATTRIBUTE_NORMAL, &sfi, sizeof(sfi),
+                                SHGFI_ICON | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES);
+  g_free(wpath);
+
+  if (hr == 0 || sfi.hIcon == NULL) {
+    return NULL;
+  }
+
+  GdkPixbuf *pb = hicon_to_pixbuf(sfi.hIcon, size_px, size_px);
+  DestroyIcon(sfi.hIcon);
+  return pb;
+}
+
+gchar *da_shell_description_for_extension(const gchar *ext_or_name) {
+  if (ext_or_name == NULL || ext_or_name[0] == '\0') {
+    return NULL;
+  }
+
+  gchar fake_name[256];
+  if (ext_or_name[0] == '.') {
+    g_snprintf(fake_name, sizeof(fake_name), "file%s", ext_or_name);
+  } else {
+    g_strlcpy(fake_name, ext_or_name, sizeof(fake_name));
+  }
+
+  gunichar2 *wpath = g_utf8_to_utf16(fake_name, -1, NULL, NULL, NULL);
+  if (wpath == NULL) {
+    return NULL;
+  }
+
+  SHFILEINFOW sfi;
+  memset(&sfi, 0, sizeof(sfi));
+  DWORD_PTR hr = SHGetFileInfoW((LPCWSTR)wpath, FILE_ATTRIBUTE_NORMAL, &sfi, sizeof(sfi),
+                                SHGFI_TYPENAME | SHGFI_USEFILEATTRIBUTES);
+  g_free(wpath);
+
+  if (hr == 0 || sfi.szTypeName[0] == L'\0') {
+    return NULL;
+  }
+
+  return g_utf16_to_utf8((const gunichar2 *)sfi.szTypeName, -1, NULL, NULL, NULL);
+}
+
 #else /* !defined(_WIN32) */
 
 static GdkPixbuf *shell_icon_pixbuf_from_gicon(GtkIconTheme *theme, GIcon *icon, gint size_px) {
@@ -191,6 +254,42 @@ GdkPixbuf *da_shell_icon_for_path_gio(const gchar *path_utf8, gint size_px) {
   GdkPixbuf *pb = shell_icon_pixbuf_from_gicon(theme, icon, size_px);
   g_object_unref(icon);
   return pb;
+}
+
+GdkPixbuf *da_shell_icon_for_extension(const gchar *ext_or_name, gint size_px) {
+  if (ext_or_name == NULL || ext_or_name[0] == '\0' || size_px <= 0) {
+    return NULL;
+  }
+
+  GtkIconTheme *theme = gtk_icon_theme_get_default();
+  gboolean uncertain = FALSE;
+  gchar *ctype = g_content_type_guess(ext_or_name, NULL, 0, &uncertain);
+  GIcon *icon = NULL;
+  if (ctype != NULL) {
+    icon = g_content_type_get_icon(ctype);
+    g_free(ctype);
+  }
+  if (icon == NULL) {
+    icon = g_themed_icon_new("text-x-generic");
+  }
+  GdkPixbuf *pb = shell_icon_pixbuf_from_gicon(theme, icon, size_px);
+  g_object_unref(icon);
+  return pb;
+}
+
+gchar *da_shell_description_for_extension(const gchar *ext_or_name) {
+  if (ext_or_name == NULL || ext_or_name[0] == '\0') {
+    return NULL;
+  }
+
+  gboolean uncertain = FALSE;
+  gchar *ctype = g_content_type_guess(ext_or_name, NULL, 0, &uncertain);
+  if (ctype == NULL) {
+    return NULL;
+  }
+  gchar *desc = g_content_type_get_description(ctype);
+  g_free(ctype);
+  return desc;
 }
 
 #if !defined(__APPLE__)

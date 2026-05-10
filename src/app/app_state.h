@@ -77,6 +77,8 @@ typedef struct AppState {
   GtkTreeStore *tree_view_store;
   DaTreeViewModel *tree_view_model;
   gboolean tree_view_populated;
+  /** Flat file-type stats treeview (right pane of tree_view_top_paned). */
+  GtkWidget *file_type_tree;
   /** GCancellable for the background tree-view build GTask; NULL when idle. */
   GCancellable *tv_build_cancel;
   /** Scan kept alive while the background tree-view build worker is running. */

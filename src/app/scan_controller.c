@@ -11,6 +11,7 @@
 #include "treemap_widget.h"
 #include "diskatlas.h"
 #include "dm_mime_db.h"
+#include "file_type_view.h"
 #include "file_tree_model.h"
 #include "flat_list_model.h"
 #include "tree_view_model.h"
@@ -1321,6 +1322,7 @@ static void da_mime_classify_scan_nodes(AppState *app) {
 /** Reclassify current scan nodes with the active mime_db and queue a treemap redraw. */
 void scan_controller_reclassify_mime(AppState *app) {
   da_mime_classify_scan_nodes(app);
+  da_file_type_view_populate(app);
   if (app->treemap != NULL) {
     gtk_widget_queue_draw(app->treemap);
   }
@@ -1371,6 +1373,7 @@ static void begin_populate_list(AppState *app) {
     }
     app->list_populated = TRUE;
     enable_scan_button(app, TRUE);
+    da_file_type_view_clear(app);
     da_refresh_treemap(app);
     scan_controller_sync_file_view_status(app);
     return;
@@ -1445,6 +1448,9 @@ static gboolean on_timer_fill_chunk(gpointer data) {
 
   /* Populate folder tree view (background thread after tv-background-thread task). */
   da_tree_view_populate(app);
+
+  /* Populate file-type stats view. */
+  da_file_type_view_populate(app);
 
   /* Populate flat file-view list — instantaneous, no timer loop needed. */
   const gchar *peek = da_file_view_search_get_text(app);

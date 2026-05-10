@@ -20,6 +20,7 @@
 #include "diskatlas_ini.h"
 #include "dm_mime_db.h"
 #include "settings_mime_tab.h"
+#include "file_type_view.h"
 #include "da_cell_renderer_progress.h"
 #include "flat_list_model.h"
 #include "format_text.h"
@@ -855,6 +856,12 @@ void da_ui_build(AppState *app) {
   app->main_notebook = GTK_WIDGET(gtk_builder_get_object(builder, "main_notebook"));
   app->tree_view = GTK_WIDGET(gtk_builder_get_object(builder, "tree_view_tree"));
   gtk_style_context_add_class(gtk_widget_get_style_context(app->tree_view), DISKATLAS_TREE_PROGRESS_STYLE_CLASS);
+  app->file_type_tree = GTK_WIDGET(gtk_builder_get_object(builder, "file_type_tree"));
+  if (app->file_type_tree != NULL) {
+    gtk_style_context_add_class(gtk_widget_get_style_context(app->file_type_tree),
+                                DISKATLAS_TREE_PROGRESS_STYLE_CLASS);
+    da_file_type_view_setup(app);
+  }
   {
     GtkWidget *tv_scrolled = GTK_WIDGET(gtk_builder_get_object(builder, "tree_view_scrolled"));
     GtkWidget *tv_paned = GTK_WIDGET(gtk_builder_get_object(builder, "tree_view_paned"));
