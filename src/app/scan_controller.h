@@ -35,6 +35,18 @@ void scan_controller_fill_scan_options_for_import(AppState *app, scan_options_t 
 /** Copy size (column 1, right-aligned) and full path (column 2) for current selection or entire scan/list. */
 void scan_controller_copy_scan_paths_sizes_to_clipboard(AppState *app);
 
+/** TRUE when Export CSV would be enabled and the active view has at least one explicit selected path. */
+gboolean scan_controller_file_menu_selection_commands_sensitive(AppState *app);
+
+/** Open each distinct parent folder of the current selection in the system file manager. */
+void scan_controller_explore_selected_folders(AppState *app);
+
+/** Open an interactive shell in each distinct folder of the current selection (platform default terminal/cmd). */
+void scan_controller_open_terminal_here(AppState *app);
+
+/** Copy full UTF-8 paths of selected items to the clipboard, one per line. */
+void scan_controller_copy_selected_paths_to_clipboard(AppState *app);
+
 /**
  * Reclassify all currently loaded scan nodes using app->mime_db and queue a treemap redraw.
  * No-op when no scan is loaded or mime_db is NULL.

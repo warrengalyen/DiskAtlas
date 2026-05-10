@@ -1383,7 +1383,16 @@ void treemap_widget_add_to_selection_by_scan_index(TreemapWidget *w, gint64 scan
   size_t i;
   g_return_if_fail(TREEMAP_IS_WIDGET(w));
 
-  if (scan_index < 0 || !w->layout_ok) {
+  if (scan_index < 0) {
+    return;
+  }
+  /* No rects yet (zero allocation or before first layout): same path treemap_run_layout uses
+   * to preserve selection — stage nids so the next layout applies them to tiles. */
+  if (!w->layout_ok) {
+    if (w->nodes != NULL && (size_t)scan_index < w->node_count && w->persist_sel_nids != NULL) {
+      treemap_append_unique_nid(w->persist_sel_nids, (size_t)scan_index);
+      gtk_widget_queue_draw(GTK_WIDGET(w));
+    }
     return;
   }
 

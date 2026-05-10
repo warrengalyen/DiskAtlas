@@ -22,8 +22,9 @@
 #include "volumes.h"
 #include "diskatlas_ini.h"
 
-#define DA_FILE_VIEW_NOTEBOOK_PAGE 0
-#define DA_TREE_VIEW_NOTEBOOK_PAGE 1
+/* Must match main_notebook child order in diskatlas_window.ui: page 0 = Tree View, page 1 = File View. */
+#define DA_TREE_VIEW_NOTEBOOK_PAGE 0
+#define DA_FILE_VIEW_NOTEBOOK_PAGE 1
 
 #define DA_SEARCH_HISTORY_MAX_ENTRIES 64
 
@@ -328,6 +329,7 @@ static void on_tree_selection_changed(GtkTreeSelection *sel, gpointer user_data)
   if (app != NULL && scan_controller_is_file_view_tab(app)) {
     scan_controller_update_status_left_from_selection(app);
   }
+  da_ui_sync_file_menu_export_csv(app);
 }
 
 static gboolean on_tree_motion(GtkWidget *tv, GdkEventMotion *ev, gpointer user_data) {
@@ -450,94 +452,125 @@ static void scan_controller_update_status_left_from_tree_view_selection(AppState
   gtk_label_set_text(GTK_LABEL(app->status_label_left), buf);
 }
 
+static gboolean da_tv_paths_cmp_equal(const char *a, const char *b);
+
 /* ---- Tree View selection → treemap sync ----------------------------------- */
 
 static void on_tree_view_selection_changed(GtkTreeSelection *sel, gpointer user_data) {
   AppState *app = (AppState *)user_data;
-  if (app == NULL || !scan_controller_is_tree_view_tab(app)) {
+  if (app == NULL) {
+    return;
+  }
+  if (!scan_controller_is_tree_view_tab(app)) {
+    da_ui_sync_file_menu_export_csv(app);
     return;
   }
   scan_controller_update_status_left_from_tree_view_selection(app);
 
-  if (app->treemap_tree_sync_in_progress) {
-    return;
-  }
-  /* Sync last-selected row to treemap. */
-  if (app->treemap == NULL || !TREEMAP_IS_WIDGET(app->treemap) || app->scan == NULL) {
-    return;
-  }
-  GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(app->tree_view));
-  GList *rows = gtk_tree_selection_get_selected_rows(sel, &model);
+  if (!app->treemap_tree_sync_in_progress && app->treemap != NULL && TREEMAP_IS_WIDGET(app->treemap) &&
+      app->scan != NULL) {
+    GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(app->tree_view));
+    GList *rows = gtk_tree_selection_get_selected_rows(sel, &model);
 
-  app->treemap_tree_sync_in_progress = TRUE;
-  /* Clear treemap selection first, then add one entry per selected row. */
-  treemap_widget_set_selection_by_scan_index(TREEMAP_WIDGET(app->treemap), -1);
+    app->treemap_tree_sync_in_progress = TRUE;
+    /* Clear treemap selection first, then add one entry per selected row. */
+    treemap_widget_set_selection_by_scan_index(TREEMAP_WIDGET(app->treemap), -1);
 
-  if (rows != NULL && app->scan != NULL) {
-    scan_results_view_t v = scan_get_results(app->scan);
-    for (GList *l = rows; l != NULL; l = l->next) {
-      GtkTreePath *tp = (GtkTreePath *)l->data;
-      GtkTreeIter iter;
-      if (!gtk_tree_model_get_iter(model, &iter, tp)) {
-        continue;
-      }
-      gchar *pstr = NULL;
-      gtk_tree_model_get(model, &iter, DA_TV_COL_PATH, &pstr, -1);
-      if (pstr != NULL && v.nodes != NULL) {
-        for (size_t ni = 0; ni < v.count; ni++) {
-          if (v.nodes[ni].path != NULL &&
-#ifdef G_OS_WIN32
-              g_ascii_strcasecmp(v.nodes[ni].path, pstr) == 0
-#else
-              strcmp(v.nodes[ni].path, pstr) == 0
-#endif
-          ) {
-            treemap_widget_add_to_selection_by_scan_index(TREEMAP_WIDGET(app->treemap),
-                                                         (gint64)ni);
-            break;
+    if (rows != NULL && app->scan != NULL) {
+      scan_results_view_t v = scan_get_results(app->scan);
+      for (GList *l = rows; l != NULL; l = l->next) {
+        GtkTreePath *tp = (GtkTreePath *)l->data;
+        GtkTreeIter iter;
+        if (!gtk_tree_model_get_iter(model, &iter, tp)) {
+          continue;
+        }
+        gchar *pstr = NULL;
+        gtk_tree_model_get(model, &iter, DA_TV_COL_PATH, &pstr, -1);
+        if (pstr != NULL && v.nodes != NULL) {
+          for (size_t ni = 0; ni < v.count; ni++) {
+            if (v.nodes[ni].path != NULL && da_tv_paths_cmp_equal(v.nodes[ni].path, pstr)) {
+              treemap_widget_add_to_selection_by_scan_index(TREEMAP_WIDGET(app->treemap),
+                                                           (gint64)ni);
+              break;
+            }
           }
         }
+        g_free(pstr);
       }
-      g_free(pstr);
+      g_list_free_full(rows, (GDestroyNotify)gtk_tree_path_free);
     }
-    g_list_free_full(rows, (GDestroyNotify)gtk_tree_path_free);
+    app->treemap_tree_sync_in_progress = FALSE;
   }
-  app->treemap_tree_sync_in_progress = FALSE;
+  da_ui_sync_file_menu_export_csv(app);
+}
+
+/* ---- treemap ↔ tree_view path matching (slashes, trailing seps, Windows case) -------- */
+
+static gchar *da_tv_path_for_cmp_dup(const char *utf8) {
+  gchar *s;
+  gchar *p;
+  if (utf8 == NULL) {
+    return g_strdup("");
+  }
+  s = g_strdup(utf8);
+#ifdef G_OS_WIN32
+  for (p = s; *p != '\0'; p++) {
+    if (*p == '\\') {
+      *p = '/';
+    }
+  }
+#endif
+  gsize n = strlen(s);
+  while (n > 0 && (s[n - 1] == '/' || s[n - 1] == '\\')) {
+    s[--n] = '\0';
+  }
+  return s;
+}
+
+static gboolean da_tv_paths_cmp_equal(const char *a, const char *b) {
+  gchar *na = da_tv_path_for_cmp_dup(a);
+  gchar *nb = da_tv_path_for_cmp_dup(b);
+  gboolean eq;
+#ifdef G_OS_WIN32
+  eq = (g_ascii_strcasecmp(na, nb) == 0);
+#else
+  eq = (strcmp(na, nb) == 0);
+#endif
+  g_free(na);
+  g_free(nb);
+  return eq;
 }
 
 /* ---- treemap → tree_view sync helper ------------------------------------- */
 
 /**
- * Find and expand ancestor rows in tree_view_store for the given path string,
- * then select the row matching target_path.
+ * BFS the tree_view_store from roots, expanding lazy rows until @a target_path row is found.
+ * Does not clear the selection. Scrolls to the match when @a scroll is TRUE.
  */
-static void da_tv_select_path(AppState *app, const char *target_path) {
-  GtkTreeView *tv;
-  GtkTreeModel *model;
-  GtkTreeSelection *sel;
+static gboolean da_tv_bfs_select_one_path(AppState *app, GtkTreeView *tv, GtkTreeModel *model, GtkTreeSelection *sel,
+                                          const char *target_path, gboolean scroll) {
   GtkTreeIter root_iter;
   gboolean found = FALSE;
+  gchar *target_cmp = NULL;
 
-  if (app == NULL || target_path == NULL || app->tree_view == NULL ||
-      app->tree_view_store == NULL) {
-    return;
+  if (app == NULL || target_path == NULL || tv == NULL || model == NULL || sel == NULL) {
+    return FALSE;
   }
-  tv    = GTK_TREE_VIEW(app->tree_view);
-  model = GTK_TREE_MODEL(app->tree_view_store);
-  sel   = gtk_tree_view_get_selection(tv);
+  target_cmp = da_tv_path_for_cmp_dup(target_path);
+  if (target_cmp == NULL) {
+    return FALSE;
+  }
 
-  /* Iterate top-level rows; expand as needed; BFS for the target. */
   if (!gtk_tree_model_get_iter_first(model, &root_iter)) {
-    return;
+    g_free(target_cmp);
+    return FALSE;
   }
 
-  /* Use a queue-based BFS to locate target_path without recursion. */
   GQueue *queue = g_queue_new();
   {
     GtkTreeIter *copy = g_new(GtkTreeIter, 1);
     *copy = root_iter;
     g_queue_push_tail(queue, copy);
-    /* Also enqueue siblings of root. */
     GtkTreeIter sib = root_iter;
     while (gtk_tree_model_iter_next(model, &sib)) {
       GtkTreeIter *sc = g_new(GtkTreeIter, 1);
@@ -546,67 +579,52 @@ static void da_tv_select_path(AppState *app, const char *target_path) {
     }
   }
 
-  /* Clear existing selection first so the sync replaces rather than appends. */
-  gtk_tree_selection_unselect_all(sel);
-
   while (!g_queue_is_empty(queue) && !found) {
     GtkTreeIter *cur = (GtkTreeIter *)g_queue_pop_head(queue);
     gchar *pstr = NULL;
     gtk_tree_model_get(model, cur, DA_TV_COL_PATH, &pstr, -1);
-
-    /* Normalise pstr: trim trailing separators for comparison only. */
-    gchar *pstr_norm = NULL;
-    if (pstr != NULL) {
-      pstr_norm = g_strdup(pstr);
-      gsize pn = strlen(pstr_norm);
-      while (pn > 0 && (pstr_norm[pn - 1] == '/' || pstr_norm[pn - 1] == '\\')) {
-        pstr_norm[--pn] = '\0';
-      }
-    }
+    gchar *p_cmp = da_tv_path_for_cmp_dup(pstr);
 
     gboolean match = FALSE;
-    if (pstr_norm != NULL) {
+    if (p_cmp != NULL && p_cmp[0] != '\0') {
 #ifdef G_OS_WIN32
-      match = (g_ascii_strcasecmp(pstr_norm, target_path) == 0);
+      match = (g_ascii_strcasecmp(p_cmp, target_cmp) == 0);
 #else
-      match = (strcmp(pstr_norm, target_path) == 0);
+      match = (strcmp(p_cmp, target_cmp) == 0);
 #endif
     }
     if (match) {
-      /* Found: select and scroll. */
       gtk_tree_selection_select_iter(sel, cur);
-      GtkTreePath *tp = gtk_tree_model_get_path(model, cur);
-      if (tp != NULL) {
-        gtk_tree_view_scroll_to_cell(tv, tp, NULL, FALSE, 0.0f, 0.0f);
-        gtk_tree_path_free(tp);
+      if (scroll) {
+        GtkTreePath *tp = gtk_tree_model_get_path(model, cur);
+        if (tp != NULL) {
+          gtk_tree_view_scroll_to_cell(tv, tp, NULL, FALSE, 0.0f, 0.0f);
+          gtk_tree_path_free(tp);
+        }
       }
       found = TRUE;
     } else {
-      /* Check if target_path could be under this node (node is an ancestor).
-       * Use the trimmed length so "D:\" with plen=3→2 correctly matches "D:\foo". */
       gboolean is_ancestor = FALSE;
-      if (pstr_norm != NULL) {
-        size_t clen = strlen(pstr_norm);
+      if (p_cmp != NULL) {
+        size_t clen = strlen(p_cmp);
         if (clen > 0) {
 #ifdef G_OS_WIN32
-          is_ancestor = (g_ascii_strncasecmp(pstr_norm, target_path, (gint)clen) == 0) &&
-                        (target_path[clen] == '/' || target_path[clen] == '\\' ||
-                         target_path[clen] == '\0');
+          is_ancestor = (g_ascii_strncasecmp(p_cmp, target_cmp, (gint)clen) == 0) &&
+                        (target_cmp[clen] == '/' || target_cmp[clen] == '\\' || target_cmp[clen] == '\0');
 #else
-          is_ancestor = (strncmp(pstr_norm, target_path, clen) == 0) &&
-                        (target_path[clen] == '/' || target_path[clen] == '\\' ||
-                         target_path[clen] == '\0');
+          is_ancestor = (strncmp(p_cmp, target_cmp, clen) == 0) &&
+                        (target_cmp[clen] == '/' || target_cmp[clen] == '\\' || target_cmp[clen] == '\0');
 #endif
         }
       }
       if (is_ancestor && gtk_tree_model_iter_has_child(model, cur)) {
-        /* Expand row to trigger lazy loading. */
         GtkTreePath *tp = gtk_tree_model_get_path(model, cur);
         if (tp != NULL) {
+          /* gtk_tree_view_expand_row may not emit row-expanded; populate lazily first. */
+          da_tree_view_on_row_expanded(tv, cur, tp, app);
           gtk_tree_view_expand_row(tv, tp, FALSE);
           gtk_tree_path_free(tp);
         }
-        /* Enqueue children. */
         GtkTreeIter child;
         if (gtk_tree_model_iter_children(model, &child, cur)) {
           do {
@@ -617,34 +635,75 @@ static void da_tv_select_path(AppState *app, const char *target_path) {
         }
       }
     }
-    g_free(pstr_norm);
+    g_free(p_cmp);
     g_free(pstr);
     g_free(cur);
   }
 
-  /* Drain remaining queue entries. */
   while (!g_queue_is_empty(queue)) {
     g_free(g_queue_pop_head(queue));
   }
   g_queue_free(queue);
+  g_free(target_cmp);
+  return found;
 }
 
-static void da_tv_select_path_by_scan_index(AppState *app, gint64 scan_index) {
-  if (app == NULL || app->scan == NULL || scan_index < 0) {
-    if (app != NULL && app->tree_view != NULL) {
-      GtkTreeSelection *sel = gtk_tree_view_get_selection(GTK_TREE_VIEW(app->tree_view));
-      gtk_tree_selection_unselect_all(sel);
-    }
+/** Replace tree_view selection with rows matching every treemap-selected scan node. */
+static void da_tv_sync_tree_from_treemap(AppState *app) {
+  if (app == NULL || app->tree_view == NULL || app->treemap == NULL || !TREEMAP_IS_WIDGET(app->treemap) ||
+      app->scan == NULL || app->tree_view_store == NULL) {
     return;
   }
   scan_results_view_t v = scan_get_results(app->scan);
-  if (v.nodes == NULL || (size_t)scan_index >= v.count) {
+  if (v.nodes == NULL) {
     return;
   }
-  const char *target = v.nodes[(size_t)scan_index].path;
-  if (target != NULL) {
-    da_tv_select_path(app, target);
+  GArray *nids = g_array_new(FALSE, FALSE, sizeof(size_t));
+  treemap_widget_append_selected_scan_indices(TREEMAP_WIDGET(app->treemap), nids);
+
+  GtkTreeView *tv = GTK_TREE_VIEW(app->tree_view);
+  GtkTreeModel *model = GTK_TREE_MODEL(app->tree_view_store);
+  GtkTreeSelection *sel = gtk_tree_view_get_selection(tv);
+  gtk_tree_selection_unselect_all(sel);
+
+  if (nids->len == 0u) {
+    g_array_free(nids, TRUE);
+    return;
   }
+
+  GPtrArray *paths = g_ptr_array_new();
+  for (guint i = 0; i < nids->len; i++) {
+    size_t nid = g_array_index(nids, size_t, i);
+    if (nid >= v.count) {
+      continue;
+    }
+    const char *p = v.nodes[nid].path;
+    if (p == NULL || p[0] == '\0') {
+      continue;
+    }
+    gboolean dup = FALSE;
+    for (guint j = 0; j < paths->len; j++) {
+      if (da_tv_paths_cmp_equal(p, (const char *)g_ptr_array_index(paths, j))) {
+        dup = TRUE;
+        break;
+      }
+    }
+    if (!dup) {
+      g_ptr_array_add(paths, (gpointer)p);
+    }
+  }
+
+  gboolean scroll_once = TRUE;
+  for (guint k = 0; k < paths->len; k++) {
+    const char *path = (const char *)g_ptr_array_index(paths, k);
+    gboolean ok = da_tv_bfs_select_one_path(app, tv, model, sel, path, scroll_once);
+    if (ok) {
+      scroll_once = FALSE;
+    }
+  }
+
+  g_ptr_array_free(paths, TRUE);
+  g_array_free(nids, TRUE);
 }
 
 static void on_notebook_switch_page(GtkNotebook *nb, GtkWidget *page, guint page_num,
@@ -657,6 +716,7 @@ static void on_notebook_switch_page(GtkNotebook *nb, GtkWidget *page, guint page
     gtk_label_set_text(GTK_LABEL(app->status_label_right), "");
   }
   scan_controller_sync_file_view_status(app);
+  da_ui_sync_file_menu_export_csv(app);
 }
 
 static const file_node_t *da_qsort_nodes;
@@ -971,8 +1031,6 @@ void scan_controller_notify_scan_root_changed(AppState *app) {
   da_refresh_treemap(app);
 }
 
-static void da_tv_select_path_by_scan_index(AppState *app, gint64 scan_index);
-
 static void on_treemap_selected(GtkWidget *treemap, gint64 scan_index, gpointer user_data) {
   AppState *app = (AppState *)user_data;
   (void)treemap;
@@ -982,11 +1040,20 @@ static void on_treemap_selected(GtkWidget *treemap, gint64 scan_index, gpointer 
   /* stat_sel_val is owned exclusively by scan_controller_refresh_volume_labels;
    * do not write to it from treemap selection events. */
   if (app->treemap_tree_sync_in_progress) {
+    da_ui_sync_file_menu_export_csv(app);
     return;
   }
   app->treemap_tree_sync_in_progress = TRUE;
-  da_tv_select_path_by_scan_index(app, scan_index);
+  if (scan_index < 0) {
+    if (app->tree_view != NULL) {
+      GtkTreeSelection *tsel = gtk_tree_view_get_selection(GTK_TREE_VIEW(app->tree_view));
+      gtk_tree_selection_unselect_all(tsel);
+    }
+  } else {
+    da_tv_sync_tree_from_treemap(app);
+  }
   app->treemap_tree_sync_in_progress = FALSE;
+  da_ui_sync_file_menu_export_csv(app);
 }
 
 static void on_treemap_hover(GtkWidget *treemap, gint64 scan_index, gpointer user_data) {
@@ -2118,6 +2185,359 @@ static size_t da_find_scan_nid_for_utf8_path(const scan_results_view_t *v, const
 #endif
   }
   return SIZE_MAX;
+}
+
+static void da_explicit_sel_nids_append_unique(GArray *nids, size_t nid) {
+  if (nid == SIZE_MAX || nids == NULL) {
+    return;
+  }
+  for (guint i = 0; i < nids->len; i++) {
+    if (g_array_index(nids, size_t, i) == nid) {
+      return;
+    }
+  }
+  g_array_append_val(nids, nid);
+}
+
+/**
+ * Collects scan node ids for the current explicit UI selection only (no fallback to whole scan).
+ * File View: treemap selection wins if non-empty, else file list rows. Tree View: selected rows only.
+ */
+static gboolean da_collect_explicit_selected_scan_nids(AppState *app, const scan_results_view_t *v, GArray *out_nids) {
+  if (app == NULL || v == NULL || v->nodes == NULL || out_nids == NULL) {
+    return FALSE;
+  }
+
+  if (scan_controller_is_file_view_tab(app)) {
+    gboolean treemap_used = FALSE;
+    if (app->treemap != NULL && TREEMAP_IS_WIDGET(app->treemap)) {
+      GArray *tn = g_array_new(FALSE, FALSE, sizeof(size_t));
+      treemap_widget_append_selected_scan_indices(TREEMAP_WIDGET(app->treemap), tn);
+      if (tn->len > 0) {
+        treemap_used = TRUE;
+        for (guint i = 0; i < tn->len; i++) {
+          size_t nid = g_array_index(tn, size_t, i);
+          if (nid < v->count) {
+            da_explicit_sel_nids_append_unique(out_nids, nid);
+          }
+        }
+      }
+      g_array_free(tn, TRUE);
+    }
+    if (!treemap_used && app->tree != NULL) {
+      GtkTreeSelection *sel = gtk_tree_view_get_selection(GTK_TREE_VIEW(app->tree));
+      GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(app->tree));
+      GList *plist = gtk_tree_selection_get_selected_rows(sel, &model);
+      if (plist != NULL) {
+        for (GList *l = plist; l != NULL; l = l->next) {
+          GtkTreeIter it;
+          if (!gtk_tree_model_get_iter(model, &it, (GtkTreePath *)l->data)) {
+            continue;
+          }
+          gint64 lp = 0;
+          gtk_tree_model_get(model, &it, DA_COL_LP, &lp, -1);
+          size_t nid = SIZE_MAX;
+          if (!da_tree_lp_to_scan_nid(app, lp, &nid) || nid == SIZE_MAX || nid >= v->count) {
+            continue;
+          }
+          da_explicit_sel_nids_append_unique(out_nids, nid);
+        }
+        g_list_free_full(plist, (GDestroyNotify)gtk_tree_path_free);
+      }
+    }
+  } else if (scan_controller_is_tree_view_tab(app) && app->tree_view != NULL) {
+    GtkTreeSelection *sel = gtk_tree_view_get_selection(GTK_TREE_VIEW(app->tree_view));
+    GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(app->tree_view));
+    GList *plist = gtk_tree_selection_get_selected_rows(sel, &model);
+    if (plist != NULL) {
+      for (GList *l = plist; l != NULL; l = l->next) {
+        GtkTreeIter it;
+        if (!gtk_tree_model_get_iter(model, &it, (GtkTreePath *)l->data)) {
+          continue;
+        }
+        gint64 idx_id = DA_TV_LP_PLACEHOLDER;
+        gtk_tree_model_get(model, &it, DA_TV_COL_IDX_ID, &idx_id, -1);
+        if (idx_id == DA_TV_LP_PLACEHOLDER) {
+          continue;
+        }
+        gchar *pstr = NULL;
+        gtk_tree_model_get(model, &it, DA_TV_COL_PATH, &pstr, -1);
+        size_t nid = da_find_scan_nid_for_utf8_path(v, pstr);
+        g_free(pstr);
+        if (nid != SIZE_MAX && nid < v->count) {
+          da_explicit_sel_nids_append_unique(out_nids, nid);
+        }
+      }
+      g_list_free_full(plist, (GDestroyNotify)gtk_tree_path_free);
+    }
+  }
+
+  return out_nids->len > 0u;
+}
+
+static gchar *da_containing_directory_utf8(const file_node_t *node) {
+  if (node == NULL) {
+    return NULL;
+  }
+  const char *p = node->path;
+  if (p == NULL || p[0] == '\0') {
+    return NULL;
+  }
+  uint32_t kind = node->attributes & DISKATLAS_NODE_KIND_MASK;
+  if (kind == DISKATLAS_NODE_KIND_DIR) {
+    return g_strdup(p);
+  }
+  return g_path_get_dirname(p);
+}
+
+static gboolean da_dir_list_contains(GPtrArray *dirs, const char *candidate) {
+  if (candidate == NULL) {
+    return TRUE;
+  }
+  for (guint i = 0; i < dirs->len; i++) {
+    const char *existing = (const char *)g_ptr_array_index(dirs, i);
+    if (existing == NULL) {
+      continue;
+    }
+#ifdef G_OS_WIN32
+    if (g_ascii_strcasecmp(existing, candidate) == 0) {
+      return TRUE;
+    }
+#else
+    if (strcmp(existing, candidate) == 0) {
+      return TRUE;
+    }
+#endif
+  }
+  return FALSE;
+}
+
+static void da_spawn_explore_folder(const char *dir_utf8) {
+  if (dir_utf8 == NULL || dir_utf8[0] == '\0') {
+    return;
+  }
+  GError *err = NULL;
+#if defined(G_OS_WIN32)
+  const gchar *argv[] = {"explorer.exe", dir_utf8, NULL};
+  g_spawn_async(NULL, (gchar **)argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &err);
+#elif defined(G_OS_DARWIN)
+  const gchar *argv[] = {"/usr/bin/open", dir_utf8, NULL};
+  g_spawn_async(NULL, (gchar **)argv, NULL, (GSpawnFlags)0, NULL, NULL, NULL, &err);
+#else
+  const gchar *argv[] = {"xdg-open", dir_utf8, NULL};
+  g_spawn_async(NULL, (gchar **)argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &err);
+#endif
+  if (err != NULL) {
+    g_warning("Explore folder: %s", err->message);
+    g_clear_error(&err);
+  }
+}
+
+static void da_spawn_terminal_in_dir(const char *dir_utf8) {
+  if (dir_utf8 == NULL || dir_utf8[0] == '\0') {
+    return;
+  }
+  GError *err = NULL;
+#if defined(G_OS_WIN32)
+  /* `start` opens a new console window; plain `cmd /k` can attach to the GUI app and stay hidden. */
+  gchar *argv[] = {"cmd.exe", "/c", "start", "", "/D", (gchar *)dir_utf8, "cmd.exe", "/k", NULL};
+  g_spawn_async(NULL, argv, NULL,
+                (GSpawnFlags)(G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL), NULL,
+                NULL, NULL, &err);
+#elif defined(G_OS_DARWIN)
+  /* `-n` always starts a new Terminal instance instead of reusing a window/tab. */
+  const gchar *argv[] = {"/usr/bin/open", "-na", "Terminal", ".", NULL};
+  g_spawn_async(dir_utf8, (gchar **)argv, NULL, (GSpawnFlags)0, NULL, NULL, NULL, &err);
+#else
+  gchar *prog = g_find_program_in_path("gnome-terminal");
+  if (prog != NULL) {
+    gchar *argv[] = {prog, "--window", "--working-directory", (gchar *)dir_utf8, NULL};
+    g_spawn_async(NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &err);
+    g_free(prog);
+    if (err == NULL) {
+      return;
+    }
+    g_clear_error(&err);
+  }
+  prog = g_find_program_in_path("konsole");
+  if (prog != NULL) {
+    gchar *argv[] = {prog, "--separate", "--workdir", (gchar *)dir_utf8, NULL};
+    g_spawn_async(NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &err);
+    g_free(prog);
+    if (err == NULL) {
+      return;
+    }
+    g_clear_error(&err);
+  }
+  prog = g_find_program_in_path("xfce4-terminal");
+  if (prog != NULL) {
+    gchar *argv[] = {prog, "--disable-server", "--working-directory", (gchar *)dir_utf8, NULL};
+    g_spawn_async(NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &err);
+    g_free(prog);
+    if (err == NULL) {
+      return;
+    }
+    g_clear_error(&err);
+  }
+  prog = g_find_program_in_path("xterm");
+  if (prog != NULL) {
+    gchar *argv[] = {prog, "-e", "/bin/bash", NULL};
+    g_spawn_async(dir_utf8, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &err);
+    g_free(prog);
+    if (err == NULL) {
+      return;
+    }
+    g_clear_error(&err);
+  }
+  prog = g_find_program_in_path("x-terminal-emulator");
+  if (prog != NULL) {
+    gchar *argv[] = {prog, "-e", "/bin/bash", NULL};
+    g_spawn_async(dir_utf8, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &err);
+    g_free(prog);
+  }
+#endif
+  if (err != NULL) {
+    g_warning("Open terminal: %s", err->message);
+    g_clear_error(&err);
+  }
+}
+
+gboolean scan_controller_file_menu_selection_commands_sensitive(AppState *app) {
+  if (app == NULL || app->scan == NULL) {
+    return FALSE;
+  }
+  scan_progress_t pr = scan_get_progress(app->scan);
+  if (!pr.is_complete) {
+    return FALSE;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (v.nodes == NULL) {
+    return FALSE;
+  }
+  GArray *nids = g_array_new(FALSE, FALSE, sizeof(size_t));
+  gboolean ok = da_collect_explicit_selected_scan_nids(app, &v, nids);
+  g_array_free(nids, TRUE);
+  return ok;
+}
+
+void scan_controller_explore_selected_folders(AppState *app) {
+  if (app == NULL || app->window == NULL || app->scan == NULL) {
+    return;
+  }
+  scan_progress_t pr = scan_get_progress(app->scan);
+  if (!pr.is_complete) {
+    return;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (v.nodes == NULL) {
+    return;
+  }
+  GArray *nids = g_array_new(FALSE, FALSE, sizeof(size_t));
+  if (!da_collect_explicit_selected_scan_nids(app, &v, nids)) {
+    g_array_free(nids, TRUE);
+    return;
+  }
+  GPtrArray *dirs = g_ptr_array_new_with_free_func(g_free);
+  for (guint i = 0; i < nids->len; i++) {
+    size_t nid = g_array_index(nids, size_t, i);
+    if (nid >= v.count) {
+      continue;
+    }
+    gchar *d = da_containing_directory_utf8(&v.nodes[nid]);
+    if (d != NULL && d[0] != '\0' && !da_dir_list_contains(dirs, d)) {
+      g_ptr_array_add(dirs, d);
+    } else {
+      g_free(d);
+    }
+  }
+  g_array_free(nids, TRUE);
+  for (guint j = 0; j < dirs->len; j++) {
+    da_spawn_explore_folder((const char *)g_ptr_array_index(dirs, j));
+  }
+  g_ptr_array_free(dirs, TRUE);
+}
+
+void scan_controller_open_terminal_here(AppState *app) {
+  if (app == NULL || app->window == NULL || app->scan == NULL) {
+    return;
+  }
+  scan_progress_t pr = scan_get_progress(app->scan);
+  if (!pr.is_complete) {
+    return;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (v.nodes == NULL) {
+    return;
+  }
+  GArray *nids = g_array_new(FALSE, FALSE, sizeof(size_t));
+  if (!da_collect_explicit_selected_scan_nids(app, &v, nids)) {
+    g_array_free(nids, TRUE);
+    return;
+  }
+  GPtrArray *dirs = g_ptr_array_new_with_free_func(g_free);
+  for (guint i = 0; i < nids->len; i++) {
+    size_t nid = g_array_index(nids, size_t, i);
+    if (nid >= v.count) {
+      continue;
+    }
+    gchar *d = da_containing_directory_utf8(&v.nodes[nid]);
+    if (d != NULL && d[0] != '\0' && !da_dir_list_contains(dirs, d)) {
+      g_ptr_array_add(dirs, d);
+    } else {
+      g_free(d);
+    }
+  }
+  g_array_free(nids, TRUE);
+  for (guint j = 0; j < dirs->len; j++) {
+    da_spawn_terminal_in_dir((const char *)g_ptr_array_index(dirs, j));
+  }
+  g_ptr_array_free(dirs, TRUE);
+}
+
+void scan_controller_copy_selected_paths_to_clipboard(AppState *app) {
+  if (app == NULL || app->window == NULL || app->scan == NULL) {
+    return;
+  }
+  scan_progress_t pr = scan_get_progress(app->scan);
+  if (!pr.is_complete) {
+    return;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (v.nodes == NULL) {
+    return;
+  }
+  GArray *nids = g_array_new(FALSE, FALSE, sizeof(size_t));
+  if (!da_collect_explicit_selected_scan_nids(app, &v, nids)) {
+    g_array_free(nids, TRUE);
+    return;
+  }
+  GPtrArray *lines = g_ptr_array_new_with_free_func(g_free);
+  for (guint i = 0; i < nids->len; i++) {
+    size_t nid = g_array_index(nids, size_t, i);
+    if (nid >= v.count) {
+      continue;
+    }
+    const char *p = v.nodes[nid].path;
+    if (p != NULL && p[0] != '\0') {
+      g_ptr_array_add(lines, g_strdup(p));
+    }
+  }
+  g_array_free(nids, TRUE);
+  if (lines->len == 0u) {
+    g_ptr_array_free(lines, TRUE);
+    return;
+  }
+  GString *gs = g_string_new(NULL);
+  for (guint k = 0; k < lines->len; k++) {
+    if (k > 0u) {
+      g_string_append_c(gs, '\n');
+    }
+    g_string_append(gs, (const gchar *)g_ptr_array_index(lines, k));
+  }
+  GtkClipboard *cb = gtk_widget_get_clipboard(app->window, GDK_SELECTION_CLIPBOARD);
+  gtk_clipboard_set_text(cb, gs->str, -1);
+  g_string_free(gs, TRUE);
+  g_ptr_array_free(lines, TRUE);
 }
 
 static int da_copy_row_cmp(const void *a, const void *b) {

@@ -40,6 +40,9 @@ typedef struct AppState {
   GtkWidget *file_menu_export_csv;
   /** File menu "Copy file and size info…"; same sensitivity as export CSV. */
   GtkWidget *file_menu_copy_clipboard;
+  GtkWidget *file_menu_explore_folder;
+  GtkWidget *file_menu_terminal;
+  GtkWidget *file_menu_copy_path;
   GtkWidget *scan_source_combo;
   gint scan_source_last_stable_active;
   GtkWidget *scan_btn;

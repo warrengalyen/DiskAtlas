@@ -41,6 +41,16 @@ void da_ui_sync_file_menu_export_csv(AppState *app) {
   if (app != NULL && app->file_menu_copy_clipboard != NULL) {
     gtk_widget_set_sensitive(app->file_menu_copy_clipboard, ok);
   }
+  gboolean ok_sel = ok && scan_controller_file_menu_selection_commands_sensitive(app);
+  if (app != NULL && app->file_menu_explore_folder != NULL) {
+    gtk_widget_set_sensitive(app->file_menu_explore_folder, ok_sel);
+  }
+  if (app != NULL && app->file_menu_terminal != NULL) {
+    gtk_widget_set_sensitive(app->file_menu_terminal, ok_sel);
+  }
+  if (app != NULL && app->file_menu_copy_path != NULL) {
+    gtk_widget_set_sensitive(app->file_menu_copy_path, ok_sel);
+  }
 }
 
 #if defined(G_OS_WIN32)
@@ -373,6 +383,33 @@ static void on_file_menu_copy_clipboard_activate(GtkMenuItem *item, gpointer use
     return;
   }
   scan_controller_copy_scan_paths_sizes_to_clipboard(app);
+}
+
+static void on_file_menu_explore_folder_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->window == NULL) {
+    return;
+  }
+  scan_controller_explore_selected_folders(app);
+}
+
+static void on_file_menu_terminal_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->window == NULL) {
+    return;
+  }
+  scan_controller_open_terminal_here(app);
+}
+
+static void on_file_menu_copy_path_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->window == NULL) {
+    return;
+  }
+  scan_controller_copy_selected_paths_to_clipboard(app);
 }
 
 static void on_file_menu_import_csv_activate(GtkMenuItem *item, gpointer user_data) {
@@ -997,6 +1034,32 @@ void da_ui_build(AppState *app) {
     app->file_menu_export_csv = file_menu_export_csv;
     if (file_menu_export_csv != NULL) {
       g_signal_connect(file_menu_export_csv, "activate", G_CALLBACK(on_file_menu_export_csv_activate), app);
+    }
+  }
+  {
+    GtkWidget *file_menu_explore_folder = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_explore_folder"));
+    app->file_menu_explore_folder = file_menu_explore_folder;
+    if (file_menu_explore_folder != NULL) {
+      g_signal_connect(file_menu_explore_folder, "activate", G_CALLBACK(on_file_menu_explore_folder_activate), app);
+    }
+  }
+  {
+    GtkWidget *file_menu_terminal = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_terminal"));
+    app->file_menu_terminal = file_menu_terminal;
+    if (file_menu_terminal != NULL && GTK_IS_MENU_ITEM(file_menu_terminal)) {
+#if defined(G_OS_WIN32)
+      gtk_menu_item_set_label(GTK_MENU_ITEM(file_menu_terminal), "Command Prompt Here");
+#else
+      gtk_menu_item_set_label(GTK_MENU_ITEM(file_menu_terminal), "Terminal Here");
+#endif
+      g_signal_connect(file_menu_terminal, "activate", G_CALLBACK(on_file_menu_terminal_activate), app);
+    }
+  }
+  {
+    GtkWidget *file_menu_copy_path = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_copy_path"));
+    app->file_menu_copy_path = file_menu_copy_path;
+    if (file_menu_copy_path != NULL) {
+      g_signal_connect(file_menu_copy_path, "activate", G_CALLBACK(on_file_menu_copy_path_activate), app);
     }
   }
   {
