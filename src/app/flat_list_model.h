@@ -27,4 +27,7 @@ void flat_list_model_set_indices(FlatListModel *m, const size_t *indices, size_t
  */
 void flat_list_model_invalidate(FlatListModel *m);
 
+/** First row whose resolved scan node index equals @a target_nid; FALSE if not visible in the flat list. */
+gboolean flat_list_model_lookup_path_for_scan_nid(FlatListModel *m, size_t target_nid, GtkTreePath **out_path);
+
 #endif /* FLAT_LIST_MODEL_H */

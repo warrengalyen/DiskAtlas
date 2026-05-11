@@ -48,6 +48,7 @@ typedef struct AppState {
   GtkWidget *file_menu_cut;
   GtkWidget *file_menu_delete_trash;
   GtkWidget *file_menu_delete_permanent;
+  GtkWidget *file_menu_rename;
   GtkWidget *scan_source_combo;
   gint scan_source_last_stable_active;
   GtkWidget *scan_btn;
@@ -139,6 +140,9 @@ typedef struct AppState {
 
   /** Zebra striping for tree views; persisted as `alternate_row_colors` in `[interface]`. Default FALSE. */
   gboolean interface_alternate_row_colors;
+
+  /** When TRUE, File → Rename, F2, and inline name editing are allowed; persisted as `enable_rename` in `[general]`. */
+  gboolean general_enable_rename;
 
   /** Runtime MIME classification database; built at startup and rebuilt after settings changes. */
   struct DmMimeDatabase *mime_db;

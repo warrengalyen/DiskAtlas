@@ -782,3 +782,27 @@ void flat_list_model_invalidate(FlatListModel *m) {
     gtk_tree_path_free(path);
   }
 }
+
+gboolean flat_list_model_lookup_path_for_scan_nid(FlatListModel *m, size_t target_nid, GtkTreePath **out_path) {
+  g_return_val_if_fail(FLAT_LIST_IS_MODEL(m), FALSE);
+  g_return_val_if_fail(out_path != NULL, FALSE);
+  *out_path = NULL;
+  GtkTreeModel *tm = GTK_TREE_MODEL(m);
+  for (size_t row = 0; row < m->count; row++) {
+    GtkTreeIter it;
+    flm_set_iter(m, &it, row);
+    if (flm_iter_nid(m, &it) == target_nid) {
+      *out_path = gtk_tree_model_get_path(tm, &it);
+      return *out_path != NULL;
+    }
+    size_t nc = flm_row_child_count(m, row);
+    for (size_t c = 0; c < nc; c++) {
+      flm_set_child_iter(m, &it, row, c);
+      if (flm_iter_nid(m, &it) == target_nid) {
+        *out_path = gtk_tree_model_get_path(tm, &it);
+        return *out_path != NULL;
+      }
+    }
+  }
+  return FALSE;
+}

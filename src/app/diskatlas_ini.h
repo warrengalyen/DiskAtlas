@@ -34,6 +34,11 @@ void da_ini_load_interface(AppState *app);
 /** Persist `[interface]` keys (merge write). */
 void da_ini_save_interface(const AppState *app);
 
+/** Load `[general]` (enable_rename, etc.). */
+void da_ini_load_general(AppState *app);
+/** Persist `[general]` keys (merge write). */
+void da_ini_save_general(const AppState *app);
+
 /** Load `[search_history]` `queries` (colon-separated list in the file); caller must `g_strfreev`. Returns NULL if none. */
 gchar **da_ini_search_history_load(gsize *n_out);
 

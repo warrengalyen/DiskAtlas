@@ -330,7 +330,7 @@ static void on_tree_selection_changed(GtkTreeSelection *sel, gpointer user_data)
   if (app != NULL && scan_controller_is_file_view_tab(app)) {
     scan_controller_update_status_left_from_selection(app);
   }
-  da_ui_sync_file_menu_export_csv(app);
+  da_ui_sync_file_menu(app);
 }
 
 static gboolean on_tree_motion(GtkWidget *tv, GdkEventMotion *ev, gpointer user_data) {
@@ -463,7 +463,7 @@ static void on_tree_view_selection_changed(GtkTreeSelection *sel, gpointer user_
     return;
   }
   if (!scan_controller_is_tree_view_tab(app)) {
-    da_ui_sync_file_menu_export_csv(app);
+    da_ui_sync_file_menu(app);
     return;
   }
   scan_controller_update_status_left_from_tree_view_selection(app);
@@ -502,7 +502,7 @@ static void on_tree_view_selection_changed(GtkTreeSelection *sel, gpointer user_
     }
     app->treemap_tree_sync_in_progress = FALSE;
   }
-  da_ui_sync_file_menu_export_csv(app);
+  da_ui_sync_file_menu(app);
 }
 
 /* ---- treemap ↔ tree_view path matching (slashes, trailing seps, Windows case) -------- */
@@ -717,7 +717,7 @@ static void on_notebook_switch_page(GtkNotebook *nb, GtkWidget *page, guint page
     gtk_label_set_text(GTK_LABEL(app->status_label_right), "");
   }
   scan_controller_sync_file_view_status(app);
-  da_ui_sync_file_menu_export_csv(app);
+  da_ui_sync_file_menu(app);
 }
 
 static const file_node_t *da_qsort_nodes;
@@ -1041,7 +1041,7 @@ static void on_treemap_selected(GtkWidget *treemap, gint64 scan_index, gpointer 
   /* stat_sel_val is owned exclusively by scan_controller_refresh_volume_labels;
    * do not write to it from treemap selection events. */
   if (app->treemap_tree_sync_in_progress) {
-    da_ui_sync_file_menu_export_csv(app);
+    da_ui_sync_file_menu(app);
     return;
   }
   app->treemap_tree_sync_in_progress = TRUE;
@@ -1054,7 +1054,7 @@ static void on_treemap_selected(GtkWidget *treemap, gint64 scan_index, gpointer 
     da_tv_sync_tree_from_treemap(app);
   }
   app->treemap_tree_sync_in_progress = FALSE;
-  da_ui_sync_file_menu_export_csv(app);
+  da_ui_sync_file_menu(app);
 }
 
 static void on_treemap_hover(GtkWidget *treemap, gint64 scan_index, gpointer user_data) {
@@ -1593,7 +1593,7 @@ static gboolean on_timer_scan_tick(gpointer data) {
   AppState *app = (AppState *)data;
   if (app->scan == NULL) {
     kill_timer(&app->timer_scan);
-    da_ui_sync_file_menu_export_csv(app);
+    da_ui_sync_file_menu(app);
     return G_SOURCE_REMOVE;
   }
   scan_progress_t pr = scan_get_progress(app->scan);
@@ -1604,7 +1604,7 @@ static gboolean on_timer_scan_tick(gpointer data) {
   }
 
   kill_timer(&app->timer_scan);
-  da_ui_sync_file_menu_export_csv(app);
+  da_ui_sync_file_menu(app);
   gint64 now = g_get_monotonic_time();
   app->last_scan_elapsed_s = (double)(now - app->scan_start_us) / 1000000.0;
 
@@ -1720,7 +1720,7 @@ static void start_scan(AppState *app) {
       app->scan = NULL;
     }
   }
-  da_ui_sync_file_menu_export_csv(app);
+  da_ui_sync_file_menu(app);
 
   scan_options_t opt;
   memset(&opt, 0, sizeof(opt));
@@ -1771,11 +1771,11 @@ static void start_scan(AppState *app) {
     enable_scan_button(app, TRUE);
     scan_progress_reset_idle(app);
     panel_scan_set_text(app, "Could not start scan.");
-    da_ui_sync_file_menu_export_csv(app);
+    da_ui_sync_file_menu(app);
     return;
   }
 
-  da_ui_sync_file_menu_export_csv(app);
+  da_ui_sync_file_menu(app);
   app->scan_start_us = g_get_monotonic_time();
   scan_button_set_cancelling_mode(app);
   scan_progress_set_indeterminate(app, TRUE);
@@ -2160,7 +2160,7 @@ void scan_controller_apply_imported_scan(AppState *app, scan_result_t *new_scan,
   if (app->treemap != NULL) {
     gtk_widget_queue_draw(app->treemap);
   }
-  da_ui_sync_file_menu_export_csv(app);
+  da_ui_sync_file_menu(app);
   begin_populate_list(app);
 }
 
@@ -2903,7 +2903,7 @@ static void da_mark_deleted_paths(AppState *app, const char **paths, size_t coun
   if (app->tree_view != NULL) {
     gtk_widget_queue_draw(app->tree_view);
   }
-  da_ui_sync_file_menu_export_csv(app);
+  da_ui_sync_file_menu(app);
 }
 
 /* Shared boilerplate: verify app state, get results, collect selected nids.
@@ -3097,4 +3097,239 @@ void scan_controller_delete_permanent(AppState *app) {
 
   g_ptr_array_free(path_arr, TRUE);
   g_array_free(kind_arr, TRUE);
+}
+
+/* ---- Rename on disk (file / tree list) ---- */
+
+static void da_deleted_path_set_apply_rename(AppState *app, const char *old_p, const char *new_p) {
+  if (app->deleted_path_set == NULL || old_p == NULL || new_p == NULL) {
+    return;
+  }
+  size_t ol = strlen(old_p);
+  GHashTable *nh = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+
+  GHashTableIter hit;
+  gpointer hk, hv;
+  g_hash_table_iter_init(&hit, app->deleted_path_set);
+  while (g_hash_table_iter_next(&hit, &hk, &hv)) {
+    const char *key = (const char *)hk;
+    gchar *mapped = NULL;
+#if defined(G_OS_WIN32)
+    if (g_ascii_strcasecmp(key, old_p) == 0) {
+      mapped = g_strdup(new_p);
+    } else if (strlen(key) > ol && (key[ol] == '\\' || key[ol] == '/') &&
+               g_ascii_strncasecmp(key, old_p, (gssize)ol) == 0) {
+      mapped = g_strdup_printf("%s%s", new_p, key + ol);
+    }
+#else
+    if (strcmp(key, old_p) == 0) {
+      mapped = g_strdup(new_p);
+    } else if (strlen(key) > ol && (key[ol] == '/' || key[ol] == '\\') && strncmp(key, old_p, ol) == 0) {
+      mapped = g_strdup_printf("%s%s", new_p, key + ol);
+    }
+#endif
+    if (mapped != NULL) {
+      g_hash_table_insert(nh, mapped, NULL);
+    } else {
+      g_hash_table_insert(nh, g_strdup(key), NULL);
+    }
+  }
+
+  g_hash_table_unref(app->deleted_path_set);
+  app->deleted_path_set = nh;
+}
+
+static gboolean da_rename_one_path(AppState *app, const char *old_path_utf8, const gchar *new_basename_in) {
+  if (app == NULL || app->window == NULL || app->scan == NULL || old_path_utf8 == NULL || new_basename_in == NULL) {
+    return FALSE;
+  }
+  gchar *trim = g_strdup(new_basename_in);
+  if (trim == NULL) {
+    return FALSE;
+  }
+  g_strstrip(trim);
+  if (trim[0] == '\0') {
+    g_free(trim);
+    return FALSE;
+  }
+  if (strchr(trim, '/') != NULL || strchr(trim, '\\') != NULL) {
+    GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_WARNING,
+                                          GTK_BUTTONS_OK, "Name cannot contain path separators.");
+    gtk_dialog_run(GTK_DIALOG(d));
+    gtk_widget_destroy(d);
+    g_free(trim);
+    return FALSE;
+  }
+
+  gchar *dir = g_path_get_dirname(old_path_utf8);
+  gchar *new_full = g_build_filename(dir != NULL ? dir : "", trim, NULL);
+  g_free(dir);
+  g_free(trim);
+
+#if defined(G_OS_WIN32)
+  gboolean same = (g_ascii_strcasecmp(old_path_utf8, new_full) == 0);
+#else
+  gboolean same = (strcmp(old_path_utf8, new_full) == 0);
+#endif
+  if (same) {
+    g_free(new_full);
+    return TRUE;
+  }
+
+  GFile *src = g_file_new_for_path(old_path_utf8);
+  GFile *dst = g_file_new_for_path(new_full);
+  GError *err = NULL;
+  gboolean mv = g_file_move(src, dst, G_FILE_COPY_NONE, NULL, NULL, NULL, &err);
+  g_object_unref(src);
+  g_object_unref(dst);
+  if (!mv) {
+    GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
+                                          GTK_BUTTONS_OK, "Rename failed: %s", err != NULL ? err->message : "unknown error");
+    gtk_dialog_run(GTK_DIALOG(d));
+    gtk_widget_destroy(d);
+    g_clear_error(&err);
+    g_free(new_full);
+    return FALSE;
+  }
+
+  if (scan_result_paths_after_rename(app->scan, old_path_utf8, new_full) < 0) {
+    GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
+                                          GTK_BUTTONS_OK, "Renamed on disk but updating the scan snapshot failed.");
+    gtk_dialog_run(GTK_DIALOG(d));
+    gtk_widget_destroy(d);
+    g_free(new_full);
+    return FALSE;
+  }
+
+  da_deleted_path_set_apply_rename(app, old_path_utf8, new_full);
+  da_tree_view_model_sync_entry_paths_from_scan(app);
+  da_tree_view_store_refresh_path_columns(app);
+  if (app->flat_list_model != NULL) {
+    flat_list_model_invalidate(app->flat_list_model);
+  }
+  scan_controller_reclassify_mime(app);
+  da_refresh_treemap(app);
+
+  g_free(new_full);
+  return TRUE;
+}
+
+void scan_controller_on_tree_name_cell_edited(AppState *app, gboolean is_tree_view, gchar *path_str, gchar *new_text) {
+  if (app == NULL || !app->general_enable_rename || path_str == NULL || new_text == NULL) {
+    return;
+  }
+  GtkTreeView *tv = is_tree_view ? GTK_TREE_VIEW(app->tree_view) : GTK_TREE_VIEW(app->tree);
+  if (tv == NULL || app->scan == NULL) {
+    return;
+  }
+  GtkTreeModel *model = gtk_tree_view_get_model(tv);
+  if (model == NULL) {
+    return;
+  }
+  GtkTreePath *tp = gtk_tree_path_new_from_string(path_str);
+  if (tp == NULL) {
+    return;
+  }
+  GtkTreeIter it;
+  if (!gtk_tree_model_get_iter(model, &it, tp)) {
+    gtk_tree_path_free(tp);
+    return;
+  }
+  gtk_tree_path_free(tp);
+
+  const gchar *old_path = NULL;
+  if (is_tree_view) {
+    gint64 eid = DA_TV_LP_PLACEHOLDER;
+    gtk_tree_model_get(model, &it, DA_TV_COL_IDX_ID, &eid, -1);
+    const char *borrowed = NULL;
+    if (!da_tree_view_model_borrow_path_for_entry_id(app->tree_view_model, eid, &borrowed)) {
+      return;
+    }
+    old_path = borrowed;
+  } else {
+    gint64 lp = 0;
+    gtk_tree_model_get(model, &it, DA_COL_LP, &lp, -1);
+    scan_results_view_t v = scan_get_results(app->scan);
+    size_t nid = SIZE_MAX;
+    if (!da_tree_lp_to_scan_nid(app, lp, &nid) || nid == SIZE_MAX || nid >= v.count || v.nodes == NULL) {
+      return;
+    }
+    old_path = v.nodes[nid].path;
+  }
+
+  if (old_path == NULL || old_path[0] == '\0') {
+    return;
+  }
+
+  (void)da_rename_one_path(app, old_path, new_text);
+}
+
+void scan_controller_begin_rename_selection(AppState *app) {
+  if (app == NULL || !app->general_enable_rename || app->window == NULL) {
+    return;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (app->scan == NULL || v.nodes == NULL) {
+    return;
+  }
+  scan_progress_t pr = scan_get_progress(app->scan);
+  if (!pr.is_complete) {
+    return;
+  }
+
+  GArray *nids = g_array_new(FALSE, FALSE, sizeof(size_t));
+  if (!da_collect_explicit_selected_scan_nids(app, &v, nids) || nids->len == 0) {
+    g_array_free(nids, TRUE);
+    return;
+  }
+  size_t nid0 = g_array_index(nids, size_t, 0);
+  g_array_free(nids, TRUE);
+  if (nid0 >= v.count) {
+    return;
+  }
+
+  GtkTreePath *tp = NULL;
+  GtkTreeView *tv = NULL;
+  if (scan_controller_is_file_view_tab(app)) {
+    tv = GTK_TREE_VIEW(app->tree);
+    if (tv == NULL || app->flat_list_model == NULL) {
+      return;
+    }
+    GtkTreeSelection *sel = gtk_tree_view_get_selection(tv);
+    GtkTreeModel *md = gtk_tree_view_get_model(tv);
+    GList *rows = gtk_tree_selection_get_selected_rows(sel, &md);
+    if (rows != NULL) {
+      tp = gtk_tree_path_copy((GtkTreePath *)rows->data);
+      g_list_free_full(rows, (GDestroyNotify)gtk_tree_path_free);
+    } else if (!flat_list_model_lookup_path_for_scan_nid(app->flat_list_model, nid0, &tp) || tp == NULL) {
+      return;
+    }
+  } else if (scan_controller_is_tree_view_tab(app)) {
+    tv = GTK_TREE_VIEW(app->tree_view);
+    if (tv == NULL) {
+      return;
+    }
+    GtkTreeSelection *sel = gtk_tree_view_get_selection(tv);
+    GtkTreeModel *md = gtk_tree_view_get_model(tv);
+    GList *rows = gtk_tree_selection_get_selected_rows(sel, &md);
+    if (rows == NULL) {
+      return;
+    }
+    tp = gtk_tree_path_copy((GtkTreePath *)rows->data);
+    g_list_free_full(rows, (GDestroyNotify)gtk_tree_path_free);
+  } else {
+    return;
+  }
+
+  if (tv == NULL || tp == NULL) {
+    if (tp != NULL) {
+      gtk_tree_path_free(tp);
+    }
+    return;
+  }
+
+  GtkTreeViewColumn *col = gtk_tree_view_get_column(tv, 0);
+  gtk_widget_grab_focus(GTK_WIDGET(tv));
+  gtk_tree_view_set_cursor(tv, tp, col, TRUE);
+  gtk_tree_path_free(tp);
 }

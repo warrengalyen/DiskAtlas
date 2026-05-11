@@ -27,7 +27,7 @@
 #include "format_text.h"
 #include "shell_icon.h"
 
-void da_ui_sync_file_menu_export_csv(AppState *app) {
+void da_ui_sync_file_menu(AppState *app) {
   gboolean ok = FALSE;
   if (app != NULL && app->scan != NULL) {
     scan_progress_t pr = scan_get_progress(app->scan);
@@ -63,6 +63,10 @@ void da_ui_sync_file_menu_export_csv(AppState *app) {
   }
   if (app != NULL && app->file_menu_delete_permanent != NULL) {
     gtk_widget_set_sensitive(app->file_menu_delete_permanent, ok_sel);
+  }
+  gboolean ok_rename = ok_sel && app != NULL && app->general_enable_rename;
+  if (app != NULL && app->file_menu_rename != NULL) {
+    gtk_widget_set_sensitive(app->file_menu_rename, ok_rename);
   }
 }
 
@@ -362,6 +366,9 @@ static void da_tv_deleted_text_cell_data(GtkTreeViewColumn *col, GtkCellRenderer
 
   gboolean is_alloc = ctx->is_tree_view && (ctx->model_text_col == DA_TV_COL_ALLOC);
   da_tree_view_apply_zebra_cell(col, cell, model, iter, ctx->app, is_alloc);
+  gboolean name_editable = ctx->app != NULL && ctx->app->general_enable_rename && ctx->is_tree_view &&
+                           ctx->model_text_col == DA_TV_COL_NAME;
+  g_object_set(cell, "editable", name_editable, NULL);
 }
 
 /**
@@ -483,6 +490,7 @@ static void file_view_file_name_text_cell_data(GtkTreeViewColumn *column, GtkCel
   }
   da_apply_deleted_cell_style(cell, app, path);
   da_tree_view_apply_zebra_cell(column, cell, model, iter, app, FALSE);
+  g_object_set(cell, "editable", app != NULL && app->general_enable_rename, NULL);
 }
 
 static void file_view_path_text_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell,
@@ -499,6 +507,16 @@ static void file_view_path_text_cell_data(GtkTreeViewColumn *column, GtkCellRend
   da_tree_view_apply_zebra_cell(column, cell, model, iter, app, FALSE);
 }
 
+static void on_file_view_name_edited(GtkCellRendererText *renderer, gchar *path, gchar *new_text, gpointer user_data) {
+  (void)renderer;
+  scan_controller_on_tree_name_cell_edited((AppState *)user_data, FALSE, path, new_text);
+}
+
+static void on_tree_view_name_edited(GtkCellRendererText *renderer, gchar *path, gchar *new_text, gpointer user_data) {
+  (void)renderer;
+  scan_controller_on_tree_name_cell_edited((AppState *)user_data, TRUE, path, new_text);
+}
+
 static void append_file_name_column(GtkTreeView *tv, AppState *app, const char *title, int sort_model_id, int width_px,
                                     int min_width_px) {
   GtkCellRenderer *pix = gtk_cell_renderer_pixbuf_new();
@@ -511,6 +529,7 @@ static void append_file_name_column(GtkTreeView *tv, AppState *app, const char *
   gtk_tree_view_column_set_cell_data_func(c, pix, file_name_icon_cell_data, app, NULL);
   gtk_tree_view_column_pack_start(c, txt, TRUE);
   gtk_tree_view_column_set_cell_data_func(c, txt, file_view_file_name_text_cell_data, app, NULL);
+  g_signal_connect(txt, "edited", G_CALLBACK(on_file_view_name_edited), app);
 
   gtk_tree_view_column_set_alignment(c, 0.0f);
   gtk_tree_view_column_set_resizable(c, TRUE);
@@ -588,6 +607,15 @@ static void on_file_menu_delete_permanent_activate(GtkMenuItem *item, gpointer u
     return;
   }
   scan_controller_delete_permanent(app);
+}
+
+static void on_file_menu_rename_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->window == NULL) {
+    return;
+  }
+  scan_controller_begin_rename_selection(app);
 }
 
 static void on_file_menu_scan_activate(GtkMenuItem *item, gpointer user_data) {
@@ -773,6 +801,7 @@ typedef struct {
   GtkWidget       *decimal_places_spin;
   GtkWidget       *treemap_gradient_check;
   GtkWidget       *alternate_row_colors_check;
+  GtkWidget       *enable_rename_check;
 } DaSettingsDlgHandles;
 
 static void da_ui_apply_alternate_row_colors(AppState *app) {
@@ -832,10 +861,22 @@ static void da_settings_apply_interface_tab(DaSettingsDlgHandles *h) {
         gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(h->alternate_row_colors_check));
   }
 
+  if (h->enable_rename_check != NULL && GTK_IS_TOGGLE_BUTTON(h->enable_rename_check)) {
+    h->app->general_enable_rename = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(h->enable_rename_check));
+  }
+
   da_ini_save_interface(h->app);
+  da_ini_save_general(h->app);
   scan_controller_refresh_size_display_format(h->app);
   da_ui_apply_treemap_style(h->app);
   da_ui_apply_alternate_row_colors(h->app);
+  da_ui_sync_file_menu(h->app);
+  if (h->app->tree != NULL) {
+    gtk_widget_queue_draw(h->app->tree);
+  }
+  if (h->app->tree_view != NULL) {
+    gtk_widget_queue_draw(h->app->tree_view);
+  }
 }
 
 static void on_settings_ok_clicked(GtkButton *btn, gpointer user_data) {
@@ -919,6 +960,10 @@ static void on_tools_menu_settings_activate(GtkMenuItem *item, gpointer user_dat
   if (handles->alternate_row_colors_check != NULL && GTK_IS_TOGGLE_BUTTON(handles->alternate_row_colors_check)) {
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(handles->alternate_row_colors_check),
                                  app->interface_alternate_row_colors);
+  }
+  handles->enable_rename_check = GTK_WIDGET(gtk_builder_get_object(builder, "enable_rename_check"));
+  if (handles->enable_rename_check != NULL && GTK_IS_TOGGLE_BUTTON(handles->enable_rename_check)) {
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(handles->enable_rename_check), app->general_enable_rename);
   }
 
   GtkWidget *ok_btn = GTK_WIDGET(gtk_builder_get_object(builder, "ok_btn"));
@@ -1181,6 +1226,7 @@ static void da_setup_tree_view(AppState *app) {
       ctx->is_tree_view   = TRUE;
       gtk_tree_view_column_set_cell_data_func(c, txt, da_tv_deleted_text_cell_data, ctx, g_free);
     }
+    g_signal_connect(txt, "edited", G_CALLBACK(on_tree_view_name_edited), app);
     gtk_tree_view_column_set_alignment(c, 0.0f);
     gtk_tree_view_column_set_resizable(c, TRUE);
     gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
@@ -1300,6 +1346,7 @@ void da_ui_build(AppState *app) {
 
   da_ini_load_filetree(app);
   da_ini_load_interface(app);
+  da_ini_load_general(app);
 
   treemap_widget_set_style(TREEMAP_WIDGET(app->treemap), &app->treemap_style);
 
@@ -1375,6 +1422,13 @@ void da_ui_build(AppState *app) {
   }
 
   da_ui_apply_alternate_row_colors(app);
+  da_ui_sync_file_menu(app);
+  if (app->tree != NULL) {
+    gtk_widget_queue_draw(app->tree);
+  }
+  if (app->tree_view != NULL) {
+    gtk_widget_queue_draw(app->tree_view);
+  }
 
 #if defined(G_OS_WIN32)
   app->admin_ntfs_notice_panel = GTK_WIDGET(gtk_builder_get_object(builder, "admin_ntfs_notice_panel"));
@@ -1476,6 +1530,13 @@ void da_ui_build(AppState *app) {
     }
   }
   {
+    GtkWidget *w = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_rename"));
+    app->file_menu_rename = w;
+    if (w != NULL) {
+      g_signal_connect(w, "activate", G_CALLBACK(on_file_menu_rename_activate), app);
+    }
+  }
+  {
     GtkWidget *file_menu_copy_clipboard = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_copy_clipboard"));
     app->file_menu_copy_clipboard = file_menu_copy_clipboard;
     if (file_menu_copy_clipboard != NULL) {
@@ -1506,7 +1567,7 @@ void da_ui_build(AppState *app) {
   scan_controller_sync_display_max_combo(app);
   scan_controller_attach(app);
   scan_controller_refresh_volume_labels(app);
-  da_ui_sync_file_menu_export_csv(app);
+  da_ui_sync_file_menu(app);
 
   gtk_widget_show_all(app->window);
 

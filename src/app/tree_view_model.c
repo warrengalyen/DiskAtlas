@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #include <glib.h>
 #include <gtk/gtk.h>
@@ -15,6 +16,7 @@
 typedef struct {
   uint32_t kind;             /* DISKATLAS_NODE_KIND_* */
   const char *path;          /* borrowed from scan blob (valid while app->scan alive) */
+  size_t      scan_nid;      /* SIZE_MAX = synthetic root row (no scan node) */
   uint64_t mtime_unix_ns;
   uint32_t win32_attributes;
   uint64_t size_bytes;       /* file: own size; dir: subtree logical total */
@@ -335,6 +337,7 @@ static void tv_build_worker(GTask *task, gpointer source_object,
   for (size_t i = 0; i < n; i++) {
     entries[i].kind             = 0;
     entries[i].path             = NULL;
+    entries[i].scan_nid         = SIZE_MAX;
     entries[i].mtime_unix_ns    = 0;
     entries[i].win32_attributes = 0;
     entries[i].size_bytes       = 0;
@@ -358,6 +361,7 @@ static void tv_build_worker(GTask *task, gpointer source_object,
     uint32_t kind = node->attributes & DISKATLAS_NODE_KIND_MASK;
     e->kind             = kind;
     e->path             = node->path;
+    e->scan_nid         = ni;
     e->mtime_unix_ns    = node->mtime_unix_ns;
     e->win32_attributes = node->win32_attributes;
 
@@ -419,6 +423,7 @@ static void tv_build_worker(GTask *task, gpointer source_object,
       DaTvEntry *sr = &entries[n];
       sr->kind             = DISKATLAS_NODE_KIND_DIR;
       sr->path             = scan_root_path;
+      sr->scan_nid         = SIZE_MAX;
       sr->mtime_unix_ns    = 0;
       sr->win32_attributes = 0;
       sr->size_bytes       = 0;
@@ -645,6 +650,50 @@ void da_tree_view_refresh_size_columns(AppState *app) {
   }
 }
 
+void da_tree_view_model_sync_entry_paths_from_scan(AppState *app) {
+  if (app == NULL || app->tree_view_model == NULL || app->scan == NULL) {
+    return;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (v.nodes == NULL) {
+    return;
+  }
+  for (size_t i = 0; i < app->tree_view_model->count; i++) {
+    DaTvEntry *e = &app->tree_view_model->entries[i];
+    if (e->scan_nid != SIZE_MAX && e->scan_nid < v.count) {
+      e->path = v.nodes[e->scan_nid].path;
+    }
+  }
+}
+
+static void da_tv_refresh_path_columns_branch(GtkTreeModel *model, GtkTreeIter *iter, AppState *app) {
+  gint64 eid;
+  gtk_tree_model_get(model, iter, DA_TV_COL_IDX_ID, &eid, -1);
+  if (eid >= 0 && eid != DA_TV_LP_PLACEHOLDER && app->tree_view_model != NULL &&
+      (gsize)eid < app->tree_view_model->count) {
+    const DaTvEntry *e = &app->tree_view_model->entries[(int32_t)eid];
+    const char *p = e->path != NULL ? e->path : "";
+    gtk_tree_store_set(GTK_TREE_STORE(model), iter, DA_TV_COL_NAME, tv_display_name(p), DA_TV_COL_PATH, p, -1);
+  }
+  GtkTreeIter child;
+  if (gtk_tree_model_iter_children(model, &child, iter)) {
+    do {
+      da_tv_refresh_path_columns_branch(model, &child, app);
+    } while (gtk_tree_model_iter_next(model, &child));
+  }
+}
+
+void da_tree_view_store_refresh_path_columns(AppState *app) {
+  if (app == NULL || app->tree_view_store == NULL || app->tree_view_model == NULL || !app->tree_view_populated) {
+    return;
+  }
+  GtkTreeModel *model = GTK_TREE_MODEL(app->tree_view_store);
+  GtkTreeIter iter;
+  for (gboolean ok = gtk_tree_model_get_iter_first(model, &iter); ok; ok = gtk_tree_model_iter_next(model, &iter)) {
+    da_tv_refresh_path_columns_branch(model, &iter, app);
+  }
+}
+
 /* ---- Public: row-expanded (lazy load children) ---- */
 
 void da_tree_view_on_row_expanded(GtkTreeView *tv, GtkTreeIter *iter,
@@ -688,6 +737,21 @@ void da_tree_view_on_row_expanded(GtkTreeView *tv, GtkTreeIter *iter,
     da_tv_insert_entry(app, iter, cid);
     cid = app->tree_view_model->entries[cid].next_sibling_id;
   }
+}
+
+gboolean da_tree_view_model_borrow_path_for_entry_id(const DaTreeViewModel *m, gint64 entry_id,
+                                                     const char **out_path) {
+  if (out_path != NULL) {
+    *out_path = NULL;
+  }
+  if (m == NULL || out_path == NULL) {
+    return FALSE;
+  }
+  if (entry_id < 0 || (size_t)entry_id >= m->count) {
+    return FALSE;
+  }
+  *out_path = m->entries[(size_t)entry_id].path;
+  return TRUE;
 }
 
 gboolean da_tv_entry_get_stats(const DaTreeViewModel *m, gint64 entry_id,

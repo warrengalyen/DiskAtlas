@@ -9,8 +9,8 @@
 #include "format_text.h"
 
 #if defined(G_OS_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
+#ifndef DISKATLAS_INI_H
+#define DISKATLAS_INI_H
 #endif
 #include <windows.h>
 #elif defined(__linux__)
@@ -28,6 +28,8 @@
 #define DA_KEY_SIZE_DECIMAL_PLACES "size_decimal_places"
 #define DA_KEY_TREEMAP_TILE_GRADIENTS "treemap_tile_gradients"
 #define DA_KEY_ALTERNATE_ROW_COLORS "alternate_row_colors"
+#define DA_SEC_GENERAL "general"
+#define DA_KEY_ENABLE_RENAME "enable_rename"
 
 static gchar *da_exe_dir_utf8(void) {
 #if defined(G_OS_WIN32)
@@ -71,7 +73,7 @@ static gchar *da_exe_dir_utf8(void) {
   return dir;
 #else
   return NULL;
-#endif
+#endif  /* DISKATLAS_INI_H */
 }
 
 gchar *da_ini_path(void) {
@@ -266,6 +268,62 @@ void da_ini_load_interface(AppState *app) {
   }
   app->size_decimal_places = places;
   da_format_bytes_set_decimal_places(places);
+}
+
+void da_ini_load_general(AppState *app) {
+  if (app == NULL) {
+    return;
+  }
+  /* Default: renaming disabled so F2 cannot trigger accidental renames. */
+  app->general_enable_rename = FALSE;
+  gchar *path = da_ini_path();
+  if (path == NULL) {
+    return;
+  }
+  GKeyFile *kf = g_key_file_new();
+  if (da_key_file_load_merged(kf, path) && g_key_file_has_group(kf, DA_SEC_GENERAL)) {
+    GError *err = NULL;
+    if (g_key_file_has_key(kf, DA_SEC_GENERAL, DA_KEY_ENABLE_RENAME, NULL)) {
+      gboolean er = g_key_file_get_boolean(kf, DA_SEC_GENERAL, DA_KEY_ENABLE_RENAME, &err);
+      g_clear_error(&err);
+      app->general_enable_rename = er;
+    }
+  }
+  g_key_file_unref(kf);
+  g_free(path);
+}
+
+void da_ini_save_general(const AppState *app) {
+  if (app == NULL) {
+    return;
+  }
+  gchar *path = da_ini_path();
+  if (path == NULL) {
+    return;
+  }
+  GKeyFile *kf = g_key_file_new();
+  (void)da_key_file_load_merged(kf, path);
+  g_key_file_set_boolean(kf, DA_SEC_GENERAL, DA_KEY_ENABLE_RENAME, app->general_enable_rename);
+
+  gsize len = 0;
+  gchar *data = g_key_file_to_data(kf, &len, NULL);
+  g_key_file_unref(kf);
+  if (data == NULL) {
+    g_free(path);
+    return;
+  }
+
+  gchar *dir = g_path_get_dirname(path);
+  if (dir != NULL) {
+    g_mkdir_with_parents(dir, 0755);
+    g_free(dir);
+  }
+
+  GError *werr = NULL;
+  g_file_set_contents(path, data, (gssize)len, &werr);
+  g_clear_error(&werr);
+  g_free(data);
+  g_free(path);
 }
 
 void da_ini_save_interface(const AppState *app) {

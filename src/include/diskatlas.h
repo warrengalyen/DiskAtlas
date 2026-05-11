@@ -171,6 +171,14 @@ DISKATLAS_API void scan_result_free(scan_result_t *result);
 DISKATLAS_API file_node_t *scan_result_nodes_mutable(scan_result_t *result, size_t *count_out);
 
 /**
+ * After a successful on-disk rename from @a old_path_utf8 to @a new_path_utf8, rewrite matching
+ * UTF-8 paths in the scan blob (exact match and, on Windows, case-insensitive subtree prefix).
+ * @return number of nodes whose path was updated, or -1 if the result is not ready or inputs are NULL.
+ */
+DISKATLAS_API int scan_result_paths_after_rename(scan_result_t *result, const char *old_path_utf8,
+                                                 const char *new_path_utf8);
+
+/**
  * Import scan results from a UTF-8 CSV file in the DiskAtlas GUI export format (see csv_export). Reads
  * line-by-line with a growable buffer (capped). Returns a completed scan_result_t or NULL.
  */

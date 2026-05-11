@@ -61,6 +61,12 @@ void scan_controller_delete_to_trash(AppState *app);
  *  Marks surviving items visually as deleted in both tree views. */
 void scan_controller_delete_permanent(AppState *app);
 
+/** Start inline rename on the first selected row of the active file or tree list (requires `general_enable_rename`). */
+void scan_controller_begin_rename_selection(AppState *app);
+
+/** GtkCellRendererText `edited` handler target: @a is_tree_view TRUE for `tree_view_tree`. */
+void scan_controller_on_tree_name_cell_edited(AppState *app, gboolean is_tree_view, gchar *path_str, gchar *new_text);
+
 /**
  * Reclassify all currently loaded scan nodes using app->mime_db and queue a treemap redraw.
  * No-op when no scan is loaded or mime_db is NULL.

@@ -42,6 +42,16 @@ void da_tree_view_clear(AppState *app);
 /** Recompute Size / Alloc / % columns from raw entry stats (e.g. after size decimal-place preference changes). */
 void da_tree_view_refresh_size_columns(AppState *app);
 
+/** Re-point each entry's `path` from the live scan nodes (e.g. after `scan_result_paths_after_rename`). */
+void da_tree_view_model_sync_entry_paths_from_scan(AppState *app);
+
+/** Rewrite Folder column name/path strings in the GtkTreeStore from `tree_view_model` entries. */
+void da_tree_view_store_refresh_path_columns(AppState *app);
+
+/** Borrow UTF-8 path for @a entry_id (DA_TV_COL_IDX_ID); FALSE if model is NULL, id invalid, or placeholder. */
+gboolean da_tree_view_model_borrow_path_for_entry_id(const DaTreeViewModel *m, gint64 entry_id,
+                                                    const char **out_path);
+
 /**
  * GtkTreeView "row-expanded" signal handler.  Replaces the placeholder
  * child row with the actual children of the expanded entry.
@@ -61,4 +71,4 @@ gboolean da_tv_entry_get_stats(const DaTreeViewModel *m, gint64 entry_id,
                                uint64_t *out_size, uint64_t *out_alloc,
                                uint64_t *out_file_count);
 
-#endif /* TREE_VIEW_MODEL_H */
+#endif  /* TREE_VIEW_MODEL_H */
