@@ -21,6 +21,7 @@
 #include "ui_window.h"
 #include "volumes.h"
 #include "diskatlas_ini.h"
+#include "file_ops.h"
 
 /* Must match main_notebook child order in diskatlas_window.ui: page 0 = Tree View, page 1 = File View. */
 #define DA_TREE_VIEW_NOTEBOOK_PAGE 0
@@ -1705,6 +1706,11 @@ static void start_scan(AppState *app) {
   app->populate_total = 0;
   app->list_populated = FALSE;
 
+  if (app->deleted_path_set != NULL) {
+    g_hash_table_destroy(app->deleted_path_set);
+    app->deleted_path_set = NULL;
+  }
+
   if (app->scan != NULL) {
     if (app->tv_held_scan == app->scan) {
       /* Background tree-view build is using this scan; the GTask callback will free it. */
@@ -2098,6 +2104,11 @@ void scan_controller_apply_imported_scan(AppState *app, scan_result_t *new_scan,
   app->filter_build_running = FALSE;
   app->populate_total = 0;
   app->list_populated = FALSE;
+
+  if (app->deleted_path_set != NULL) {
+    g_hash_table_destroy(app->deleted_path_set);
+    app->deleted_path_set = NULL;
+  }
 
   if (app->scan != NULL) {
     if (app->tv_held_scan == app->scan) {
@@ -2770,4 +2781,320 @@ void scan_controller_begin_mft_dump_flow(AppState *app, const gchar *volume_root
 void scan_controller_detach(AppState *app) {
   kill_all_timers(app);
   mft_dump_flow_clear(app);
+  if (app != NULL && app->deleted_path_set != NULL) {
+    g_hash_table_destroy(app->deleted_path_set);
+    app->deleted_path_set = NULL;
+  }
+}
+
+/* =========================================================================
+ * File operations: Copy, Cut, Delete to Trash, Permanently Delete
+ * ========================================================================= */
+
+/* Returns TRUE if node path equals dir_path or is a direct descendant. */
+static gboolean da_path_is_under_dir(const char *path, const char *dir_path) {
+  if (path == NULL || dir_path == NULL || dir_path[0] == '\0') {
+    return FALSE;
+  }
+  size_t dir_len = strlen(dir_path);
+
+  /* Strip trailing separator from dir_path for the comparison. */
+  size_t cmp_len = dir_len;
+  char last = dir_path[dir_len - 1];
+  if (last == '/' || last == '\\') {
+    cmp_len = dir_len - 1;
+    if (cmp_len == 0) {
+      return FALSE;
+    }
+  }
+
+#if defined(G_OS_WIN32)
+  if (g_ascii_strncasecmp(path, dir_path, cmp_len) != 0) {
+    return FALSE;
+  }
+#else
+  if (strncmp(path, dir_path, cmp_len) != 0) {
+    return FALSE;
+  }
+#endif
+
+  char next = path[cmp_len];
+  /* Exact match or child (next char is a separator). */
+  return (next == '\0' || next == '/' || next == '\\');
+}
+
+/**
+ * Expand deleted paths into the set: for each path that is a directory,
+ * scan all nodes and add descendant paths.  Refresh both views.
+ *
+ * @param app          AppState.
+ * @param paths        UTF-8 paths that were just deleted.
+ * @param count        Number of paths.
+ * @param node_kinds   Parallel array of DISKATLAS_NODE_KIND_* for each path
+ *                     (used to know which entries are directories).
+ */
+static void da_mark_deleted_paths(AppState *app, const char **paths, size_t count,
+                                   const uint32_t *node_kinds) {
+  if (app == NULL || paths == NULL || count == 0) {
+    return;
+  }
+
+  if (app->deleted_path_set == NULL) {
+    app->deleted_path_set = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    if (app->deleted_path_set == NULL) {
+      return;
+    }
+  }
+
+  /* Add each deleted path directly. */
+  for (size_t i = 0; i < count; i++) {
+    if (paths[i] != NULL && paths[i][0] != '\0') {
+      if (!g_hash_table_contains(app->deleted_path_set, paths[i])) {
+        g_hash_table_insert(app->deleted_path_set, g_strdup(paths[i]), NULL);
+      }
+    }
+  }
+
+  /* For directory paths, also mark all scan nodes under them. */
+  gboolean have_dirs = FALSE;
+  if (node_kinds != NULL) {
+    for (size_t i = 0; i < count; i++) {
+      if ((node_kinds[i] & DISKATLAS_NODE_KIND_MASK) == DISKATLAS_NODE_KIND_DIR) {
+        have_dirs = TRUE;
+        break;
+      }
+    }
+  }
+
+  if (have_dirs && app->scan != NULL) {
+    scan_results_view_t v = scan_get_results(app->scan);
+    if (v.nodes != NULL && v.count > 0) {
+      for (size_t ni = 0; ni < v.count; ni++) {
+        const char *np = v.nodes[ni].path;
+        if (np == NULL || np[0] == '\0') {
+          continue;
+        }
+        if (g_hash_table_contains(app->deleted_path_set, np)) {
+          continue;
+        }
+        for (size_t di = 0; di < count; di++) {
+          if (node_kinds == NULL) {
+            continue;
+          }
+          if ((node_kinds[di] & DISKATLAS_NODE_KIND_MASK) != DISKATLAS_NODE_KIND_DIR) {
+            continue;
+          }
+          if (paths[di] == NULL || paths[di][0] == '\0') {
+            continue;
+          }
+          if (da_path_is_under_dir(np, paths[di])) {
+            g_hash_table_insert(app->deleted_path_set, g_strdup(np), NULL);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  /* Refresh both views. */
+  if (app->flat_list_model != NULL) {
+    flat_list_model_invalidate(app->flat_list_model);
+  }
+  if (app->tree_view != NULL) {
+    gtk_widget_queue_draw(app->tree_view);
+  }
+  da_ui_sync_file_menu_export_csv(app);
+}
+
+/* Shared boilerplate: verify app state, get results, collect selected nids.
+ * Returns a GArray* of size_t nids that must be freed by the caller,
+ * or NULL if not actionable. */
+static GArray *da_get_selected_nids_for_fileop(AppState *app) {
+  if (app == NULL || app->window == NULL || app->scan == NULL) {
+    return NULL;
+  }
+  scan_progress_t pr = scan_get_progress(app->scan);
+  if (!pr.is_complete) {
+    return NULL;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (v.nodes == NULL) {
+    return NULL;
+  }
+  GArray *nids = g_array_new(FALSE, FALSE, sizeof(size_t));
+  if (!da_collect_explicit_selected_scan_nids(app, &v, nids)) {
+    g_array_free(nids, TRUE);
+    return NULL;
+  }
+  return nids;
+}
+
+void scan_controller_copy_files(AppState *app) {
+  GArray *nids = da_get_selected_nids_for_fileop(app);
+  if (nids == NULL) {
+    return;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  GPtrArray *path_arr = g_ptr_array_new();
+  for (guint i = 0; i < nids->len; i++) {
+    size_t nid = g_array_index(nids, size_t, i);
+    if (nid < v.count && v.nodes[nid].path != NULL && v.nodes[nid].path[0] != '\0') {
+      g_ptr_array_add(path_arr, (gpointer)v.nodes[nid].path);
+    }
+  }
+  g_array_free(nids, TRUE);
+  if (path_arr->len > 0) {
+    da_file_op_copy_to_clipboard(app->window, (const char **)path_arr->pdata, path_arr->len);
+  }
+  g_ptr_array_free(path_arr, TRUE);
+}
+
+void scan_controller_cut_files(AppState *app) {
+  GArray *nids = da_get_selected_nids_for_fileop(app);
+  if (nids == NULL) {
+    return;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  GPtrArray *path_arr = g_ptr_array_new();
+  for (guint i = 0; i < nids->len; i++) {
+    size_t nid = g_array_index(nids, size_t, i);
+    if (nid < v.count && v.nodes[nid].path != NULL && v.nodes[nid].path[0] != '\0') {
+      g_ptr_array_add(path_arr, (gpointer)v.nodes[nid].path);
+    }
+  }
+  g_array_free(nids, TRUE);
+  if (path_arr->len > 0) {
+    da_file_op_cut_to_clipboard(app->window, (const char **)path_arr->pdata, path_arr->len);
+  }
+  g_ptr_array_free(path_arr, TRUE);
+}
+
+void scan_controller_delete_to_trash(AppState *app) {
+  GArray *nids = da_get_selected_nids_for_fileop(app);
+  if (nids == NULL) {
+    return;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  GPtrArray *path_arr  = g_ptr_array_new();
+  GArray    *kind_arr  = g_array_new(FALSE, FALSE, sizeof(uint32_t));
+  for (guint i = 0; i < nids->len; i++) {
+    size_t nid = g_array_index(nids, size_t, i);
+    if (nid >= v.count || v.nodes[nid].path == NULL || v.nodes[nid].path[0] == '\0') {
+      continue;
+    }
+    g_ptr_array_add(path_arr, (gpointer)v.nodes[nid].path);
+    uint32_t k = v.nodes[nid].attributes & DISKATLAS_NODE_KIND_MASK;
+    g_array_append_val(kind_arr, k);
+  }
+  g_array_free(nids, TRUE);
+
+  if (path_arr->len == 0) {
+    g_ptr_array_free(path_arr, TRUE);
+    g_array_free(kind_arr, TRUE);
+    return;
+  }
+
+  GError *err = NULL;
+  gboolean ok = da_file_op_trash((const char **)path_arr->pdata, path_arr->len, &err);
+
+  if (ok) {
+    da_mark_deleted_paths(app, (const char **)path_arr->pdata, path_arr->len,
+                          (const uint32_t *)kind_arr->data);
+  } else {
+    if (err != NULL) {
+      GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
+                                            GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
+                                            "Could not move to trash: %s", err->message);
+      gtk_dialog_run(GTK_DIALOG(d));
+      gtk_widget_destroy(d);
+      g_clear_error(&err);
+    }
+    /* Still mark successfully trashed items as deleted (partial success). */
+    da_mark_deleted_paths(app, (const char **)path_arr->pdata, path_arr->len,
+                          (const uint32_t *)kind_arr->data);
+  }
+
+  g_ptr_array_free(path_arr, TRUE);
+  g_array_free(kind_arr, TRUE);
+}
+
+void scan_controller_delete_permanent(AppState *app) {
+  GArray *nids = da_get_selected_nids_for_fileop(app);
+  if (nids == NULL) {
+    return;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  GPtrArray *path_arr = g_ptr_array_new();
+  GArray    *kind_arr = g_array_new(FALSE, FALSE, sizeof(uint32_t));
+  for (guint i = 0; i < nids->len; i++) {
+    size_t nid = g_array_index(nids, size_t, i);
+    if (nid >= v.count || v.nodes[nid].path == NULL || v.nodes[nid].path[0] == '\0') {
+      continue;
+    }
+    g_ptr_array_add(path_arr, (gpointer)v.nodes[nid].path);
+    uint32_t k = v.nodes[nid].attributes & DISKATLAS_NODE_KIND_MASK;
+    g_array_append_val(kind_arr, k);
+  }
+  g_array_free(nids, TRUE);
+
+  if (path_arr->len == 0) {
+    g_ptr_array_free(path_arr, TRUE);
+    g_array_free(kind_arr, TRUE);
+    return;
+  }
+
+  /* Confirmation dialog. */
+  gchar *msg;
+  if (path_arr->len == 1) {
+    const gchar *name = g_path_get_basename((const gchar *)path_arr->pdata[0]);
+    msg = g_strdup_printf("Permanently delete \"%s\"?\n\nThis cannot be undone.", name);
+    g_free((gpointer)name);
+  } else {
+    msg = g_strdup_printf("Permanently delete %u items?\n\nThis cannot be undone.",
+                          (unsigned)path_arr->len);
+  }
+
+  GtkWidget *dlg = gtk_message_dialog_new(GTK_WINDOW(app->window),
+                                          GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+                                          GTK_MESSAGE_WARNING,
+                                          GTK_BUTTONS_NONE,
+                                          "%s", msg);
+  g_free(msg);
+  gtk_dialog_add_button(GTK_DIALOG(dlg), "Cancel", GTK_RESPONSE_CANCEL);
+  GtkWidget *del_btn = gtk_dialog_add_button(GTK_DIALOG(dlg), "Delete Permanently",
+                                              GTK_RESPONSE_ACCEPT);
+  /* Style the Delete button as a destructive action. */
+  GtkStyleContext *sc = gtk_widget_get_style_context(del_btn);
+  gtk_style_context_add_class(sc, "destructive-action");
+  gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_CANCEL);
+  gtk_window_set_title(GTK_WINDOW(dlg), "Confirm Permanent Delete");
+
+  gint resp = gtk_dialog_run(GTK_DIALOG(dlg));
+  gtk_widget_destroy(dlg);
+
+  if (resp != GTK_RESPONSE_ACCEPT) {
+    g_ptr_array_free(path_arr, TRUE);
+    g_array_free(kind_arr, TRUE);
+    return;
+  }
+
+  GError *err = NULL;
+  (void)da_file_op_delete_permanent((const char **)path_arr->pdata, path_arr->len, &err);
+
+  if (err != NULL) {
+    GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
+                                          GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
+                                          "Delete failed: %s", err->message);
+    gtk_dialog_run(GTK_DIALOG(d));
+    gtk_widget_destroy(d);
+    g_clear_error(&err);
+  }
+
+  /* Mark all items as visually deleted regardless of success/failure
+   * (the operation may have partially succeeded). */
+  da_mark_deleted_paths(app, (const char **)path_arr->pdata, path_arr->len,
+                        (const uint32_t *)kind_arr->data);
+
+  g_ptr_array_free(path_arr, TRUE);
+  g_array_free(kind_arr, TRUE);
 }

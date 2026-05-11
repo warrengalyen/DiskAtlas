@@ -14,6 +14,7 @@
 #include "tree_view_model.h"
 #include "scan_controller.h"
 #include "scan_source_combo.h"
+#include "file_ops.h"
 #include "csv_export.h"
 #include "ui_window.h"
 #include "volumes.h"
@@ -50,6 +51,18 @@ void da_ui_sync_file_menu_export_csv(AppState *app) {
   }
   if (app != NULL && app->file_menu_copy_path != NULL) {
     gtk_widget_set_sensitive(app->file_menu_copy_path, ok_sel);
+  }
+  if (app != NULL && app->file_menu_copy != NULL) {
+    gtk_widget_set_sensitive(app->file_menu_copy, ok_sel);
+  }
+  if (app != NULL && app->file_menu_cut != NULL) {
+    gtk_widget_set_sensitive(app->file_menu_cut, ok_sel);
+  }
+  if (app != NULL && app->file_menu_delete_trash != NULL) {
+    gtk_widget_set_sensitive(app->file_menu_delete_trash, ok_sel);
+  }
+  if (app != NULL && app->file_menu_delete_permanent != NULL) {
+    gtk_widget_set_sensitive(app->file_menu_delete_permanent, ok_sel);
   }
 }
 
@@ -182,6 +195,129 @@ static void da_load_global_app_css(void) {
 
 /** Matches file_tree_model.c placeholder row LP. */
 
+/* ---- Deleted-state cell styling helpers ---- */
+
+/**
+ * Apply red foreground + strikethrough to a text cell renderer when the given
+ * path is in app->deleted_path_set; otherwise reset those properties.
+ */
+static void da_apply_deleted_cell_style(GtkCellRenderer *cell, AppState *app, const char *path) {
+  gboolean is_deleted = FALSE;
+  if (app != NULL && app->deleted_path_set != NULL && path != NULL && path[0] != '\0') {
+    is_deleted = g_hash_table_contains(app->deleted_path_set, path);
+  }
+  if (GTK_IS_CELL_RENDERER_TEXT(cell)) {
+    g_object_set(cell,
+                 "foreground",        is_deleted ? "red" : NULL,
+                 "foreground-set",    is_deleted,
+                 "strikethrough",     is_deleted,
+                 "strikethrough-set", is_deleted,
+                 NULL);
+  } else if (DA_IS_CELL_RENDERER_PROGRESS(cell)) {
+    g_object_set(cell, "strikethrough", is_deleted, NULL);
+  }
+}
+
+/**
+ * Cell data function context for a plain text column in either tree view.
+ * Stores: the AppState pointer, the model column index for the text value,
+ * and whether this is a tree view row (uses DA_TV_COL_PATH for lookup) or a
+ * file view row (uses DA_COL_LP for lookup).
+ */
+typedef struct {
+  AppState *app;
+  gint      model_text_col;  /* model column that holds the display string */
+  gboolean  is_tree_view;    /* TRUE = tree_view_tree, FALSE = file_view_tree */
+} DaDeletedCellCtx;
+
+/* File view: look up nid from DA_COL_LP and get path from scan results. */
+static void da_fv_deleted_text_cell_data(GtkTreeViewColumn *col, GtkCellRenderer *cell,
+                                          GtkTreeModel *model, GtkTreeIter *iter,
+                                          gpointer user_data) {
+  (void)col;
+  DaDeletedCellCtx *ctx = (DaDeletedCellCtx *)user_data;
+  if (ctx == NULL) {
+    return;
+  }
+  /* Set text from the bound model column. */
+  gchar *text = NULL;
+  gtk_tree_model_get(model, iter, ctx->model_text_col, &text, -1);
+  g_object_set(cell, "text", text, NULL);
+  g_free(text);
+
+  /* Deleted styling: resolve nid → path → check deleted set. */
+  const char *path = NULL;
+  gchar *path_buf = NULL;
+  AppState *app = ctx->app;
+  if (app != NULL && app->deleted_path_set != NULL && app->scan != NULL) {
+    gint64 lp = 0;
+    gtk_tree_model_get(model, iter, DA_COL_LP, &lp, -1);
+    size_t nid = SIZE_MAX;
+    if (da_tree_lp_to_scan_nid(app, lp, &nid) && nid != SIZE_MAX) {
+      scan_results_view_t v = scan_get_results(app->scan);
+      if (v.nodes != NULL && nid < v.count) {
+        path = v.nodes[nid].path;
+      }
+    }
+    (void)path_buf;
+  }
+  da_apply_deleted_cell_style(cell, app, path);
+}
+
+/* Tree view: read DA_TV_COL_PATH to find deleted state. */
+static void da_tv_deleted_text_cell_data(GtkTreeViewColumn *col, GtkCellRenderer *cell,
+                                          GtkTreeModel *model, GtkTreeIter *iter,
+                                          gpointer user_data) {
+  (void)col;
+  DaDeletedCellCtx *ctx = (DaDeletedCellCtx *)user_data;
+  if (ctx == NULL) {
+    return;
+  }
+  /* Set text from the bound model column. */
+  gchar *text = NULL;
+  gtk_tree_model_get(model, iter, ctx->model_text_col, &text, -1);
+  g_object_set(cell, "text", text, NULL);
+  g_free(text);
+
+  /* Deleted styling: read path from DA_TV_COL_PATH. */
+  gchar *path = NULL;
+  gtk_tree_model_get(model, iter, DA_TV_COL_PATH, &path, -1);
+  da_apply_deleted_cell_style(cell, ctx->app, path);
+  g_free(path);
+}
+
+/**
+ * Install a deleted-state cell data function on the first
+ * GtkCellRendererText in the given column of @a tv.
+ * @param tv         GtkTreeView.
+ * @param col_index  Zero-based view column index.
+ * @param app        AppState pointer.
+ * @param model_text_col  The model column that holds the text value.
+ * @param is_tv      TRUE for tree_view_tree (uses DA_TV_COL_PATH), FALSE for file_view_tree.
+ */
+static void da_install_deleted_text_style(GtkTreeView *tv, gint col_index, AppState *app,
+                                           gint model_text_col, gboolean is_tv) {
+  GtkTreeViewColumn *col = gtk_tree_view_get_column(tv, col_index);
+  if (col == NULL) {
+    return;
+  }
+  GList *cells = gtk_cell_layout_get_cells(GTK_CELL_LAYOUT(col));
+  for (GList *l = cells; l != NULL; l = l->next) {
+    GtkCellRenderer *r = GTK_CELL_RENDERER(l->data);
+    if (!GTK_IS_CELL_RENDERER_TEXT(r) || GTK_IS_CELL_RENDERER_PROGRESS(r)) {
+      continue;
+    }
+    DaDeletedCellCtx *ctx = g_new(DaDeletedCellCtx, 1);
+    ctx->app            = app;
+    ctx->model_text_col = model_text_col;
+    ctx->is_tree_view   = is_tv;
+    GtkTreeCellDataFunc fn = is_tv ? da_tv_deleted_text_cell_data : da_fv_deleted_text_cell_data;
+    gtk_tree_view_column_set_cell_data_func(col, r, fn, ctx, g_free);
+    break; /* Only the first text renderer per column. */
+  }
+  g_list_free(cells);
+}
+
 static void file_name_icon_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell, GtkTreeModel *model,
                                      GtkTreeIter *iter, gpointer user_data) {
   (void)column;
@@ -254,6 +390,21 @@ static void file_view_file_name_text_cell_data(GtkTreeViewColumn *column, GtkCel
   gtk_tree_model_get(model, iter, 0, &plain, -1);
   file_view_set_search_highlight_cell(cell, app, plain);
   g_free(plain);
+
+  /* Deleted-state styling: look up the node path. */
+  const char *path = NULL;
+  if (app != NULL && app->deleted_path_set != NULL && app->scan != NULL) {
+    gint64 lp = 0;
+    gtk_tree_model_get(model, iter, DA_COL_LP, &lp, -1);
+    size_t nid = SIZE_MAX;
+    if (da_tree_lp_to_scan_nid(app, lp, &nid) && nid != SIZE_MAX) {
+      scan_results_view_t v = scan_get_results(app->scan);
+      if (v.nodes != NULL && nid < v.count) {
+        path = v.nodes[nid].path;
+      }
+    }
+  }
+  da_apply_deleted_cell_style(cell, app, path);
 }
 
 static void file_view_path_text_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell,
@@ -263,6 +414,10 @@ static void file_view_path_text_cell_data(GtkTreeViewColumn *column, GtkCellRend
   gchar *plain = NULL;
   gtk_tree_model_get(model, iter, 1, &plain, -1);
   file_view_set_search_highlight_cell(cell, app, plain);
+
+  /* Deleted-state styling. */
+  const char *path = plain; /* col 1 IS the path */
+  da_apply_deleted_cell_style(cell, app, path);
   g_free(plain);
 }
 
@@ -319,6 +474,42 @@ static void on_search_clear_clicked(GtkButton *btn, gpointer user_data) {
   } else if (GTK_IS_ENTRY(app->search)) {
     gtk_entry_set_text(GTK_ENTRY(app->search), "");
   }
+}
+
+static void on_file_menu_copy_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->window == NULL) {
+    return;
+  }
+  scan_controller_copy_files(app);
+}
+
+static void on_file_menu_cut_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->window == NULL) {
+    return;
+  }
+  scan_controller_cut_files(app);
+}
+
+static void on_file_menu_delete_trash_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->window == NULL) {
+    return;
+  }
+  scan_controller_delete_to_trash(app);
+}
+
+static void on_file_menu_delete_permanent_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->window == NULL) {
+    return;
+  }
+  scan_controller_delete_permanent(app);
 }
 
 static void on_file_menu_scan_activate(GtkMenuItem *item, gpointer user_data) {
@@ -664,7 +855,7 @@ static void on_tools_menu_settings_activate(GtkMenuItem *item, gpointer user_dat
 
 static void pct_of_drive_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell, GtkTreeModel *model,
                                    GtkTreeIter *iter, gpointer user_data) {
-  (void)user_data;
+  AppState *app = (AppState *)user_data;
   gint pv = -1;
   gchar *txt = NULL;
   gtk_tree_model_get(model, iter, DA_COL_PCT, &pv, 2, &txt, -1);
@@ -686,16 +877,31 @@ static void pct_of_drive_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *c
   g_object_set(GTK_CELL_RENDERER_PROGRESS(cell), "value", v, "text", txt != NULL ? txt : "", "text-xalign",
                0.98f, NULL);
   g_free(txt);
+
+  /* Deleted styling: resolve nid → path → apply strikethrough. */
+  const char *path = NULL;
+  if (app != NULL && app->deleted_path_set != NULL && app->scan != NULL) {
+    gint64 lp = 0;
+    gtk_tree_model_get(model, iter, DA_COL_LP, &lp, -1);
+    size_t nid = SIZE_MAX;
+    if (da_tree_lp_to_scan_nid(app, lp, &nid) && nid != SIZE_MAX) {
+      scan_results_view_t sv = scan_get_results(app->scan);
+      if (sv.nodes != NULL && nid < sv.count) {
+        path = sv.nodes[nid].path;
+      }
+    }
+  }
+  da_apply_deleted_cell_style(cell, app, path);
 }
 
 static void append_pct_of_drive_column(GtkTreeView *tv, const char *title, int sort_model_id, int width_px,
-                                       int min_width_px) {
+                                       int min_width_px, AppState *app) {
   GtkCellRenderer *r = da_cell_renderer_progress_new();
   g_object_set(r, "xpad", 0, "ypad", 0, "xalign", 0.0f, NULL);
   GtkTreeViewColumn *c = gtk_tree_view_column_new();
   gtk_tree_view_column_set_title(c, title);
   gtk_tree_view_column_pack_start(c, r, TRUE);
-  gtk_tree_view_column_set_cell_data_func(c, r, pct_of_drive_cell_data, NULL, NULL);
+  gtk_tree_view_column_set_cell_data_func(c, r, pct_of_drive_cell_data, app, NULL);
   gtk_tree_view_column_set_alignment(c, 1.0f);
   gtk_tree_view_column_set_resizable(c, TRUE);
   gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
@@ -770,10 +976,12 @@ static void tv_icon_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell, 
 static void tv_pct_of_parent_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell,
                                        GtkTreeModel *model, GtkTreeIter *iter,
                                        gpointer user_data) {
-  (void)user_data;
+  AppState *app = (AppState *)user_data;
   gint pv = -1;
   gchar *txt = NULL;
-  gtk_tree_model_get(model, iter, DA_TV_COL_PCT_VAL, &pv, DA_TV_COL_PCT_LABEL, &txt, -1);
+  gchar *path = NULL;
+  gtk_tree_model_get(model, iter, DA_TV_COL_PCT_VAL, &pv, DA_TV_COL_PCT_LABEL, &txt,
+                     DA_TV_COL_PATH, &path, -1);
   gint v = (pv >= 0) ? (pv > 100 ? 100 : pv) : 0;
 
   gint col_w = gtk_tree_view_column_get_width(column);
@@ -789,15 +997,20 @@ static void tv_pct_of_parent_cell_data(GtkTreeViewColumn *column, GtkCellRendere
   g_object_set(GTK_CELL_RENDERER_PROGRESS(cell), "value", v,
                "text", txt != NULL ? txt : "", "text-xalign", 0.98f, NULL);
   g_free(txt);
+
+  /* Deleted styling: read path from model → apply strikethrough. */
+  da_apply_deleted_cell_style(cell, app, path);
+  g_free(path);
 }
 
-static void append_tv_pct_column(GtkTreeView *tv, const char *title, int width_px, int min_width_px) {
+static void append_tv_pct_column(GtkTreeView *tv, const char *title, int width_px, int min_width_px,
+                                 AppState *app) {
   GtkCellRenderer *r = da_cell_renderer_progress_new();
   g_object_set(r, "xpad", 0, "ypad", 0, "xalign", 0.0f, NULL);
   GtkTreeViewColumn *c = gtk_tree_view_column_new();
   gtk_tree_view_column_set_title(c, title);
   gtk_tree_view_column_pack_start(c, r, TRUE);
-  gtk_tree_view_column_set_cell_data_func(c, r, tv_pct_of_parent_cell_data, NULL, NULL);
+  gtk_tree_view_column_set_cell_data_func(c, r, tv_pct_of_parent_cell_data, app, NULL);
   gtk_tree_view_column_set_alignment(c, 1.0f);
   gtk_tree_view_column_set_resizable(c, TRUE);
   gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
@@ -831,7 +1044,14 @@ static void da_setup_tree_view(AppState *app) {
     gtk_tree_view_column_pack_start(c, pix, FALSE);
     gtk_tree_view_column_set_cell_data_func(c, pix, tv_icon_cell_data, NULL, NULL);
     gtk_tree_view_column_pack_start(c, txt, TRUE);
-    gtk_tree_view_column_add_attribute(c, txt, "text", DA_TV_COL_NAME);
+    /* Use a data function (instead of attribute binding) so deleted-state styling can be applied. */
+    {
+      DaDeletedCellCtx *ctx = g_new(DaDeletedCellCtx, 1);
+      ctx->app            = app;
+      ctx->model_text_col = DA_TV_COL_NAME;
+      ctx->is_tree_view   = TRUE;
+      gtk_tree_view_column_set_cell_data_func(c, txt, da_tv_deleted_text_cell_data, ctx, g_free);
+    }
     gtk_tree_view_column_set_alignment(c, 0.0f);
     gtk_tree_view_column_set_resizable(c, TRUE);
     gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
@@ -842,7 +1062,7 @@ static void da_setup_tree_view(AppState *app) {
   }
 
   /* Column 1: Percent of Parent (progress bar). */
-  append_tv_pct_column(GTK_TREE_VIEW(app->tree_view), "Percent of Parent", 130, 88);
+  append_tv_pct_column(GTK_TREE_VIEW(app->tree_view), "Percent of Parent", 130, 88, app);
 
   /* Remaining text columns: Size, Allocated, Items, Files, Folders, Modified, Attributes. */
   static const char  *tv_titles[] = { "Size", "Allocated", "Items", "Files", "Folders", "Modified", "Attributes" };
@@ -975,7 +1195,7 @@ void da_ui_build(AppState *app) {
       continue;
     }
     if (i == 2) {
-      append_pct_of_drive_column(GTK_TREE_VIEW(app->tree), titles[i], col_sort_id[i], col_w[i], col_min_w[i]);
+      append_pct_of_drive_column(GTK_TREE_VIEW(app->tree), titles[i], col_sort_id[i], col_w[i], col_min_w[i], app);
       continue;
     }
     gfloat xalign = 0.0f;
@@ -992,7 +1212,38 @@ void da_ui_build(AppState *app) {
    * child) use the same cell renderers at the same font size — which they do. */
   gtk_tree_view_set_fixed_height_mode(GTK_TREE_VIEW(app->tree), TRUE);
 
+  /* Install deleted-state cell data functions on file view text columns 3–7
+   * (Size=3, Allocated=4, Modified=5, Dup Count=6, Dup Size=7).
+   * Columns 0 (File Name) and 1 (Path) already have data functions modified above.
+   * Column 2 (% of used space) is a progress bar — skip.
+   * Column 8 (Attributes) is excluded per spec. */
+  {
+    static const gint fv_cols[] = { 3, 4, 5, 6, 7 };
+    for (gint fi = 0; fi < (gint)G_N_ELEMENTS(fv_cols); fi++) {
+      da_install_deleted_text_style(GTK_TREE_VIEW(app->tree), fv_cols[fi], app,
+                                    fv_cols[fi], FALSE);
+    }
+  }
+
   da_setup_tree_view(app);
+
+  /* Install deleted-state cell data functions on tree view text columns 2–7
+   * (view indices): Size(2), Allocated(3), Items(4), Files(5), Folders(6), Modified(7).
+   * Column 0 (Folder) is handled directly in da_setup_tree_view.
+   * Column 1 (Percent of Parent) is a progress bar — skip.
+   * Column 8 (Attributes) is excluded per spec.
+   * The model columns match tv_cols[] in da_setup_tree_view. */
+  {
+    static const gint tv_view_idx[] = { 2, 3, 4, 5, 6, 7 };
+    static const gint tv_mdl_col[]  = {
+      DA_TV_COL_SIZE, DA_TV_COL_ALLOC, DA_TV_COL_ITEMS,
+      DA_TV_COL_FILES, DA_TV_COL_FOLDERS, DA_TV_COL_MODIFIED
+    };
+    for (gint ti = 0; ti < (gint)G_N_ELEMENTS(tv_view_idx); ti++) {
+      da_install_deleted_text_style(GTK_TREE_VIEW(app->tree_view), tv_view_idx[ti], app,
+                                    tv_mdl_col[ti], TRUE);
+    }
+  }
 
 #if defined(G_OS_WIN32)
   app->admin_ntfs_notice_panel = GTK_WIDGET(gtk_builder_get_object(builder, "admin_ntfs_notice_panel"));
@@ -1060,6 +1311,37 @@ void da_ui_build(AppState *app) {
     app->file_menu_copy_path = file_menu_copy_path;
     if (file_menu_copy_path != NULL) {
       g_signal_connect(file_menu_copy_path, "activate", G_CALLBACK(on_file_menu_copy_path_activate), app);
+    }
+  }
+  {
+    GtkWidget *w = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_copy"));
+    app->file_menu_copy = w;
+    if (w != NULL) {
+      g_signal_connect(w, "activate", G_CALLBACK(on_file_menu_copy_activate), app);
+    }
+  }
+  {
+    GtkWidget *w = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_cut"));
+    app->file_menu_cut = w;
+    if (w != NULL) {
+      g_signal_connect(w, "activate", G_CALLBACK(on_file_menu_cut_activate), app);
+    }
+  }
+  {
+    GtkWidget *w = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_delete_trash"));
+    app->file_menu_delete_trash = w;
+    if (w != NULL && GTK_IS_MENU_ITEM(w)) {
+#if !defined(G_OS_WIN32)
+      gtk_menu_item_set_label(GTK_MENU_ITEM(w), "Delete (to Trash)");
+#endif
+      g_signal_connect(w, "activate", G_CALLBACK(on_file_menu_delete_trash_activate), app);
+    }
+  }
+  {
+    GtkWidget *w = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_delete_permanent"));
+    app->file_menu_delete_permanent = w;
+    if (w != NULL) {
+      g_signal_connect(w, "activate", G_CALLBACK(on_file_menu_delete_permanent_activate), app);
     }
   }
   {

@@ -43,6 +43,11 @@ typedef struct AppState {
   GtkWidget *file_menu_explore_folder;
   GtkWidget *file_menu_terminal;
   GtkWidget *file_menu_copy_path;
+  /** File menu copy/cut/delete items; sensitivity requires a scan selection. */
+  GtkWidget *file_menu_copy;
+  GtkWidget *file_menu_cut;
+  GtkWidget *file_menu_delete_trash;
+  GtkWidget *file_menu_delete_permanent;
   GtkWidget *scan_source_combo;
   gint scan_source_last_stable_active;
   GtkWidget *scan_btn;
@@ -134,6 +139,15 @@ typedef struct AppState {
 
   /** Runtime MIME classification database; built at startup and rebuilt after settings changes. */
   struct DmMimeDatabase *mime_db;
+
+  /**
+   * Set of UTF-8 paths that have been visually marked as deleted (moved to
+   * trash or permanently deleted) since the last scan.  All descendants of a
+   * deleted directory are included.  gchar* keys owned by the table; value
+   * pointer is unused.  NULL until the first deletion occurs.
+   * Freed and set to NULL when a new scan or import replaces app->scan.
+   */
+  GHashTable *deleted_path_set;
 
   gchar *mft_dump_save_path;
   gchar *mft_dump_volume_root_utf8;

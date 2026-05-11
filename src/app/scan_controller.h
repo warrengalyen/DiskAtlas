@@ -47,6 +47,20 @@ void scan_controller_open_terminal_here(AppState *app);
 /** Copy full UTF-8 paths of selected items to the clipboard, one per line. */
 void scan_controller_copy_selected_paths_to_clipboard(AppState *app);
 
+/** Copy selected file/folder paths to the system clipboard (shell copy). */
+void scan_controller_copy_files(AppState *app);
+
+/** Cut (move) selected file/folder paths to the system clipboard. */
+void scan_controller_cut_files(AppState *app);
+
+/** Move selected file/folder(s) to the system trash / recycle bin and mark
+ *  them visually as deleted in both tree views. */
+void scan_controller_delete_to_trash(AppState *app);
+
+/** Permanently delete selected file/folder(s) after a confirmation dialog.
+ *  Marks surviving items visually as deleted in both tree views. */
+void scan_controller_delete_permanent(AppState *app);
+
 /**
  * Reclassify all currently loaded scan nodes using app->mime_db and queue a treemap redraw.
  * No-op when no scan is loaded or mime_db is NULL.

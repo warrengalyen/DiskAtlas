@@ -125,7 +125,7 @@ set(DISKATLAS_GTK3_FOUND FALSE)
 if(DISKATLAS_BUILD_GUI)
   find_package(PkgConfig QUIET)
   if(PKG_CONFIG_FOUND)
-    pkg_check_modules(GTK3 gtk+-3.0)
+    pkg_check_modules(GTK3 gtk+-3.0>=3.24)
     if(GTK3_FOUND)
       set(DISKATLAS_GTK3_FOUND TRUE)
     endif()
@@ -170,6 +170,7 @@ if(DISKATLAS_GTK3_FOUND)
     "${DISKATLAS_SRC}/app/treemap_widget.c"
     "${DISKATLAS_SRC}/app/dm_treemap_colors.c"
     "${DISKATLAS_SRC}/app/scan_controller.c"
+    "${DISKATLAS_SRC}/app/file_ops.c"
     "${DISKATLAS_SRC}/app/shell_icon.c"
     "${DISKATLAS_SRC}/app/format_text.c"
     "${DISKATLAS_SRC}/app/scan_source_combo.c"
