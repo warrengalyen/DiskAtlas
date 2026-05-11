@@ -137,6 +137,9 @@ typedef struct AppState {
   /** Treemap lighting/borders; `enable_tile_gradients` persisted as `treemap_tile_gradients` in `[interface]`. */
   DmTreemapStyle treemap_style;
 
+  /** Zebra striping for tree views; persisted as `alternate_row_colors` in `[interface]`. Default FALSE. */
+  gboolean interface_alternate_row_colors;
+
   /** Runtime MIME classification database; built at startup and rebuilt after settings changes. */
   struct DmMimeDatabase *mime_db;
 

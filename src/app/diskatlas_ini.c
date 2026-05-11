@@ -27,6 +27,7 @@
 #define DA_SEC_INTERFACE "interface"
 #define DA_KEY_SIZE_DECIMAL_PLACES "size_decimal_places"
 #define DA_KEY_TREEMAP_TILE_GRADIENTS "treemap_tile_gradients"
+#define DA_KEY_ALTERNATE_ROW_COLORS "alternate_row_colors"
 
 static gchar *da_exe_dir_utf8(void) {
 #if defined(G_OS_WIN32)
@@ -234,6 +235,7 @@ void da_ini_load_interface(AppState *app) {
     return;
   }
   app->treemap_style = DM_TREEMAP_STYLE_INIT_DEFAULT;
+  app->interface_alternate_row_colors = FALSE;
 
   gint places = 1;
   gchar *path = da_ini_path();
@@ -252,6 +254,11 @@ void da_ini_load_interface(AppState *app) {
         gboolean tg = g_key_file_get_boolean(kf, DA_SEC_INTERFACE, DA_KEY_TREEMAP_TILE_GRADIENTS, &err);
         g_clear_error(&err);
         app->treemap_style.enable_tile_gradients = tg;
+      }
+      if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_ALTERNATE_ROW_COLORS, NULL)) {
+        gboolean arc = g_key_file_get_boolean(kf, DA_SEC_INTERFACE, DA_KEY_ALTERNATE_ROW_COLORS, &err);
+        g_clear_error(&err);
+        app->interface_alternate_row_colors = arc;
       }
     }
     g_key_file_unref(kf);
@@ -281,6 +288,7 @@ void da_ini_save_interface(const AppState *app) {
   g_key_file_set_integer(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DECIMAL_PLACES, places);
   g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_TREEMAP_TILE_GRADIENTS,
                          app->treemap_style.enable_tile_gradients);
+  g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_ALTERNATE_ROW_COLORS, app->interface_alternate_row_colors);
 
   gsize len = 0;
   gchar *data = g_key_file_to_data(kf, &len, NULL);

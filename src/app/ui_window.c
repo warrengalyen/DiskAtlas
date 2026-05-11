@@ -179,6 +179,80 @@ static void da_file_view_paned_on_allocate(GtkWidget *widget, GdkRectangle *allo
 /** Default GtkCellRendererText background for Allocated columns (file list + Tree View tab). */
 #define DISKATLAS_TREE_ALLOC_CELL_BG "#EFEFEF"
 
+/** GtkCellRendererText: `background`; pixbuf/progress: `cell-background` (GTK 3). */
+static void da_cell_renderer_apply_row_bg(GtkCellRenderer *cell, const gchar *html, gboolean set) {
+  if (cell == NULL) {
+    return;
+  }
+  if (GTK_IS_CELL_RENDERER_TEXT(cell)) {
+    if (!set) {
+      g_object_set(cell, "background", NULL, "background-set", FALSE, NULL);
+    } else {
+      g_object_set(cell, "background", html, "background-set", TRUE, NULL);
+    }
+    return;
+  }
+  if (GTK_IS_CELL_RENDERER_PIXBUF(cell) || GTK_IS_CELL_RENDERER_PROGRESS(cell)) {
+    if (!set) {
+      g_object_set(cell, "cell-background", NULL, "cell-background-set", FALSE, NULL);
+    } else {
+      g_object_set(cell, "cell-background", html, "cell-background-set", TRUE, NULL);
+    }
+  }
+}
+
+void da_tree_view_apply_zebra_cell(GtkTreeViewColumn *col, GtkCellRenderer *cell, GtkTreeModel *model,
+                                   GtkTreeIter *iter, AppState *app, gboolean column_is_allocated) {
+  if (cell == NULL || col == NULL || model == NULL || iter == NULL) {
+    return;
+  }
+  GtkTreeView *tv = GTK_TREE_VIEW(gtk_tree_view_column_get_tree_view(col));
+  if (tv == NULL) {
+    return;
+  }
+  GtkTreeSelection *sel = gtk_tree_view_get_selection(tv);
+  if (gtk_tree_selection_iter_is_selected(sel, iter)) {
+    da_cell_renderer_apply_row_bg(cell, NULL, FALSE);
+    return;
+  }
+  if (column_is_allocated) {
+    da_cell_renderer_apply_row_bg(cell, DISKATLAS_TREE_ALLOC_CELL_BG, TRUE);
+    return;
+  }
+  if (app == NULL || !app->interface_alternate_row_colors) {
+    da_cell_renderer_apply_row_bg(cell, NULL, FALSE);
+    return;
+  }
+
+  GtkTreePath *path = gtk_tree_model_get_path(model, iter);
+  if (path == NULL) {
+    da_cell_renderer_apply_row_bg(cell, NULL, FALSE);
+    return;
+  }
+
+  GdkRectangle rect;
+  memset(&rect, 0, sizeof(rect));
+  gtk_tree_view_get_background_area(tv, path, NULL, &rect);
+  gboolean stripe = FALSE;
+  if (rect.height > 0) {
+    gint band = rect.y / rect.height;
+    stripe = (band % 2) == 0;
+  } else {
+    gint *inds = gtk_tree_path_get_indices(path);
+    gint depth = gtk_tree_path_get_depth(path);
+    if (inds != NULL && depth >= 1) {
+      stripe = ((inds[depth - 1] % 2) == 0);
+    }
+  }
+  gtk_tree_path_free(path);
+
+  if (stripe) {
+    da_cell_renderer_apply_row_bg(cell, DISKATLAS_TREE_ALLOC_CELL_BG, TRUE);
+  } else {
+    da_cell_renderer_apply_row_bg(cell, NULL, FALSE);
+  }
+}
+
 static void da_load_global_app_css(void) {
   static gboolean installed = FALSE;
   if (installed) {
@@ -234,7 +308,6 @@ typedef struct {
 static void da_fv_deleted_text_cell_data(GtkTreeViewColumn *col, GtkCellRenderer *cell,
                                           GtkTreeModel *model, GtkTreeIter *iter,
                                           gpointer user_data) {
-  (void)col;
   DaDeletedCellCtx *ctx = (DaDeletedCellCtx *)user_data;
   if (ctx == NULL) {
     return;
@@ -262,13 +335,15 @@ static void da_fv_deleted_text_cell_data(GtkTreeViewColumn *col, GtkCellRenderer
     (void)path_buf;
   }
   da_apply_deleted_cell_style(cell, app, path);
+
+  gboolean is_alloc = !ctx->is_tree_view && (ctx->model_text_col == DA_COL_ALLOCATED);
+  da_tree_view_apply_zebra_cell(col, cell, model, iter, app, is_alloc);
 }
 
 /* Tree view: read DA_TV_COL_PATH to find deleted state. */
 static void da_tv_deleted_text_cell_data(GtkTreeViewColumn *col, GtkCellRenderer *cell,
                                           GtkTreeModel *model, GtkTreeIter *iter,
                                           gpointer user_data) {
-  (void)col;
   DaDeletedCellCtx *ctx = (DaDeletedCellCtx *)user_data;
   if (ctx == NULL) {
     return;
@@ -284,6 +359,9 @@ static void da_tv_deleted_text_cell_data(GtkTreeViewColumn *col, GtkCellRenderer
   gtk_tree_model_get(model, iter, DA_TV_COL_PATH, &path, -1);
   da_apply_deleted_cell_style(cell, ctx->app, path);
   g_free(path);
+
+  gboolean is_alloc = ctx->is_tree_view && (ctx->model_text_col == DA_TV_COL_ALLOC);
+  da_tree_view_apply_zebra_cell(col, cell, model, iter, ctx->app, is_alloc);
 }
 
 /**
@@ -320,7 +398,6 @@ static void da_install_deleted_text_style(GtkTreeView *tv, gint col_index, AppSt
 
 static void file_name_icon_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell, GtkTreeModel *model,
                                      GtkTreeIter *iter, gpointer user_data) {
-  (void)column;
   AppState *app = user_data;
   const char *icon_name = "text-x-generic";
   gint64 lp = 0;
@@ -367,6 +444,7 @@ static void file_name_icon_cell_data(GtkTreeViewColumn *column, GtkCellRenderer 
   if (pb != NULL) {
     g_object_unref(pb);
   }
+  da_tree_view_apply_zebra_cell(column, cell, model, iter, app, FALSE);
 }
 
 static void file_view_set_search_highlight_cell(GtkCellRenderer *cell, AppState *app, const gchar *plain) {
@@ -384,7 +462,6 @@ static void file_view_set_search_highlight_cell(GtkCellRenderer *cell, AppState 
 
 static void file_view_file_name_text_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell,
                                                 GtkTreeModel *model, GtkTreeIter *iter, gpointer user_data) {
-  (void)column;
   AppState *app = (AppState *)user_data;
   gchar *plain = NULL;
   gtk_tree_model_get(model, iter, 0, &plain, -1);
@@ -405,11 +482,11 @@ static void file_view_file_name_text_cell_data(GtkTreeViewColumn *column, GtkCel
     }
   }
   da_apply_deleted_cell_style(cell, app, path);
+  da_tree_view_apply_zebra_cell(column, cell, model, iter, app, FALSE);
 }
 
 static void file_view_path_text_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell,
                                           GtkTreeModel *model, GtkTreeIter *iter, gpointer user_data) {
-  (void)column;
   AppState *app = (AppState *)user_data;
   gchar *plain = NULL;
   gtk_tree_model_get(model, iter, 1, &plain, -1);
@@ -419,6 +496,7 @@ static void file_view_path_text_cell_data(GtkTreeViewColumn *column, GtkCellRend
   const char *path = plain; /* col 1 IS the path */
   da_apply_deleted_cell_style(cell, app, path);
   g_free(plain);
+  da_tree_view_apply_zebra_cell(column, cell, model, iter, app, FALSE);
 }
 
 static void append_file_name_column(GtkTreeView *tv, AppState *app, const char *title, int sort_model_id, int width_px,
@@ -694,7 +772,22 @@ typedef struct {
   gboolean         mime_saved;
   GtkWidget       *decimal_places_spin;
   GtkWidget       *treemap_gradient_check;
+  GtkWidget       *alternate_row_colors_check;
 } DaSettingsDlgHandles;
+
+static void da_ui_apply_alternate_row_colors(AppState *app) {
+  if (app == NULL) {
+    return;
+  }
+  GtkWidget *widgets[] = { app->tree, app->tree_view, app->file_type_tree };
+  for (gsize i = 0; i < G_N_ELEMENTS(widgets); i++) {
+    GtkWidget *w = widgets[i];
+    if (w == NULL || !GTK_IS_TREE_VIEW(w)) {
+      continue;
+    }
+    gtk_widget_queue_draw(w);
+  }
+}
 
 static void da_ui_apply_treemap_style(AppState *app) {
   if (app == NULL) {
@@ -734,9 +827,15 @@ static void da_settings_apply_interface_tab(DaSettingsDlgHandles *h) {
         gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(h->treemap_gradient_check));
   }
 
+  if (h->alternate_row_colors_check != NULL && GTK_IS_TOGGLE_BUTTON(h->alternate_row_colors_check)) {
+    h->app->interface_alternate_row_colors =
+        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(h->alternate_row_colors_check));
+  }
+
   da_ini_save_interface(h->app);
   scan_controller_refresh_size_display_format(h->app);
   da_ui_apply_treemap_style(h->app);
+  da_ui_apply_alternate_row_colors(h->app);
 }
 
 static void on_settings_ok_clicked(GtkButton *btn, gpointer user_data) {
@@ -816,6 +915,11 @@ static void on_tools_menu_settings_activate(GtkMenuItem *item, gpointer user_dat
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(handles->treemap_gradient_check),
                                  app->treemap_style.enable_tile_gradients);
   }
+  handles->alternate_row_colors_check = GTK_WIDGET(gtk_builder_get_object(builder, "alternate_row_colors_check"));
+  if (handles->alternate_row_colors_check != NULL && GTK_IS_TOGGLE_BUTTON(handles->alternate_row_colors_check)) {
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(handles->alternate_row_colors_check),
+                                 app->interface_alternate_row_colors);
+  }
 
   GtkWidget *ok_btn = GTK_WIDGET(gtk_builder_get_object(builder, "ok_btn"));
   GtkWidget *apply_btn = GTK_WIDGET(gtk_builder_get_object(builder, "apply_btn"));
@@ -892,6 +996,7 @@ static void pct_of_drive_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *c
     }
   }
   da_apply_deleted_cell_style(cell, app, path);
+  da_tree_view_apply_zebra_cell(column, cell, model, iter, app, FALSE);
 }
 
 static void append_pct_of_drive_column(GtkTreeView *tv, const char *title, int sort_model_id, int width_px,
@@ -911,14 +1016,37 @@ static void append_pct_of_drive_column(GtkTreeView *tv, const char *title, int s
   gtk_tree_view_append_column(tv, c);
 }
 
-static void append_text_column(GtkTreeView *tv, const char *title, int model_col, int sort_model_id, int width_px,
-                               int min_width_px, gfloat xalign, const char *cell_background) {
+typedef struct {
+  AppState *app;
+  gint      model_col;
+  gboolean  is_alloc_col;
+} DaSimpleTextColCtx;
+
+static void da_simple_text_cell_data(GtkTreeViewColumn *col, GtkCellRenderer *cell, GtkTreeModel *model,
+                                     GtkTreeIter *iter, gpointer user_data) {
+  DaSimpleTextColCtx *ctx = (DaSimpleTextColCtx *)user_data;
+  if (ctx == NULL) {
+    return;
+  }
+  gchar *text = NULL;
+  gtk_tree_model_get(model, iter, ctx->model_col, &text, -1);
+  g_object_set(cell, "text", text, NULL);
+  g_free(text);
+  da_tree_view_apply_zebra_cell(col, cell, model, iter, ctx->app, ctx->is_alloc_col);
+}
+
+static void append_text_column(GtkTreeView *tv, AppState *app, const char *title, int model_col, int sort_model_id,
+                               int width_px, int min_width_px, gfloat xalign, gboolean is_alloc_column) {
   GtkCellRenderer *r = gtk_cell_renderer_text_new();
   g_object_set(r, "ellipsize", PANGO_ELLIPSIZE_END, "xalign", xalign, NULL);
-  if (cell_background != NULL) {
-    g_object_set(r, "background", cell_background, "background-set", TRUE, NULL);
-  }
-  GtkTreeViewColumn *c = gtk_tree_view_column_new_with_attributes(title, r, "text", model_col, NULL);
+  GtkTreeViewColumn *c = gtk_tree_view_column_new();
+  gtk_tree_view_column_set_title(c, title);
+  gtk_tree_view_column_pack_start(c, r, TRUE);
+  DaSimpleTextColCtx *ctx = g_new(DaSimpleTextColCtx, 1);
+  ctx->app          = app;
+  ctx->model_col    = model_col;
+  ctx->is_alloc_col = is_alloc_column;
+  gtk_tree_view_column_set_cell_data_func(c, r, da_simple_text_cell_data, ctx, g_free);
   gtk_tree_view_column_set_alignment(c, xalign);
   gtk_tree_view_column_set_resizable(c, TRUE);
   gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
@@ -932,8 +1060,7 @@ static void append_text_column(GtkTreeView *tv, const char *title, int model_col
 
 static void tv_icon_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell, GtkTreeModel *model,
                               GtkTreeIter *iter, gpointer user_data) {
-  (void)column;
-  (void)user_data;
+  AppState *app = (AppState *)user_data;
   gint64 eid = 0;
   gchar *path_utf8 = NULL;
   guint kind = 0;
@@ -971,6 +1098,7 @@ static void tv_icon_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell, 
   if (pb != NULL) {
     g_object_unref(pb);
   }
+  da_tree_view_apply_zebra_cell(column, cell, model, iter, app, FALSE);
 }
 
 static void tv_pct_of_parent_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell,
@@ -1001,6 +1129,7 @@ static void tv_pct_of_parent_cell_data(GtkTreeViewColumn *column, GtkCellRendere
   /* Deleted styling: read path from model → apply strikethrough. */
   da_apply_deleted_cell_style(cell, app, path);
   g_free(path);
+  da_tree_view_apply_zebra_cell(column, cell, model, iter, app, FALSE);
 }
 
 static void append_tv_pct_column(GtkTreeView *tv, const char *title, int width_px, int min_width_px,
@@ -1042,7 +1171,7 @@ static void da_setup_tree_view(AppState *app) {
     GtkTreeViewColumn *c = gtk_tree_view_column_new();
     gtk_tree_view_column_set_title(c, "Folder");
     gtk_tree_view_column_pack_start(c, pix, FALSE);
-    gtk_tree_view_column_set_cell_data_func(c, pix, tv_icon_cell_data, NULL, NULL);
+    gtk_tree_view_column_set_cell_data_func(c, pix, tv_icon_cell_data, app, NULL);
     gtk_tree_view_column_pack_start(c, txt, TRUE);
     /* Use a data function (instead of attribute binding) so deleted-state styling can be applied. */
     {
@@ -1072,9 +1201,9 @@ static void da_setup_tree_view(AppState *app) {
   static const int    tv_minw[]   = { 72, 72, 56, 56, 56, 100, 48 };
   static const gfloat tv_align[]  = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f };
   for (int i = 0; i < 7; i++) {
-    const char *cell_bg = tv_cols[i] == DA_TV_COL_ALLOC ? DISKATLAS_TREE_ALLOC_CELL_BG : NULL;
-    append_text_column(GTK_TREE_VIEW(app->tree_view), tv_titles[i], tv_cols[i], tv_cols[i],
-                       tv_widths[i], tv_minw[i], tv_align[i], cell_bg);
+    gboolean is_alloc = (tv_cols[i] == DA_TV_COL_ALLOC);
+    append_text_column(GTK_TREE_VIEW(app->tree_view), app, tv_titles[i], tv_cols[i], tv_cols[i],
+                       tv_widths[i], tv_minw[i], tv_align[i], is_alloc);
   }
 }
 
@@ -1202,9 +1331,9 @@ void da_ui_build(AppState *app) {
     if (i == 3 || i == 4 || i == 6 || i == 7) {
       xalign = 1.0f;
     }
-    const char *cell_bg = (i == DA_COL_ALLOCATED) ? DISKATLAS_TREE_ALLOC_CELL_BG : NULL;
-    append_text_column(GTK_TREE_VIEW(app->tree), titles[i], i, col_sort_id[i], col_w[i], col_min_w[i], xalign,
-                       cell_bg);
+    gboolean is_alloc = (i == DA_COL_ALLOCATED);
+    append_text_column(GTK_TREE_VIEW(app->tree), app, titles[i], i, col_sort_id[i], col_w[i], col_min_w[i], xalign,
+                       is_alloc);
   }
 
   /* Sorting is handled internally by FlatListModel via GtkTreeSortable.
@@ -1244,6 +1373,8 @@ void da_ui_build(AppState *app) {
                                     tv_mdl_col[ti], TRUE);
     }
   }
+
+  da_ui_apply_alternate_row_colors(app);
 
 #if defined(G_OS_WIN32)
   app->admin_ntfs_notice_panel = GTK_WIDGET(gtk_builder_get_object(builder, "admin_ntfs_notice_panel"));

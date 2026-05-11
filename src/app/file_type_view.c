@@ -8,6 +8,7 @@
 #include <cairo.h>
 
 #include "file_type_view.h"
+#include "ui_window.h"
 #include "dm_mime_db.h"
 #include "dm_treemap_colors.h"
 #include "diskatlas.h"
@@ -100,10 +101,63 @@ static GdkPixbuf *ft_make_swatch_pixbuf(uint32_t color_rgba,
   return pb;
 }
 
+static void ft_swatch_cell_data(GtkTreeViewColumn *col, GtkCellRenderer *cell, GtkTreeModel *model,
+                                GtkTreeIter *iter, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  GdkPixbuf *pb = NULL;
+  gtk_tree_model_get(model, iter, DA_FT_COL_COLOR_PB, &pb, -1);
+  g_object_set(GTK_CELL_RENDERER_PIXBUF(cell), "pixbuf", pb, NULL);
+  if (pb != NULL) {
+    g_object_unref(pb);
+  }
+  da_tree_view_apply_zebra_cell(col, cell, model, iter, app, FALSE);
+}
+
+static void ft_ext_icon_cell_data(GtkTreeViewColumn *col, GtkCellRenderer *cell, GtkTreeModel *model,
+                                  GtkTreeIter *iter, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  GdkPixbuf *pb = NULL;
+  gtk_tree_model_get(model, iter, DA_FT_COL_ICON_PB, &pb, -1);
+  g_object_set(GTK_CELL_RENDERER_PIXBUF(cell), "pixbuf", pb, NULL);
+  if (pb != NULL) {
+    g_object_unref(pb);
+  }
+  da_tree_view_apply_zebra_cell(col, cell, model, iter, app, FALSE);
+}
+
+static void ft_ext_text_cell_data(GtkTreeViewColumn *col, GtkCellRenderer *cell, GtkTreeModel *model,
+                                  GtkTreeIter *iter, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  gchar *s = NULL;
+  gtk_tree_model_get(model, iter, DA_FT_COL_EXT, &s, -1);
+  g_object_set(cell, "text", s, NULL);
+  g_free(s);
+  da_tree_view_apply_zebra_cell(col, cell, model, iter, app, FALSE);
+}
+
+typedef struct {
+  AppState *app;
+  gint      model_col;
+  gboolean  is_alloc;
+} DaFtTextCtx;
+
+static void ft_text_cell_data_zebra(GtkTreeViewColumn *col, GtkCellRenderer *cell, GtkTreeModel *model,
+                                    GtkTreeIter *iter, gpointer user_data) {
+  DaFtTextCtx *ctx = (DaFtTextCtx *)user_data;
+  if (ctx == NULL) {
+    return;
+  }
+  gchar *text = NULL;
+  gtk_tree_model_get(model, iter, ctx->model_col, &text, -1);
+  g_object_set(cell, "text", text, NULL);
+  g_free(text);
+  da_tree_view_apply_zebra_cell(col, cell, model, iter, ctx->app, ctx->is_alloc);
+}
+
 static void ft_pct_cell_data(GtkTreeViewColumn *col, GtkCellRenderer *cell,
                              GtkTreeModel *model, GtkTreeIter *iter,
                              gpointer user_data) {
-  (void)user_data;
+  AppState *app = (AppState *)user_data;
   gint pv = 0;
   gchar *txt = NULL;
   gtk_tree_model_get(model, iter, DA_FT_COL_PCT_VAL, &pv, DA_FT_COL_PCT_LBL, &txt, -1);
@@ -123,17 +177,25 @@ static void ft_pct_cell_data(GtkTreeViewColumn *col, GtkCellRenderer *cell,
                "text-xalign", 0.98f,
                NULL);
   g_free(txt);
+  da_tree_view_apply_zebra_cell(col, cell, model, iter, app, FALSE);
 }
 
 /* ---- Column builder helpers ------------------------------------------- */
 
-static void append_ft_text_column(GtkTreeView *tv, const char *title,
+static void append_ft_text_column(GtkTreeView *tv, AppState *app, const char *title,
                                   int model_col, int sort_col,
                                   int width_px, int min_width_px,
-                                  gfloat xalign) {
+                                  gfloat xalign, gboolean is_alloc_column) {
   GtkCellRenderer *r = gtk_cell_renderer_text_new();
   g_object_set(r, "ellipsize", PANGO_ELLIPSIZE_END, "xalign", xalign, NULL);
-  GtkTreeViewColumn *c = gtk_tree_view_column_new_with_attributes(title, r, "text", model_col, NULL);
+  GtkTreeViewColumn *c = gtk_tree_view_column_new();
+  gtk_tree_view_column_set_title(c, title);
+  gtk_tree_view_column_pack_start(c, r, TRUE);
+  DaFtTextCtx *ctx = g_new(DaFtTextCtx, 1);
+  ctx->app       = app;
+  ctx->model_col = model_col;
+  ctx->is_alloc  = is_alloc_column;
+  gtk_tree_view_column_set_cell_data_func(c, r, ft_text_cell_data_zebra, ctx, g_free);
   gtk_tree_view_column_set_alignment(c, xalign);
   gtk_tree_view_column_set_resizable(c, TRUE);
   gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
@@ -143,14 +205,14 @@ static void append_ft_text_column(GtkTreeView *tv, const char *title,
   gtk_tree_view_append_column(tv, c);
 }
 
-static void append_ft_pct_column(GtkTreeView *tv, const char *title,
+static void append_ft_pct_column(GtkTreeView *tv, AppState *app, const char *title,
                                  int sort_col, int width_px, int min_width_px) {
   GtkCellRenderer *r = da_cell_renderer_progress_new();
   g_object_set(r, "xpad", 0, "ypad", 0, "xalign", 0.0f, NULL);
   GtkTreeViewColumn *c = gtk_tree_view_column_new();
   gtk_tree_view_column_set_title(c, title);
   gtk_tree_view_column_pack_start(c, r, TRUE);
-  gtk_tree_view_column_set_cell_data_func(c, r, ft_pct_cell_data, NULL, NULL);
+  gtk_tree_view_column_set_cell_data_func(c, r, ft_pct_cell_data, app, NULL);
   gtk_tree_view_column_set_alignment(c, 1.0f);
   gtk_tree_view_column_set_resizable(c, TRUE);
   gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
@@ -210,7 +272,7 @@ void da_file_type_view_setup(AppState *app) {
     GtkTreeViewColumn *c = gtk_tree_view_column_new();
     gtk_tree_view_column_set_title(c, "");
     gtk_tree_view_column_pack_start(c, r, TRUE);
-    gtk_tree_view_column_add_attribute(c, r, "pixbuf", DA_FT_COL_COLOR_PB);
+    gtk_tree_view_column_set_cell_data_func(c, r, ft_swatch_cell_data, app, NULL);
     gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
     gtk_tree_view_column_set_fixed_width(c, 25);
     gtk_tree_view_column_set_min_width(c, 25);
@@ -226,12 +288,12 @@ void da_file_type_view_setup(AppState *app) {
     GtkCellRenderer *icon_r = gtk_cell_renderer_pixbuf_new();
     g_object_set(icon_r, "xpad", 1, "ypad", 0, NULL);
     gtk_tree_view_column_pack_start(c, icon_r, FALSE);
-    gtk_tree_view_column_add_attribute(c, icon_r, "pixbuf", DA_FT_COL_ICON_PB);
+    gtk_tree_view_column_set_cell_data_func(c, icon_r, ft_ext_icon_cell_data, app, NULL);
 
     GtkCellRenderer *text_r = gtk_cell_renderer_text_new();
     g_object_set(text_r, "ellipsize", PANGO_ELLIPSIZE_END, "xalign", 0.0f, NULL);
     gtk_tree_view_column_pack_start(c, text_r, TRUE);
-    gtk_tree_view_column_add_attribute(c, text_r, "text", DA_FT_COL_EXT);
+    gtk_tree_view_column_set_cell_data_func(c, text_r, ft_ext_text_cell_data, app, NULL);
 
     gtk_tree_view_column_set_alignment(c, 0.0f);
     gtk_tree_view_column_set_resizable(c, TRUE);
@@ -241,11 +303,11 @@ void da_file_type_view_setup(AppState *app) {
     gtk_tree_view_column_set_sort_column_id(c, DA_FT_COL_EXT);
     gtk_tree_view_append_column(tv, c);
   }
-  append_ft_text_column(tv, "File Type",  DA_FT_COL_TYPE,  DA_FT_COL_TYPE,      160, 80, 0.0f);
-  append_ft_pct_column (tv, "Percent",    DA_FT_COL_SIZE_RAW, 110, 88);
-  append_ft_text_column(tv, "Size",       DA_FT_COL_SIZE,  DA_FT_COL_SIZE_RAW,  100,  72, 1.0f);
-  append_ft_text_column(tv, "Allocated",  DA_FT_COL_ALLOC, DA_FT_COL_ALLOC_RAW, 100,  72, 1.0f);
-  append_ft_text_column(tv, "Files",      DA_FT_COL_FILES, DA_FT_COL_FILES_RAW,  80,  56, 1.0f);
+  append_ft_text_column(tv, app, "File Type", DA_FT_COL_TYPE, DA_FT_COL_TYPE, 160, 80, 0.0f, FALSE);
+  append_ft_pct_column(tv, app, "Percent", DA_FT_COL_SIZE_RAW, 110, 88);
+  append_ft_text_column(tv, app, "Size", DA_FT_COL_SIZE, DA_FT_COL_SIZE_RAW, 100, 72, 1.0f, FALSE);
+  append_ft_text_column(tv, app, "Allocated", DA_FT_COL_ALLOC, DA_FT_COL_ALLOC_RAW, 100, 72, 1.0f, TRUE);
+  append_ft_text_column(tv, app, "Files", DA_FT_COL_FILES, DA_FT_COL_FILES_RAW, 80, 56, 1.0f, FALSE);
 }
 
 void da_file_type_view_clear(AppState *app) {
