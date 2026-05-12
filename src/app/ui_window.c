@@ -1282,7 +1282,7 @@ static void append_pct_of_drive_column(GtkTreeView *tv, const char *title, int s
   gtk_tree_view_column_set_title(c, title);
   gtk_tree_view_column_pack_start(c, r, TRUE);
   gtk_tree_view_column_set_cell_data_func(c, r, pct_of_drive_cell_data, app, NULL);
-  gtk_tree_view_column_set_alignment(c, 1.0f);
+  gtk_tree_view_column_set_alignment(c, 0.0f);
   gtk_tree_view_column_set_resizable(c, TRUE);
   gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
   gtk_tree_view_column_set_min_width(c, min_width_px);
@@ -1322,7 +1322,7 @@ static void append_text_column(GtkTreeView *tv, AppState *app, const char *title
   ctx->model_col    = model_col;
   ctx->is_alloc_col = is_alloc_column;
   gtk_tree_view_column_set_cell_data_func(c, r, da_simple_text_cell_data, ctx, g_free);
-  gtk_tree_view_column_set_alignment(c, xalign);
+  gtk_tree_view_column_set_alignment(c, 0.0f);
   gtk_tree_view_column_set_resizable(c, TRUE);
   gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
   gtk_tree_view_column_set_min_width(c, min_width_px);
@@ -1415,7 +1415,7 @@ static void append_tv_pct_column(GtkTreeView *tv, const char *title, int width_p
   gtk_tree_view_column_set_title(c, title);
   gtk_tree_view_column_pack_start(c, r, TRUE);
   gtk_tree_view_column_set_cell_data_func(c, r, tv_pct_of_parent_cell_data, app, NULL);
-  gtk_tree_view_column_set_alignment(c, 1.0f);
+  gtk_tree_view_column_set_alignment(c, 0.0f);
   gtk_tree_view_column_set_resizable(c, TRUE);
   gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
   gtk_tree_view_column_set_min_width(c, min_width_px);
