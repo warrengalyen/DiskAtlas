@@ -38,6 +38,10 @@ typedef struct AppState {
   GtkWidget *window;
   /** Top bar (volume combo, scan, stats); visibility toggled via Options → Show header. */
   GtkWidget *header_panel;
+  /** Right pane of Tree View tab (file-type list); toggled via Options → Show File Types. */
+  GtkWidget *file_type_scrolled;
+  /** Lower pane of Tree View tab (treemap + caption); toggled via Options → Show Treemap. */
+  GtkWidget *treemap_panel;
   /** File menu "Export to CSV…"; sensitivity synced to exportable scan state. */
   GtkWidget *file_menu_export_csv;
   /** File menu "Copy file and size info…"; same sensitivity as export CSV. */
@@ -148,6 +152,12 @@ typedef struct AppState {
 
   /** When TRUE, `header_panel` is visible; persisted as `show_header` in `[interface]`. Default TRUE. */
   gboolean interface_show_header;
+
+  /** When TRUE, `file_type_scrolled` is visible; persisted as `show_file_types` in `[interface]`. Default TRUE. */
+  gboolean interface_show_file_types;
+
+  /** When TRUE, `treemap_panel` is visible; persisted as `show_treemap` in `[interface]`. Default TRUE. */
+  gboolean interface_show_treemap;
 
   /** When TRUE, File → Rename, F2, and inline name editing are allowed; persisted as `enable_rename` in `[general]`. */
   gboolean general_enable_rename;

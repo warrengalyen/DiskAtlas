@@ -220,8 +220,8 @@
                                 <property name="can-focus">False</property>
                                 <property name="label" translatable="yes">Dynamic</property>
                                 <property name="use-underline">True</property>
-                                <property name="draw-as-radio">True</property>
                                 <property name="active">True</property>
+                                <property name="draw-as-radio">True</property>
                               </object>
                             </child>
                             <child>
@@ -288,9 +288,29 @@
                       <object class="GtkCheckMenuItem" id="options_menu_show_header">
                         <property name="visible">True</property>
                         <property name="can-focus">False</property>
-                        <property name="label" translatable="yes">Show header</property>
+                        <property name="label" translatable="yes">Show Header</property>
                         <property name="use-underline">True</property>
                         <property name="active">True</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkCheckMenuItem" id="options_menu_show_file_types">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="label" translatable="yes">Show File Types</property>
+                        <property name="use-underline">True</property>
+                        <property name="active">True</property>
+                        <accelerator key="F8" signal="activate"/>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkCheckMenuItem" id="options_menu_show_treemap">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="label" translatable="yes">Show Treemap</property>
+                        <property name="use-underline">True</property>
+                        <property name="active">True</property>
+                        <accelerator key="F9" signal="activate"/>
                       </object>
                     </child>
                     <child>

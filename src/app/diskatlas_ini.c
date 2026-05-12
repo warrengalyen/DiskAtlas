@@ -30,6 +30,8 @@
 #define DA_KEY_TREEMAP_TILE_GRADIENTS "treemap_tile_gradients"
 #define DA_KEY_ALTERNATE_ROW_COLORS "alternate_row_colors"
 #define DA_KEY_SHOW_HEADER "show_header"
+#define DA_KEY_SHOW_FILE_TYPES "show_file_types"
+#define DA_KEY_SHOW_TREEMAP "show_treemap"
 #define DA_SEC_GENERAL "general"
 #define DA_KEY_ENABLE_RENAME "enable_rename"
 
@@ -241,6 +243,8 @@ void da_ini_load_interface(AppState *app) {
   app->treemap_style = DM_TREEMAP_STYLE_INIT_DEFAULT;
   app->interface_alternate_row_colors = FALSE;
   app->interface_show_header = TRUE;
+  app->interface_show_file_types = TRUE;
+  app->interface_show_treemap = TRUE;
   app->interface_size_display_format = DA_SIZE_DISPLAY_DYNAMIC;
 
   gint places = 1;
@@ -270,6 +274,16 @@ void da_ini_load_interface(AppState *app) {
         gboolean sh = g_key_file_get_boolean(kf, DA_SEC_INTERFACE, DA_KEY_SHOW_HEADER, &err);
         g_clear_error(&err);
         app->interface_show_header = sh;
+      }
+      if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_SHOW_FILE_TYPES, NULL)) {
+        gboolean ft = g_key_file_get_boolean(kf, DA_SEC_INTERFACE, DA_KEY_SHOW_FILE_TYPES, &err);
+        g_clear_error(&err);
+        app->interface_show_file_types = ft;
+      }
+      if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_SHOW_TREEMAP, NULL)) {
+        gboolean tm = g_key_file_get_boolean(kf, DA_SEC_INTERFACE, DA_KEY_SHOW_TREEMAP, &err);
+        g_clear_error(&err);
+        app->interface_show_treemap = tm;
       }
       if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DISPLAY_FORMAT, NULL)) {
         gint sf = g_key_file_get_integer(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DISPLAY_FORMAT, &err);
@@ -365,6 +379,8 @@ void da_ini_save_interface(const AppState *app) {
                          app->treemap_style.enable_tile_gradients);
   g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_ALTERNATE_ROW_COLORS, app->interface_alternate_row_colors);
   g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_SHOW_HEADER, app->interface_show_header);
+  g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_SHOW_FILE_TYPES, app->interface_show_file_types);
+  g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_SHOW_TREEMAP, app->interface_show_treemap);
   {
     gint sf = app->interface_size_display_format;
     if (sf < (gint)DA_SIZE_DISPLAY_DYNAMIC || sf > (gint)DA_SIZE_DISPLAY_TB) {

@@ -91,6 +91,18 @@ static void da_ui_apply_header_panel_visibility(AppState *app) {
   gtk_widget_set_visible(app->header_panel, app->interface_show_header);
 }
 
+static void da_ui_apply_tree_view_tab_extras_visibility(AppState *app) {
+  if (app == NULL) {
+    return;
+  }
+  if (app->file_type_scrolled != NULL) {
+    gtk_widget_set_visible(app->file_type_scrolled, app->interface_show_file_types);
+  }
+  if (app->treemap_panel != NULL) {
+    gtk_widget_set_visible(app->treemap_panel, app->interface_show_treemap);
+  }
+}
+
 static void on_options_menu_show_header_toggled(GtkCheckMenuItem *item, gpointer user_data) {
   AppState *app = (AppState *)user_data;
   if (app == NULL || item == NULL) {
@@ -98,6 +110,26 @@ static void on_options_menu_show_header_toggled(GtkCheckMenuItem *item, gpointer
   }
   app->interface_show_header = gtk_check_menu_item_get_active(item);
   da_ui_apply_header_panel_visibility(app);
+  da_ini_save_interface(app);
+}
+
+static void on_options_menu_show_file_types_toggled(GtkCheckMenuItem *item, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || item == NULL) {
+    return;
+  }
+  app->interface_show_file_types = gtk_check_menu_item_get_active(item);
+  da_ui_apply_tree_view_tab_extras_visibility(app);
+  da_ini_save_interface(app);
+}
+
+static void on_options_menu_show_treemap_toggled(GtkCheckMenuItem *item, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || item == NULL) {
+    return;
+  }
+  app->interface_show_treemap = gtk_check_menu_item_get_active(item);
+  da_ui_apply_tree_view_tab_extras_visibility(app);
   da_ini_save_interface(app);
 }
 
@@ -902,6 +934,7 @@ static void da_settings_apply_interface_tab(DaSettingsDlgHandles *h) {
   da_ui_apply_treemap_style(h->app);
   da_ui_apply_alternate_row_colors(h->app);
   da_ui_apply_header_panel_visibility(h->app);
+  da_ui_apply_tree_view_tab_extras_visibility(h->app);
   da_ui_sync_file_menu(h->app);
   if (h->app->tree != NULL) {
     gtk_widget_queue_draw(h->app->tree);
@@ -1326,6 +1359,8 @@ void da_ui_build(AppState *app) {
                                 DISKATLAS_TREE_PROGRESS_STYLE_CLASS);
     da_file_type_view_setup(app);
   }
+  app->file_type_scrolled = GTK_WIDGET(gtk_builder_get_object(builder, "file_type_scrolled"));
+  app->treemap_panel = GTK_WIDGET(gtk_builder_get_object(builder, "treemap_panel"));
   {
     GtkWidget *tv_scrolled = GTK_WIDGET(gtk_builder_get_object(builder, "tree_view_scrolled"));
     GtkWidget *tv_paned = GTK_WIDGET(gtk_builder_get_object(builder, "tree_view_paned"));
@@ -1381,6 +1416,7 @@ void da_ui_build(AppState *app) {
   da_ini_load_interface(app);
   da_ini_load_general(app);
   da_ui_apply_header_panel_visibility(app);
+  da_ui_apply_tree_view_tab_extras_visibility(app);
 
   treemap_widget_set_style(TREEMAP_WIDGET(app->treemap), &app->treemap_style);
 
@@ -1605,6 +1641,24 @@ void da_ui_build(AppState *app) {
     }
   }
   {
+    GtkWidget *show_ft_mi = GTK_WIDGET(gtk_builder_get_object(builder, "options_menu_show_file_types"));
+    if (show_ft_mi != NULL && GTK_IS_CHECK_MENU_ITEM(show_ft_mi)) {
+      g_signal_handlers_block_by_func(show_ft_mi, G_CALLBACK(on_options_menu_show_file_types_toggled), app);
+      gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(show_ft_mi), app->interface_show_file_types);
+      g_signal_handlers_unblock_by_func(show_ft_mi, G_CALLBACK(on_options_menu_show_file_types_toggled), app);
+      g_signal_connect(show_ft_mi, "toggled", G_CALLBACK(on_options_menu_show_file_types_toggled), app);
+    }
+  }
+  {
+    GtkWidget *show_tm_mi = GTK_WIDGET(gtk_builder_get_object(builder, "options_menu_show_treemap"));
+    if (show_tm_mi != NULL && GTK_IS_CHECK_MENU_ITEM(show_tm_mi)) {
+      g_signal_handlers_block_by_func(show_tm_mi, G_CALLBACK(on_options_menu_show_treemap_toggled), app);
+      gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(show_tm_mi), app->interface_show_treemap);
+      g_signal_handlers_unblock_by_func(show_tm_mi, G_CALLBACK(on_options_menu_show_treemap_toggled), app);
+      g_signal_connect(show_tm_mi, "toggled", G_CALLBACK(on_options_menu_show_treemap_toggled), app);
+    }
+  }
+  {
     static const struct {
       const char *id;
       gint fmt;
@@ -1639,8 +1693,9 @@ void da_ui_build(AppState *app) {
   da_ui_sync_file_menu(app);
 
   gtk_widget_show_all(app->window);
-  /* show_all reveals all descendants — re-apply header visibility from saved preference. */
+  /* show_all reveals all descendants — re-apply header / Tree View pane visibility from saved preferences. */
   da_ui_apply_header_panel_visibility(app);
+  da_ui_apply_tree_view_tab_extras_visibility(app);
 
 #if defined(G_OS_WIN32)
   /* gtk_widget_show_all reveals hidden descendants — re-apply admin banner visibility last. */
