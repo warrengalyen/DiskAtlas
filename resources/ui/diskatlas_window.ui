@@ -285,6 +285,21 @@
                       </object>
                     </child>
                     <child>
+                      <object class="GtkCheckMenuItem" id="options_menu_show_header">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="label" translatable="yes">Show header</property>
+                        <property name="use-underline">True</property>
+                        <property name="active">True</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkSeparatorMenuItem">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                      </object>
+                    </child>
+                    <child>
                       <object class="GtkMenuItem" id="options_menu_settings">
                         <property name="visible">True</property>
                         <property name="can-focus">False</property>

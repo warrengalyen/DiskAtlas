@@ -29,6 +29,7 @@
 #define DA_KEY_SIZE_DISPLAY_FORMAT "size_display_format"
 #define DA_KEY_TREEMAP_TILE_GRADIENTS "treemap_tile_gradients"
 #define DA_KEY_ALTERNATE_ROW_COLORS "alternate_row_colors"
+#define DA_KEY_SHOW_HEADER "show_header"
 #define DA_SEC_GENERAL "general"
 #define DA_KEY_ENABLE_RENAME "enable_rename"
 
@@ -239,6 +240,7 @@ void da_ini_load_interface(AppState *app) {
   }
   app->treemap_style = DM_TREEMAP_STYLE_INIT_DEFAULT;
   app->interface_alternate_row_colors = FALSE;
+  app->interface_show_header = TRUE;
   app->interface_size_display_format = DA_SIZE_DISPLAY_DYNAMIC;
 
   gint places = 1;
@@ -263,6 +265,11 @@ void da_ini_load_interface(AppState *app) {
         gboolean arc = g_key_file_get_boolean(kf, DA_SEC_INTERFACE, DA_KEY_ALTERNATE_ROW_COLORS, &err);
         g_clear_error(&err);
         app->interface_alternate_row_colors = arc;
+      }
+      if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_SHOW_HEADER, NULL)) {
+        gboolean sh = g_key_file_get_boolean(kf, DA_SEC_INTERFACE, DA_KEY_SHOW_HEADER, &err);
+        g_clear_error(&err);
+        app->interface_show_header = sh;
       }
       if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DISPLAY_FORMAT, NULL)) {
         gint sf = g_key_file_get_integer(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DISPLAY_FORMAT, &err);
@@ -357,6 +364,7 @@ void da_ini_save_interface(const AppState *app) {
   g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_TREEMAP_TILE_GRADIENTS,
                          app->treemap_style.enable_tile_gradients);
   g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_ALTERNATE_ROW_COLORS, app->interface_alternate_row_colors);
+  g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_SHOW_HEADER, app->interface_show_header);
   {
     gint sf = app->interface_size_display_format;
     if (sf < (gint)DA_SIZE_DISPLAY_DYNAMIC || sf > (gint)DA_SIZE_DISPLAY_TB) {

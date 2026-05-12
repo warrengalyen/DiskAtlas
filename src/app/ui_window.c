@@ -84,6 +84,23 @@ static void on_size_display_format_activate(GtkMenuItem *item, gpointer user_dat
   scan_controller_set_size_display_format(app, fmt);
 }
 
+static void da_ui_apply_header_panel_visibility(AppState *app) {
+  if (app == NULL || app->header_panel == NULL) {
+    return;
+  }
+  gtk_widget_set_visible(app->header_panel, app->interface_show_header);
+}
+
+static void on_options_menu_show_header_toggled(GtkCheckMenuItem *item, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || item == NULL) {
+    return;
+  }
+  app->interface_show_header = gtk_check_menu_item_get_active(item);
+  da_ui_apply_header_panel_visibility(app);
+  da_ini_save_interface(app);
+}
+
 #if defined(G_OS_WIN32)
 
 static void on_dont_show_admin_ntfs_toggled(GtkToggleButton *tb, gpointer user_data) {
@@ -884,6 +901,7 @@ static void da_settings_apply_interface_tab(DaSettingsDlgHandles *h) {
   scan_controller_refresh_size_display_format(h->app);
   da_ui_apply_treemap_style(h->app);
   da_ui_apply_alternate_row_colors(h->app);
+  da_ui_apply_header_panel_visibility(h->app);
   da_ui_sync_file_menu(h->app);
   if (h->app->tree != NULL) {
     gtk_widget_queue_draw(h->app->tree);
@@ -1336,6 +1354,7 @@ void da_ui_build(AppState *app) {
   app->stat_tot_val = GTK_WIDGET(gtk_builder_get_object(builder, "stat_tot_val"));
   app->stat_use_val = GTK_WIDGET(gtk_builder_get_object(builder, "stat_use_val"));
   app->stat_free_val = GTK_WIDGET(gtk_builder_get_object(builder, "stat_free_val"));
+  app->header_panel = GTK_WIDGET(gtk_builder_get_object(builder, "header_panel"));
 
   GtkWidget *tree_scrolled = GTK_WIDGET(gtk_builder_get_object(builder, "file_view_scrolled"));
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(tree_scrolled), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
@@ -1361,6 +1380,7 @@ void da_ui_build(AppState *app) {
   da_ini_load_filetree(app);
   da_ini_load_interface(app);
   da_ini_load_general(app);
+  da_ui_apply_header_panel_visibility(app);
 
   treemap_widget_set_style(TREEMAP_WIDGET(app->treemap), &app->treemap_style);
 
@@ -1576,6 +1596,15 @@ void da_ui_build(AppState *app) {
     }
   }
   {
+    GtkWidget *show_header_mi = GTK_WIDGET(gtk_builder_get_object(builder, "options_menu_show_header"));
+    if (show_header_mi != NULL && GTK_IS_CHECK_MENU_ITEM(show_header_mi)) {
+      g_signal_handlers_block_by_func(show_header_mi, G_CALLBACK(on_options_menu_show_header_toggled), app);
+      gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(show_header_mi), app->interface_show_header);
+      g_signal_handlers_unblock_by_func(show_header_mi, G_CALLBACK(on_options_menu_show_header_toggled), app);
+      g_signal_connect(show_header_mi, "toggled", G_CALLBACK(on_options_menu_show_header_toggled), app);
+    }
+  }
+  {
     static const struct {
       const char *id;
       gint fmt;
@@ -1610,6 +1639,8 @@ void da_ui_build(AppState *app) {
   da_ui_sync_file_menu(app);
 
   gtk_widget_show_all(app->window);
+  /* show_all reveals all descendants — re-apply header visibility from saved preference. */
+  da_ui_apply_header_panel_visibility(app);
 
 #if defined(G_OS_WIN32)
   /* gtk_widget_show_all reveals hidden descendants — re-apply admin banner visibility last. */

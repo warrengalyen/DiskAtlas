@@ -36,6 +36,8 @@ struct DmMimeDatabase;
 typedef struct AppState {
   GtkApplication *gtk_app;
   GtkWidget *window;
+  /** Top bar (volume combo, scan, stats); visibility toggled via Options → Show header. */
+  GtkWidget *header_panel;
   /** File menu "Export to CSV…"; sensitivity synced to exportable scan state. */
   GtkWidget *file_menu_export_csv;
   /** File menu "Copy file and size info…"; same sensitivity as export CSV. */
@@ -143,6 +145,9 @@ typedef struct AppState {
 
   /** Zebra striping for tree views; persisted as `alternate_row_colors` in `[interface]`. Default FALSE. */
   gboolean interface_alternate_row_colors;
+
+  /** When TRUE, `header_panel` is visible; persisted as `show_header` in `[interface]`. Default TRUE. */
+  gboolean interface_show_header;
 
   /** When TRUE, File → Rename, F2, and inline name editing are allowed; persisted as `enable_rename` in `[general]`. */
   gboolean general_enable_rename;
