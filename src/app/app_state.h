@@ -135,6 +135,9 @@ typedef struct AppState {
   /** Formatted size strings (KiB+): decimal fraction digits, 0–4; persisted under `[interface]` in diskatlas.ini. */
   gint size_decimal_places;
 
+  /** `DaSizeDisplayFormat`: dynamic / bytes / KB / … ; persisted as `size_display_format` in `[interface]`. */
+  gint interface_size_display_format;
+
   /** Treemap lighting/borders; `enable_tile_gradients` persisted as `treemap_tile_gradients` in `[interface]`. */
   DmTreemapStyle treemap_style;
 

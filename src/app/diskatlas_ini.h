@@ -29,7 +29,7 @@ void da_ini_mime_categories_save(const GPtrArray *categories);
 void da_ini_load_filetree(AppState *app);
 void da_ini_save_filetree(const AppState *app);
 
-/** Load `[interface]` (size decimals, treemap gradients, alternate row colors, etc.). */
+/** Load `[interface]` (size decimals, size display format, treemap gradients, alternate row colors, etc.). */
 void da_ini_load_interface(AppState *app);
 /** Persist `[interface]` keys (merge write). */
 void da_ini_save_interface(const AppState *app);

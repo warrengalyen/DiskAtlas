@@ -1969,6 +1969,7 @@ void scan_controller_refresh_size_display_format(AppState *app) {
     return;
   }
   da_format_bytes_set_decimal_places(app->size_decimal_places);
+  da_format_bytes_set_display_format(app->interface_size_display_format);
   if (app->flat_list_model != NULL) {
     flat_list_model_invalidate(app->flat_list_model);
   }
@@ -1978,6 +1979,21 @@ void scan_controller_refresh_size_display_format(AppState *app) {
   if (app->treemap != NULL) {
     gtk_widget_queue_draw(app->treemap);
   }
+  if (app->file_type_tree != NULL) {
+    da_file_type_view_populate(app);
+  }
+}
+
+void scan_controller_set_size_display_format(AppState *app, gint format) {
+  if (app == NULL) {
+    return;
+  }
+  if (format < (gint)DA_SIZE_DISPLAY_DYNAMIC || format > (gint)DA_SIZE_DISPLAY_TB) {
+    format = DA_SIZE_DISPLAY_DYNAMIC;
+  }
+  app->interface_size_display_format = format;
+  da_ini_save_interface(app);
+  scan_controller_refresh_size_display_format(app);
 }
 
 static void on_tree_view_row_expanded(GtkTreeView *tv, GtkTreeIter *iter, GtkTreePath *path,

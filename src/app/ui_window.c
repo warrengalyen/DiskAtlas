@@ -70,6 +70,20 @@ void da_ui_sync_file_menu(AppState *app) {
   }
 }
 
+#define DA_SIZE_FMT_MENU_DATA_KEY "da-size-fmt"
+
+static void on_size_display_format_activate(GtkMenuItem *item, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || item == NULL || !GTK_IS_CHECK_MENU_ITEM(item)) {
+    return;
+  }
+  if (!gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(item))) {
+    return;
+  }
+  gint fmt = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), DA_SIZE_FMT_MENU_DATA_KEY));
+  scan_controller_set_size_display_format(app, fmt);
+}
+
 #if defined(G_OS_WIN32)
 
 static void on_dont_show_admin_ntfs_toggled(GtkToggleButton *tb, gpointer user_data) {
@@ -1556,9 +1570,35 @@ void da_ui_build(AppState *app) {
     }
   }
   {
-    GtkWidget *tools_menu_settings = GTK_WIDGET(gtk_builder_get_object(builder, "tools_menu_settings"));
-    if (tools_menu_settings != NULL) {
-      g_signal_connect(tools_menu_settings, "activate", G_CALLBACK(on_tools_menu_settings_activate), app);
+    GtkWidget *options_menu_settings = GTK_WIDGET(gtk_builder_get_object(builder, "options_menu_settings"));
+    if (options_menu_settings != NULL) {
+      g_signal_connect(options_menu_settings, "activate", G_CALLBACK(on_tools_menu_settings_activate), app);
+    }
+  }
+  {
+    static const struct {
+      const char *id;
+      gint fmt;
+    } size_display_items[] = {
+      { "size_display_dynamic_menu", DA_SIZE_DISPLAY_DYNAMIC },
+      { "size_display_byte_menu", DA_SIZE_DISPLAY_BYTES },
+      { "size_display_kb_menu", DA_SIZE_DISPLAY_KB },
+      { "size_display_mb_menu", DA_SIZE_DISPLAY_MB },
+      { "size_display_gb_menu", DA_SIZE_DISPLAY_GB },
+      { "size_display_tb_menu", DA_SIZE_DISPLAY_TB },
+    };
+    for (gsize si = 0; si < G_N_ELEMENTS(size_display_items); si++) {
+      GtkWidget *w = GTK_WIDGET(gtk_builder_get_object(builder, size_display_items[si].id));
+      if (w == NULL || !GTK_IS_CHECK_MENU_ITEM(w)) {
+        continue;
+      }
+      g_object_set_data(G_OBJECT(w), DA_SIZE_FMT_MENU_DATA_KEY, GINT_TO_POINTER(size_display_items[si].fmt));
+      g_signal_connect(w, "activate", G_CALLBACK(on_size_display_format_activate), app);
+      if (size_display_items[si].fmt == app->interface_size_display_format) {
+        g_signal_handlers_block_by_func(w, G_CALLBACK(on_size_display_format_activate), app);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(w), TRUE);
+        g_signal_handlers_unblock_by_func(w, G_CALLBACK(on_size_display_format_activate), app);
+      }
     }
   }
 

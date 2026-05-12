@@ -26,6 +26,18 @@
 #include "format_text.h"
 
 static int da_bytes_decimal_places = 1;
+static int da_bytes_display_format = DA_SIZE_DISPLAY_DYNAMIC;
+
+void da_format_bytes_set_display_format(int format) {
+  if (format < (int)DA_SIZE_DISPLAY_DYNAMIC || format > (int)DA_SIZE_DISPLAY_TB) {
+    format = DA_SIZE_DISPLAY_DYNAMIC;
+  }
+  da_bytes_display_format = format;
+}
+
+int da_format_bytes_get_display_format(void) {
+  return da_bytes_display_format;
+}
 
 void da_format_bytes_set_decimal_places(int places) {
   if (places < 0) {
@@ -45,6 +57,29 @@ void da_format_bytes(uint64_t n, char *dst, size_t dstsz) {
     return;
   }
   int d = da_bytes_decimal_places;
+  switch (da_bytes_display_format) {
+  case DA_SIZE_DISPLAY_BYTES: {
+    char num[80];
+    da_format_uint64_locale(n, num, sizeof(num));
+    snprintf(dst, dstsz, "%s B", num);
+    return;
+  }
+  case DA_SIZE_DISPLAY_KB:
+    snprintf(dst, dstsz, "%.*f KB", d, (double)n / 1024.0);
+    return;
+  case DA_SIZE_DISPLAY_MB:
+    snprintf(dst, dstsz, "%.*f MB", d, (double)n / (1024.0 * 1024.0));
+    return;
+  case DA_SIZE_DISPLAY_GB:
+    snprintf(dst, dstsz, "%.*f GB", d, (double)n / (1024.0 * 1024.0 * 1024.0));
+    return;
+  case DA_SIZE_DISPLAY_TB:
+    snprintf(dst, dstsz, "%.*f TB", d, (double)n / (1024.0 * 1024.0 * 1024.0 * 1024.0));
+    return;
+  case DA_SIZE_DISPLAY_DYNAMIC:
+  default:
+    break;
+  }
   if (n < 1024ull) {
     snprintf(dst, dstsz, "%" PRIu64 " B", n);
     return;
@@ -261,7 +296,7 @@ void da_format_uint64_locale(uint64_t n, char *dst, size_t dstsz) {
   if (da_try_format_uint64_win32_user_default(n, dst, dstsz)) {
     return;
   }
-#endif
+#endif  /* FORMAT_TEXT_H */
   struct lconv *lc = localeconv();
   const char *sep = (lc != NULL && lc->thousands_sep != NULL) ? lc->thousands_sep : "";
   const char *grp = (lc != NULL && lc->grouping != NULL) ? lc->grouping : "";

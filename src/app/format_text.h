@@ -5,9 +5,23 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/** How `da_format_bytes` chooses units; persisted under `[interface]` `size_display_format` in diskatlas.ini. */
+typedef enum {
+  DA_SIZE_DISPLAY_DYNAMIC = 0,
+  DA_SIZE_DISPLAY_BYTES = 1,
+  DA_SIZE_DISPLAY_KB = 2,
+  DA_SIZE_DISPLAY_MB = 3,
+  DA_SIZE_DISPLAY_GB = 4,
+  DA_SIZE_DISPLAY_TB = 5,
+} DaSizeDisplayFormat;
+
 /** Clamp to 0–4; affects all `da_format_bytes` / `da_format_bytes_with_pct` output for fractional units. */
 void da_format_bytes_set_decimal_places(int places);
 int da_format_bytes_get_decimal_places(void);
+
+/** Clamp to a `DaSizeDisplayFormat` value; drives `da_format_bytes` / `da_format_bytes_with_pct`. */
+void da_format_bytes_set_display_format(int format);
+int da_format_bytes_get_display_format(void);
 
 void da_format_bytes(uint64_t n, char *dst, size_t dstsz);
 void da_format_bytes_with_pct(uint64_t bytes, uint64_t vol_total, char *dst, size_t dstsz);

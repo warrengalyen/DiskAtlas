@@ -3,7 +3,7 @@
 /* GtkCellRendererProgress draws the fill with style class `progressbar` (not a `progress` child node). */
 @define-color diskatlas_tree_progress_fill #3584e4;
 
-/* Top panel + similar boxed regions (class set on widgets in UI). */
+/* Header panel + notification panels */
 .global-panel {
   border: 1px solid @borders;
   border-radius: 1px;

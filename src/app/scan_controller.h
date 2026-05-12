@@ -14,6 +14,8 @@ void scan_controller_request_scan(AppState *app);
 void scan_controller_refresh_volume_labels(AppState *app);
 /** After changing size decimal-place preference: refresh all on-screen byte strings. */
 void scan_controller_refresh_size_display_format(AppState *app);
+/** Set size unit display (dynamic / B / KB / …), persist `[interface]`, and refresh on-screen sizes. */
+void scan_controller_set_size_display_format(AppState *app, gint format);
 void scan_controller_sync_display_max_combo(AppState *app);
 
 /** Updates the three-part status bar when the File View tab is active (selection, hover path, list totals). */
