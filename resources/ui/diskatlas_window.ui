@@ -100,6 +100,38 @@
                       </object>
                     </child>
                     <child>
+                      <object class="GtkMenuItem" id="file_menu_zoom_in">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="label" translatable="yes">Zoom in Treemap</property>
+                        <property name="use-underline">True</property>
+                        <accelerator key="F10" signal="activate"/>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkMenuItem" id="file_menu_zoom_out">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="label" translatable="yes">Zoom out Treemap</property>
+                        <property name="use-underline">True</property>
+                        <accelerator key="F11" signal="activate"/>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkMenuItem" id="file_menu_treemap_image">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="label" translatable="yes">Save Treemap as Image</property>
+                        <property name="use-underline">True</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkSeparatorMenuItem">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                      </object>
+                    </child>
+                    <child>
                       <object class="GtkMenuItem" id="file_menu_copy">
                         <property name="visible">True</property>
                         <property name="can-focus">False</property>
@@ -311,6 +343,24 @@
                         <property name="use-underline">True</property>
                         <property name="active">True</property>
                         <accelerator key="F9" signal="activate"/>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkCheckMenuItem" id="options_menu_show_free_space">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="label" translatable="yes">Show Free Space in Treemap</property>
+                        <property name="use-underline">True</property>
+                        <property name="active">False</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkCheckMenuItem" id="options_menu_show_free_labels">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="label" translatable="yes">Show Labels in Treemap</property>
+                        <property name="use-underline">True</property>
+                        <property name="active">True</property>
                       </object>
                     </child>
                     <child>

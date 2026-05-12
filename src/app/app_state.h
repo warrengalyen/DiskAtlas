@@ -44,6 +44,9 @@ typedef struct AppState {
   GtkWidget *treemap_panel;
   /** File menu "Export to CSV…"; sensitivity synced to exportable scan state. */
   GtkWidget *file_menu_export_csv;
+  /** File menu zoom in/out; sensitivity synced when a scan with a treemap is active. */
+  GtkWidget *file_menu_zoom_in;
+  GtkWidget *file_menu_zoom_out;
   /** File menu "Copy file and size info…"; same sensitivity as export CSV. */
   GtkWidget *file_menu_copy_clipboard;
   GtkWidget *file_menu_explore_folder;
@@ -158,6 +161,18 @@ typedef struct AppState {
 
   /** When TRUE, `treemap_panel` is visible; persisted as `show_treemap` in `[interface]`. Default TRUE. */
   gboolean interface_show_treemap;
+
+  /** When TRUE, treemap renders a free space tile; persisted as `treemap_show_free_space` in `[interface]`. Default FALSE. */
+  gboolean interface_treemap_show_free_space;
+
+  /** When TRUE, treemap renders file/folder name labels on tiles; persisted as `treemap_show_labels` in `[interface]`. Default TRUE. */
+  gboolean interface_treemap_show_labels;
+
+  /** Cached free bytes from the most-recent volume query (used for free-space tile). 0 when unknown. */
+  uint64_t volume_free_bytes;
+
+  /** When non-NULL, the treemap is zoomed to this subdirectory instead of scan_root_utf8. Owned. */
+  gchar *treemap_zoom_root_utf8;
 
   /** When TRUE, File → Rename, F2, and inline name editing are allowed; persisted as `enable_rename` in `[general]`. */
   gboolean general_enable_rename;

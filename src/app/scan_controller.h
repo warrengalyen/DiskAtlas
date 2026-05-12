@@ -75,6 +75,17 @@ void scan_controller_on_tree_name_cell_edited(AppState *app, gboolean is_tree_vi
  */
 void scan_controller_reclassify_mime(AppState *app);
 
+/**
+ * Zoom the treemap into the currently selected tile (directory or parent of a file).
+ * No-op when no scan is loaded or no tile is selected.
+ */
+void scan_controller_treemap_zoom_in(AppState *app);
+
+/**
+ * Zoom the treemap out one directory level.  No-op when already at the scan root.
+ */
+void scan_controller_treemap_zoom_out(AppState *app);
+
 #if defined(G_OS_WIN32)
 /** After validations in the UI: optionally scan @a volume_root_utf8, then copy $MFT to @a dest_path_utf8. */
 void scan_controller_begin_mft_dump_flow(AppState *app, const gchar *volume_root_utf8,

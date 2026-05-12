@@ -68,6 +68,20 @@ void da_ui_sync_file_menu(AppState *app) {
   if (app != NULL && app->file_menu_rename != NULL) {
     gtk_widget_set_sensitive(app->file_menu_rename, ok_rename);
   }
+  /* Zoom In: scan complete AND at least one treemap tile is selected. */
+  gboolean ok_zoom_in = ok && app != NULL &&
+                        app->treemap != NULL && TREEMAP_IS_WIDGET(app->treemap) &&
+                        treemap_widget_has_selection(TREEMAP_WIDGET(app->treemap));
+  if (app != NULL && app->file_menu_zoom_in != NULL) {
+    gtk_widget_set_sensitive(app->file_menu_zoom_in, ok_zoom_in);
+  }
+  /* Zoom Out: scan complete AND we are currently zoomed into a sub-folder. */
+  gboolean ok_zoom_out = ok && app != NULL &&
+                         app->treemap_zoom_root_utf8 != NULL &&
+                         app->treemap_zoom_root_utf8[0] != '\0';
+  if (app != NULL && app->file_menu_zoom_out != NULL) {
+    gtk_widget_set_sensitive(app->file_menu_zoom_out, ok_zoom_out);
+  }
 }
 
 #define DA_SIZE_FMT_MENU_DATA_KEY "da-size-fmt"
@@ -131,6 +145,157 @@ static void on_options_menu_show_treemap_toggled(GtkCheckMenuItem *item, gpointe
   app->interface_show_treemap = gtk_check_menu_item_get_active(item);
   da_ui_apply_tree_view_tab_extras_visibility(app);
   da_ini_save_interface(app);
+}
+
+static void on_options_menu_show_free_space_toggled(GtkCheckMenuItem *item, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || item == NULL) {
+    return;
+  }
+  app->interface_treemap_show_free_space = gtk_check_menu_item_get_active(item);
+  if (app->treemap != NULL && TREEMAP_IS_WIDGET(app->treemap)) {
+    const char *root_lbl = (app->treemap_zoom_root_utf8 != NULL && app->treemap_zoom_root_utf8[0] != '\0')
+                             ? app->treemap_zoom_root_utf8
+                             : (app->scan_root_utf8 != NULL && app->scan_root_utf8[0] != '\0')
+                               ? app->scan_root_utf8
+                               : app->csv_derived_root_utf8;
+    treemap_widget_set_free_space(TREEMAP_WIDGET(app->treemap),
+                                  app->interface_treemap_show_free_space,
+                                  app->volume_free_bytes,
+                                  (app->volume_total_bytes > app->volume_free_bytes)
+                                    ? app->volume_total_bytes - app->volume_free_bytes
+                                    : 0u,
+                                  root_lbl);
+  }
+  da_ini_save_interface(app);
+}
+
+static void on_options_menu_show_free_labels_toggled(GtkCheckMenuItem *item, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || item == NULL) {
+    return;
+  }
+  app->interface_treemap_show_labels = gtk_check_menu_item_get_active(item);
+  if (app->treemap != NULL && TREEMAP_IS_WIDGET(app->treemap)) {
+    treemap_widget_set_show_labels(TREEMAP_WIDGET(app->treemap), app->interface_treemap_show_labels);
+  }
+  da_ini_save_interface(app);
+}
+
+static void on_file_menu_zoom_in_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  scan_controller_treemap_zoom_in((AppState *)user_data);
+}
+
+static void on_file_menu_zoom_out_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  scan_controller_treemap_zoom_out((AppState *)user_data);
+}
+
+/* ---- PNG export dialog ---------------------------------------------------- */
+
+static void on_file_menu_treemap_image_activate(GtkMenuItem *item, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  (void)item;
+  if (app == NULL || app->treemap == NULL || !TREEMAP_IS_WIDGET(app->treemap)) {
+    return;
+  }
+
+  /* Step 1: file chooser for output path. */
+  GtkWidget *chooser = gtk_file_chooser_dialog_new(
+      "Save Treemap as PNG",
+      GTK_WINDOW(app->window),
+      GTK_FILE_CHOOSER_ACTION_SAVE,
+      "_Cancel", GTK_RESPONSE_CANCEL,
+      "_Save",   GTK_RESPONSE_ACCEPT,
+      NULL);
+  gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(chooser), TRUE);
+  gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(chooser), "treemap.png");
+
+  GtkFileFilter *ff = gtk_file_filter_new();
+  gtk_file_filter_set_name(ff, "PNG images (*.png)");
+  gtk_file_filter_add_pattern(ff, "*.png");
+  gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(chooser), ff);
+
+  if (gtk_dialog_run(GTK_DIALOG(chooser)) != GTK_RESPONSE_ACCEPT) {
+    gtk_widget_destroy(chooser);
+    return;
+  }
+  gchar *output_path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(chooser));
+  gtk_widget_destroy(chooser);
+  if (output_path == NULL) {
+    return;
+  }
+
+  /* Step 2: options dialog (width, height, grayscale, free space). */
+  GtkWidget *dlg = gtk_dialog_new_with_buttons(
+      "Export Options",
+      GTK_WINDOW(app->window),
+      GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+      "_Cancel", GTK_RESPONSE_CANCEL,
+      "_Export", GTK_RESPONSE_OK,
+      NULL);
+  GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
+  gtk_container_set_border_width(GTK_CONTAINER(content), 12);
+  gtk_box_set_spacing(GTK_BOX(content), 6);
+
+  /* Width */
+  GtkWidget *hb_w = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+  gtk_box_pack_start(GTK_BOX(hb_w), gtk_label_new("Width:"), FALSE, FALSE, 0);
+  GtkWidget *spin_w = gtk_spin_button_new_with_range(100, 16384, 1);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin_w), 1920);
+  gtk_box_pack_start(GTK_BOX(hb_w), spin_w, FALSE, FALSE, 0);
+  gtk_box_pack_start(GTK_BOX(content), hb_w, FALSE, FALSE, 0);
+
+  /* Height */
+  GtkWidget *hb_h = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+  gtk_box_pack_start(GTK_BOX(hb_h), gtk_label_new("Height:"), FALSE, FALSE, 0);
+  GtkWidget *spin_h = gtk_spin_button_new_with_range(100, 16384, 1);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin_h), 1080);
+  gtk_box_pack_start(GTK_BOX(hb_h), spin_h, FALSE, FALSE, 0);
+  gtk_box_pack_start(GTK_BOX(content), hb_h, FALSE, FALSE, 0);
+
+  /* Grayscale */
+  GtkWidget *chk_gray = gtk_check_button_new_with_label("Grayscale (shades of gray instead of color)");
+  gtk_box_pack_start(GTK_BOX(content), chk_gray, FALSE, FALSE, 0);
+
+  /* Show free space */
+  GtkWidget *chk_free = gtk_check_button_new_with_label("Show free space tile");
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(chk_free), app->interface_treemap_show_free_space);
+  gtk_box_pack_start(GTK_BOX(content), chk_free, FALSE, FALSE, 0);
+
+  gtk_widget_show_all(content);
+
+  if (gtk_dialog_run(GTK_DIALOG(dlg)) != GTK_RESPONSE_OK) {
+    gtk_widget_destroy(dlg);
+    g_free(output_path);
+    return;
+  }
+
+  int exp_w  = (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(spin_w));
+  int exp_h  = (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(spin_h));
+  gboolean gray      = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(chk_gray));
+  gboolean show_free = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(chk_free));
+  gtk_widget_destroy(dlg);
+
+  uint64_t used_b = (app->volume_total_bytes > app->volume_free_bytes)
+                    ? app->volume_total_bytes - app->volume_free_bytes : 0u;
+
+  gboolean ok = treemap_widget_export_png(TREEMAP_WIDGET(app->treemap),
+                                          output_path, exp_w, exp_h,
+                                          gray, show_free,
+                                          app->volume_free_bytes, used_b);
+  if (!ok) {
+    GtkWidget *err = gtk_message_dialog_new(GTK_WINDOW(app->window),
+                                            GTK_DIALOG_MODAL,
+                                            GTK_MESSAGE_ERROR,
+                                            GTK_BUTTONS_OK,
+                                            "Failed to export treemap PNG.\n"
+                                            "Make sure the treemap is visible and a scan is loaded.");
+    gtk_dialog_run(GTK_DIALOG(err));
+    gtk_widget_destroy(err);
+  }
+  g_free(output_path);
 }
 
 #if defined(G_OS_WIN32)
@@ -1656,6 +1821,44 @@ void da_ui_build(AppState *app) {
       gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(show_tm_mi), app->interface_show_treemap);
       g_signal_handlers_unblock_by_func(show_tm_mi, G_CALLBACK(on_options_menu_show_treemap_toggled), app);
       g_signal_connect(show_tm_mi, "toggled", G_CALLBACK(on_options_menu_show_treemap_toggled), app);
+    }
+  }
+  {
+    GtkWidget *w = GTK_WIDGET(gtk_builder_get_object(builder, "options_menu_show_free_space"));
+    if (w != NULL && GTK_IS_CHECK_MENU_ITEM(w)) {
+      g_signal_handlers_block_by_func(w, G_CALLBACK(on_options_menu_show_free_space_toggled), app);
+      gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(w), app->interface_treemap_show_free_space);
+      g_signal_handlers_unblock_by_func(w, G_CALLBACK(on_options_menu_show_free_space_toggled), app);
+      g_signal_connect(w, "toggled", G_CALLBACK(on_options_menu_show_free_space_toggled), app);
+    }
+  }
+  {
+    GtkWidget *w = GTK_WIDGET(gtk_builder_get_object(builder, "options_menu_show_free_labels"));
+    if (w != NULL && GTK_IS_CHECK_MENU_ITEM(w)) {
+      g_signal_handlers_block_by_func(w, G_CALLBACK(on_options_menu_show_free_labels_toggled), app);
+      gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(w), app->interface_treemap_show_labels);
+      g_signal_handlers_unblock_by_func(w, G_CALLBACK(on_options_menu_show_free_labels_toggled), app);
+      g_signal_connect(w, "toggled", G_CALLBACK(on_options_menu_show_free_labels_toggled), app);
+    }
+  }
+  {
+    GtkWidget *w = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_zoom_in"));
+    app->file_menu_zoom_in = w;
+    if (w != NULL) {
+      g_signal_connect(w, "activate", G_CALLBACK(on_file_menu_zoom_in_activate), app);
+    }
+  }
+  {
+    GtkWidget *w = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_zoom_out"));
+    app->file_menu_zoom_out = w;
+    if (w != NULL) {
+      g_signal_connect(w, "activate", G_CALLBACK(on_file_menu_zoom_out_activate), app);
+    }
+  }
+  {
+    GtkWidget *w = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_treemap_image"));
+    if (w != NULL) {
+      g_signal_connect(w, "activate", G_CALLBACK(on_file_menu_treemap_image_activate), app);
     }
   }
   {

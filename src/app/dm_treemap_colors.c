@@ -100,22 +100,45 @@ gboolean dm_treemap_tile_show_border(double width, double height, const DmTreema
   return TRUE;
 }
 
-static void dm_treemap_stroke_inner_border(cairo_t *cr, double x, double y, double width, double height,
-                                           uint32_t dark_rgba, const DmTreemapStyle *style) {
+/**
+ * Draws a 1-pixel raised bevel around a tile.
+ * The top and left edges are painted with @p light_rgba (highlight),
+ * the bottom and right edges with @p dark_rgba (shadow), giving the tile
+ * a raised, WizTree-style appearance.
+ */
+static void dm_treemap_stroke_bevel(cairo_t *cr, double x, double y, double width, double height,
+                                    uint32_t light_rgba, uint32_t dark_rgba,
+                                    const DmTreemapStyle *style) {
   if (!dm_treemap_tile_show_border(width, height, style)) {
     return;
   }
+  double hl_r, hl_g, hl_b, hl_a;
   double dk_r, dk_g, dk_b, dk_a;
-  dm_unpack_rgba_u32(dark_rgba, &dk_r, &dk_g, &dk_b, &dk_a);
-  double ba = dk_a * style->border_strength;
-  if (ba > 1.0) {
-    ba = 1.0;
-  }
+  dm_unpack_rgba_u32(light_rgba, &hl_r, &hl_g, &hl_b, &hl_a);
+  dm_unpack_rgba_u32(dark_rgba,  &dk_r, &dk_g, &dk_b, &dk_a);
+
+  double ha = hl_a * style->border_strength;
+  double sa = dk_a * style->border_strength;
+  if (ha > 1.0) ha = 1.0;
+  if (sa > 1.0) sa = 1.0;
+
   cairo_save(cr);
-  cairo_set_source_rgba(cr, dk_r, dk_g, dk_b, ba);
   cairo_set_line_width(cr, 1.0);
-  cairo_rectangle(cr, x + 0.5, y + 0.5, width - 1.0, height - 1.0);
+
+  /* Highlight: top edge then left edge. */
+  cairo_set_source_rgba(cr, hl_r, hl_g, hl_b, ha);
+  cairo_move_to(cr, x + 0.5,           y + height - 0.5);
+  cairo_line_to(cr, x + 0.5,           y + 0.5);
+  cairo_line_to(cr, x + width  - 0.5,  y + 0.5);
   cairo_stroke(cr);
+
+  /* Shadow: right edge then bottom edge. */
+  cairo_set_source_rgba(cr, dk_r, dk_g, dk_b, sa);
+  cairo_move_to(cr, x + width  - 0.5,  y + 0.5);
+  cairo_line_to(cr, x + width  - 0.5,  y + height - 0.5);
+  cairo_line_to(cr, x + 0.5,           y + height - 0.5);
+  cairo_stroke(cr);
+
   cairo_restore(cr);
 }
 
@@ -141,7 +164,7 @@ void dm_treemap_draw_gradient_tile(cairo_t *cr, const file_node_t *node, double 
     cairo_set_source_rgba(cr, rf, gf, bf, af);
     cairo_rectangle(cr, x, y, width, height);
     cairo_fill(cr);
-    dm_treemap_stroke_inner_border(cr, x, y, width, height, dark_rgba, style);
+    dm_treemap_stroke_bevel(cr, x, y, width, height, light_rgba, dark_rgba, style);
     return;
   }
 
@@ -170,7 +193,7 @@ void dm_treemap_draw_gradient_tile(cairo_t *cr, const file_node_t *node, double 
   cairo_restore(cr);
   cairo_pattern_destroy(pat);
 
-  dm_treemap_stroke_inner_border(cr, x, y, width, height, dark_rgba, style);
+  dm_treemap_stroke_bevel(cr, x, y, width, height, light_rgba, dark_rgba, style);
 }
 
 void dm_treemap_draw_dir_gradient_tile(cairo_t *cr, double x, double y, double width, double height,

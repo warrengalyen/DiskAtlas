@@ -1003,14 +1003,19 @@ static void da_refresh_treemap(AppState *app) {
     if (app->scan != NULL) {
       v = scan_get_results(app->scan);
     }
-    root_for_treemap = app->scan_root_utf8 != NULL ? app->scan_root_utf8 : "";
-    if (root_for_treemap[0] == '\0' && app->csv_import_active && v.nodes != NULL && v.count > 0u) {
-      if (app->csv_derived_root_utf8 != NULL && app->csv_derived_root_utf8[0] != '\0') {
-        root_for_treemap = app->csv_derived_root_utf8;
-      } else {
-        derived_root = da_derive_treemap_root_from_nodes(v.nodes, v.count);
-        if (derived_root != NULL && derived_root[0] != '\0') {
-          root_for_treemap = derived_root;
+    /* Use zoom root when set, otherwise fall back to scan / CSV root. */
+    if (app->treemap_zoom_root_utf8 != NULL && app->treemap_zoom_root_utf8[0] != '\0') {
+      root_for_treemap = app->treemap_zoom_root_utf8;
+    } else {
+      root_for_treemap = app->scan_root_utf8 != NULL ? app->scan_root_utf8 : "";
+      if (root_for_treemap[0] == '\0' && app->csv_import_active && v.nodes != NULL && v.count > 0u) {
+        if (app->csv_derived_root_utf8 != NULL && app->csv_derived_root_utf8[0] != '\0') {
+          root_for_treemap = app->csv_derived_root_utf8;
+        } else {
+          derived_root = da_derive_treemap_root_from_nodes(v.nodes, v.count);
+          if (derived_root != NULL && derived_root[0] != '\0') {
+            root_for_treemap = derived_root;
+          }
         }
       }
     }
@@ -1057,6 +1062,8 @@ static void on_treemap_selected(GtkWidget *treemap, gint64 scan_index, gpointer 
   da_ui_sync_file_menu(app);
 }
 
+static const char *da_effective_treemap_root(AppState *app);
+
 static void on_treemap_hover(GtkWidget *treemap, gint64 scan_index, gpointer user_data) {
   AppState *app = (AppState *)user_data;
   (void)treemap;
@@ -1072,6 +1079,19 @@ static void on_treemap_hover(GtkWidget *treemap, gint64 scan_index, gpointer use
                        "Other (merged entries beyond treemap tile cap)");
     return;
   }
+  if (scan_index == TREEMAP_SCAN_INDEX_FREE_SPACE) {
+    /* Hovering over the free-space tile: show "Free Space: [<root>] <size>". */
+    char free_sz[64];
+    da_format_bytes(app->volume_free_bytes, free_sz, sizeof(free_sz));
+    /* Use the most specific available root: zoom root → scan root → CSV derived root. */
+    const char *root_lbl = da_effective_treemap_root(app);
+    gchar *msg = g_strdup_printf("Free Space: [%s] %s",
+                                  root_lbl != NULL ? root_lbl : "?",
+                                  free_sz);
+    gtk_label_set_text(GTK_LABEL(app->status_label_center), msg);
+    g_free(msg);
+    return;
+  }
   if (scan_index < 0 || app->scan == NULL) {
     gtk_label_set_text(GTK_LABEL(app->status_label_center), "");
     return;
@@ -1084,6 +1104,146 @@ static void on_treemap_hover(GtkWidget *treemap, gint64 scan_index, gpointer use
   }
   const char *p = v.nodes[ix].path;
   gtk_label_set_text(GTK_LABEL(app->status_label_center), p != NULL ? p : "");
+}
+
+/* ---- Treemap zoom --------------------------------------------------------- */
+
+/**
+ * Return the effective scan root for zoom navigation: the zoom root when set,
+ * otherwise the scan root or CSV-derived root.
+ */
+static const char *da_effective_treemap_root(AppState *app) {
+  if (app->treemap_zoom_root_utf8 != NULL && app->treemap_zoom_root_utf8[0] != '\0') {
+    return app->treemap_zoom_root_utf8;
+  }
+  if (app->scan_root_utf8 != NULL && app->scan_root_utf8[0] != '\0') {
+    return app->scan_root_utf8;
+  }
+  if (app->csv_import_active && app->csv_derived_root_utf8 != NULL) {
+    return app->csv_derived_root_utf8;
+  }
+  return NULL;
+}
+
+/**
+ * Zoom the treemap to the directory at @p path_utf8.  If @p path_utf8 already
+ * equals or is above the effective root, the zoom is cleared instead.
+ */
+static void da_treemap_zoom_to_path(AppState *app, const char *path_utf8) {
+  const char *base_root;
+  if (path_utf8 == NULL || path_utf8[0] == '\0') {
+    return;
+  }
+  /* If the target is the scan root or above it, reset the zoom. */
+  base_root = app->scan_root_utf8;
+  if (base_root == NULL) {
+    base_root = app->csv_derived_root_utf8;
+  }
+  if (base_root != NULL && strcmp(path_utf8, base_root) == 0) {
+    g_free(app->treemap_zoom_root_utf8);
+    app->treemap_zoom_root_utf8 = NULL;
+  } else {
+    g_free(app->treemap_zoom_root_utf8);
+    app->treemap_zoom_root_utf8 = g_strdup(path_utf8);
+  }
+  da_refresh_treemap(app);
+  /* Zoom state changed — update zoom-in / zoom-out menu sensitivity. */
+  da_ui_sync_file_menu(app);
+}
+
+static void on_treemap_zoom_in_cb(GtkWidget *treemap, gint64 scan_index, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  (void)treemap;
+  if (app == NULL || scan_index < 0 || app->scan == NULL) {
+    return;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (v.nodes == NULL || (size_t)scan_index >= v.count) {
+    return;
+  }
+  const file_node_t *fn = &v.nodes[(size_t)scan_index];
+  if (fn->path == NULL || fn->path[0] == '\0') {
+    return;
+  }
+  uint32_t kind = fn->attributes & DISKATLAS_NODE_KIND_MASK;
+  gchar *zoom_path;
+  if (kind == DISKATLAS_NODE_KIND_DIR) {
+    zoom_path = g_strdup(fn->path);
+  } else {
+    zoom_path = g_path_get_dirname(fn->path);
+  }
+  da_treemap_zoom_to_path(app, zoom_path);
+  g_free(zoom_path);
+}
+
+void scan_controller_treemap_zoom_in(AppState *app) {
+  if (app == NULL || app->treemap == NULL || !TREEMAP_IS_WIDGET(app->treemap)) {
+    return;
+  }
+  if (app->scan == NULL) {
+    return;
+  }
+  GArray *sel_nids = g_array_new(FALSE, FALSE, sizeof(size_t));
+  treemap_widget_append_selected_scan_indices(TREEMAP_WIDGET(app->treemap), sel_nids);
+  if (sel_nids->len == 0) {
+    g_array_free(sel_nids, TRUE);
+    return;
+  }
+  size_t first_nid = g_array_index(sel_nids, size_t, 0);
+  g_array_free(sel_nids, TRUE);
+
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (v.nodes == NULL || first_nid >= v.count) {
+    return;
+  }
+  const file_node_t *fn = &v.nodes[first_nid];
+  if (fn->path == NULL || fn->path[0] == '\0') {
+    return;
+  }
+  uint32_t kind = fn->attributes & DISKATLAS_NODE_KIND_MASK;
+  gchar *zoom_path;
+  if (kind == DISKATLAS_NODE_KIND_DIR) {
+    zoom_path = g_strdup(fn->path);
+  } else {
+    zoom_path = g_path_get_dirname(fn->path);
+  }
+  da_treemap_zoom_to_path(app, zoom_path);
+  g_free(zoom_path);
+}
+
+void scan_controller_treemap_zoom_out(AppState *app) {
+  const char *current_root;
+  gchar *parent;
+  const char *base_root;
+
+  if (app == NULL) {
+    return;
+  }
+  current_root = da_effective_treemap_root(app);
+  if (current_root == NULL || current_root[0] == '\0') {
+    return;
+  }
+  /* If we are already at the scan root there is nothing to zoom out to. */
+  base_root = app->scan_root_utf8;
+  if (base_root == NULL) {
+    base_root = app->csv_derived_root_utf8;
+  }
+  if (base_root != NULL && strcmp(current_root, base_root) == 0) {
+    return;
+  }
+  /* Move up one directory level. */
+  parent = g_path_get_dirname(current_root);
+  if (parent == NULL || strcmp(parent, current_root) == 0) {
+    /* Already at filesystem root — clear zoom. */
+    g_free(parent);
+    g_free(app->treemap_zoom_root_utf8);
+    app->treemap_zoom_root_utf8 = NULL;
+    da_refresh_treemap(app);
+    da_ui_sync_file_menu(app);
+    return;
+  }
+  da_treemap_zoom_to_path(app, parent);
+  g_free(parent);
 }
 
 static void kill_timer(guint *id) {
@@ -1685,6 +1845,9 @@ static void start_scan(AppState *app) {
   g_free(app->csv_derived_root_utf8);
   app->csv_derived_root_utf8 = NULL;
   app->import_snapshot_is_raw_mft = FALSE;
+  /* Clear any zoom state when a new scan starts. */
+  g_free(app->treemap_zoom_root_utf8);
+  app->treemap_zoom_root_utf8 = NULL;
 
   kill_all_timers(app);
   if (app->flat_list_model != NULL) {
@@ -1933,9 +2096,17 @@ void scan_controller_refresh_volume_labels(AppState *app) {
     return;
   }
   app->volume_total_bytes = tot;
+  app->volume_free_bytes  = free_b;
   app->volume_pct_denominator_bytes = (used_b > 0u) ? used_b : tot;
   if (app->flat_list_model != NULL) {
     flat_list_model_invalidate(app->flat_list_model);
+  }
+  /* Propagate updated free-space info to the treemap widget. */
+  if (app->treemap != NULL && TREEMAP_IS_WIDGET(app->treemap)) {
+    treemap_widget_set_free_space(TREEMAP_WIDGET(app->treemap),
+                                  app->interface_treemap_show_free_space,
+                                  free_b, (used_b > 0u) ? used_b : tot,
+                                  app->scan_root_utf8);
   }
   char a[64];
   char use_line[160];
@@ -2052,6 +2223,9 @@ void scan_controller_attach(AppState *app) {
   if (app->treemap != NULL && TREEMAP_IS_WIDGET(app->treemap)) {
     treemap_widget_set_selected_callback(TREEMAP_WIDGET(app->treemap), on_treemap_selected, app);
     treemap_widget_set_hover_callback(TREEMAP_WIDGET(app->treemap), on_treemap_hover, app);
+    treemap_widget_set_zoom_callback(TREEMAP_WIDGET(app->treemap), on_treemap_zoom_in_cb, app);
+    /* Apply initial label and show-labels state from loaded preferences. */
+    treemap_widget_set_show_labels(TREEMAP_WIDGET(app->treemap), app->interface_treemap_show_labels);
   }
 }
 
@@ -2136,6 +2310,10 @@ void scan_controller_apply_imported_scan(AppState *app, scan_result_t *new_scan,
   }
 
   app->scan = new_scan;
+
+  /* Clear zoom root on every import so the new root is shown in full. */
+  g_free(app->treemap_zoom_root_utf8);
+  app->treemap_zoom_root_utf8 = NULL;
 
   if (snapshot_layout && snapshot_path_utf8 != NULL && snapshot_path_utf8[0] != '\0') {
     app->csv_import_active = TRUE;

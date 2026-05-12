@@ -32,6 +32,8 @@
 #define DA_KEY_SHOW_HEADER "show_header"
 #define DA_KEY_SHOW_FILE_TYPES "show_file_types"
 #define DA_KEY_SHOW_TREEMAP "show_treemap"
+#define DA_KEY_TREEMAP_SHOW_FREE_SPACE "treemap_show_free_space"
+#define DA_KEY_TREEMAP_SHOW_LABELS "treemap_show_labels"
 #define DA_SEC_GENERAL "general"
 #define DA_KEY_ENABLE_RENAME "enable_rename"
 
@@ -245,6 +247,8 @@ void da_ini_load_interface(AppState *app) {
   app->interface_show_header = TRUE;
   app->interface_show_file_types = TRUE;
   app->interface_show_treemap = TRUE;
+  app->interface_treemap_show_free_space = FALSE;
+  app->interface_treemap_show_labels = TRUE;
   app->interface_size_display_format = DA_SIZE_DISPLAY_DYNAMIC;
 
   gint places = 1;
@@ -284,6 +288,16 @@ void da_ini_load_interface(AppState *app) {
         gboolean tm = g_key_file_get_boolean(kf, DA_SEC_INTERFACE, DA_KEY_SHOW_TREEMAP, &err);
         g_clear_error(&err);
         app->interface_show_treemap = tm;
+      }
+      if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_TREEMAP_SHOW_FREE_SPACE, NULL)) {
+        gboolean fs = g_key_file_get_boolean(kf, DA_SEC_INTERFACE, DA_KEY_TREEMAP_SHOW_FREE_SPACE, &err);
+        g_clear_error(&err);
+        app->interface_treemap_show_free_space = fs;
+      }
+      if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_TREEMAP_SHOW_LABELS, NULL)) {
+        gboolean sl = g_key_file_get_boolean(kf, DA_SEC_INTERFACE, DA_KEY_TREEMAP_SHOW_LABELS, &err);
+        g_clear_error(&err);
+        app->interface_treemap_show_labels = sl;
       }
       if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DISPLAY_FORMAT, NULL)) {
         gint sf = g_key_file_get_integer(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DISPLAY_FORMAT, &err);
@@ -381,6 +395,8 @@ void da_ini_save_interface(const AppState *app) {
   g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_SHOW_HEADER, app->interface_show_header);
   g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_SHOW_FILE_TYPES, app->interface_show_file_types);
   g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_SHOW_TREEMAP, app->interface_show_treemap);
+  g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_TREEMAP_SHOW_FREE_SPACE, app->interface_treemap_show_free_space);
+  g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_TREEMAP_SHOW_LABELS, app->interface_treemap_show_labels);
   {
     gint sf = app->interface_size_display_format;
     if (sf < (gint)DA_SIZE_DISPLAY_DYNAMIC || sf > (gint)DA_SIZE_DISPLAY_TB) {

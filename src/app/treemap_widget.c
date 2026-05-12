@@ -13,6 +13,7 @@
 #include "treemap_widget.h"
 
 void treemap_widget_append_selected_scan_indices(TreemapWidget *w, GArray *out_nids);
+gboolean treemap_widget_has_selection(TreemapWidget *w);
 void treemap_widget_add_to_selection_by_scan_index(TreemapWidget *w, gint64 scan_index);
 
 static void treemap_collect_selected_scan_nids_from_rects(const TreemapWidget *w, GArray *out_nids);
@@ -20,11 +21,23 @@ static void treemap_persist_sync_from_visual(TreemapWidget *self);
 static void treemap_append_unique_nid(GArray *out, size_t nid);
 
 /* ---- visual constants ---------------------------------------------------- */
+#define TREEMAP_PADDING  4.0  /* gap between widget edge and rendered tile area  */
 #define DIR_HEADER_H    16.0  /* pixel height reserved for folder header strip  */
 #define MIN_LABEL_W     72.0  /* min rect width  to show any text               */
 #define MIN_LABEL_H     13.0  /* min rect height to show any text               */
 #define LARGE_W         90.0  /* rect width  threshold for normal-font label    */
 #define LARGE_H         26.0  /* rect height threshold for normal-font label    */
+
+/* Directory header strip background color (#393939) and 1-px raised bevel colors. */
+#define DA_DIR_HDR_BG_R   (0x39 / 255.0)  /* fill: #393939 */
+#define DA_DIR_HDR_BG_G   (0x39 / 255.0)
+#define DA_DIR_HDR_BG_B   (0x39 / 255.0)
+#define DA_DIR_HDR_HL_R   (0x52 / 255.0)  /* bevel highlight (top/left)    */
+#define DA_DIR_HDR_HL_G   (0x52 / 255.0)
+#define DA_DIR_HDR_HL_B   (0x52 / 255.0)
+#define DA_DIR_HDR_SH_R   (0x22 / 255.0)  /* bevel shadow   (bottom/right) */
+#define DA_DIR_HDR_SH_G   (0x22 / 255.0)
+#define DA_DIR_HDR_SH_B   (0x22 / 255.0)
 
 /* Hover / selection border appearance */
 #define HOVER_BORDER_R  1.00  /* border color (white) */
@@ -69,6 +82,7 @@ struct _TreemapWidget {
 
   int hovered_index;
   int hovered_dir_index;    /* index into dir_labels[] whose header is under the cursor  */
+  gboolean hovered_free_space; /* TRUE when cursor is over the free-space tile             */
 
   /* Multi-selection: GArray of gint rect/dir indices. */
   GArray *selected_rect_indices; /* gint elements – indices into rects[]      */
@@ -92,6 +106,21 @@ struct _TreemapWidget {
   PangoLayout *pango_layout_hdr;/* bold font sized to DIR_HEADER_H – dir headers */
   /** WinDirStat/WizTree-style treemap lighting (gradient fills, optional borders). */
   DmTreemapStyle treemap_style;
+
+  /* ---- Free-space tile --------------------------------------------------- */
+  gboolean  show_free_space;
+  uint64_t  free_bytes_for_display;
+  uint64_t  used_bytes_for_display;
+  gchar    *free_space_root_utf8;    /* volume/folder label shown on tile (owned) */
+  treemap_rect_t free_space_rect;    /* reserved strip for the free-space tile   */
+  gboolean  free_space_rect_valid;   /* TRUE when free_space_rect is meaningful   */
+
+  /* ---- Label visibility -------------------------------------------------- */
+  gboolean  show_labels;             /* when FALSE, skip Pass 4 + Pass 5         */
+
+  /* ---- Zoom callback (double-click) --------------------------------------- */
+  void (*on_zoom_in)(GtkWidget *, gint64, gpointer);
+  gpointer on_zoom_in_data;
 };
 
 G_DEFINE_TYPE(TreemapWidget, treemap_widget, GTK_TYPE_DRAWING_AREA)
@@ -384,6 +413,7 @@ typedef struct {
   TreemapDirLabel *dir_labs;
   size_t n_dir;
   size_t cap_dir;
+  gboolean show_headers; /* when FALSE, skip DIR_HEADER_H reservation and dir_lab push */
 } LayoutOut;
 
 static int layout_push_rect(LayoutOut *out, double x, double y, double w, double h, size_t scan_ix,
@@ -610,8 +640,9 @@ static void layout_squarify_node(LayoutOut *out, TreemapNode *n,
   inner_y = y;
   inner_h = h;
 
-  /* Folder header strip – only when named and rect has enough room. */
-  if (n->name != NULL && n->name[0] != '\0' && w > MIN_LABEL_W && h > DIR_HEADER_H + 4.0) {
+  /* Folder header strip – only when named, rect has enough room, and headers are enabled. */
+  if (out->show_headers &&
+      n->name != NULL && n->name[0] != '\0' && w > MIN_LABEL_W && h > DIR_HEADER_H + 4.0) {
     char szb[64];
     gchar *lab;
     da_format_bytes(n->agg, szb, sizeof szb);
@@ -662,7 +693,7 @@ static void layout_squarify_node(LayoutOut *out, TreemapNode *n,
   g_free(order);
 }
 
-/* ---- colour helpers ------------------------------------------------------ */
+/* ---- color helpers ------------------------------------------------------ */
 
 static void hsv_to_rgb(double h, double s, double v, double *r, double *g, double *b) {
   double c = v * s;
@@ -820,6 +851,7 @@ static void treemap_persist_sync_from_visual(TreemapWidget *self) {
 
 static void treemap_run_layout(TreemapWidget *self, int wid, int hei) {
   LayoutOut out = {0};
+  out.show_headers = self->show_labels;
   GArray *preserve_scan_nids = g_array_new(FALSE, FALSE, sizeof(size_t));
   guint pi;
 
@@ -837,11 +869,14 @@ static void treemap_run_layout(TreemapWidget *self, int wid, int hei) {
 
   treemap_clear_layout_buffers(self);
   self->layout_ok = FALSE;
-  self->hovered_index     = -1;
-  self->hovered_dir_index = -1;
+  self->hovered_index      = -1;
+  self->hovered_dir_index  = -1;
+  self->hovered_free_space = FALSE;
   if (self->selected_rect_indices) g_array_set_size(self->selected_rect_indices, 0);
   if (self->selected_dir_indices)  g_array_set_size(self->selected_dir_indices,  0);
   self->anchor_rect_index = -1;
+
+  self->free_space_rect_valid = FALSE;
 
   if (self->tree_root == NULL || wid < 2 || hei < 2) {
     if (self->persist_sel_nids != NULL) {
@@ -858,7 +893,45 @@ static void treemap_run_layout(TreemapWidget *self, int wid, int hei) {
     return;
   }
 
-  layout_squarify_node(&out, self->tree_root, 0.0, 0.0, (double)wid, (double)hei);
+  /* All tile rendering is inset from the widget edge by TREEMAP_PADDING pixels. */
+  {
+    double p          = TREEMAP_PADDING;
+    double content_w  = (double)wid - 2.0 * p;
+    double content_h  = (double)hei - 2.0 * p;
+    double data_w     = content_w;
+    double data_h     = content_h;
+
+    if (self->show_free_space && self->free_bytes_for_display > 0u) {
+      uint64_t total = self->used_bytes_for_display + self->free_bytes_for_display;
+      if (total > 0u) {
+        double free_ratio = (double)self->free_bytes_for_display / (double)total;
+        if (wid >= hei) {
+          /* Landscape: reserve a right strip inside the padded area. */
+          int strip_w = (int)(free_ratio * content_w);
+          if (strip_w < 2) strip_w = 2;
+          if (strip_w > (int)content_w - 2) strip_w = (int)content_w - 2;
+          data_w = content_w - (double)strip_w;
+          self->free_space_rect.x = p + data_w;
+          self->free_space_rect.y = p;
+          self->free_space_rect.w = (double)strip_w;
+          self->free_space_rect.h = content_h;
+        } else {
+          /* Portrait: reserve a bottom strip inside the padded area. */
+          int strip_h = (int)(free_ratio * content_h);
+          if (strip_h < 2) strip_h = 2;
+          if (strip_h > (int)content_h - 2) strip_h = (int)content_h - 2;
+          data_h = content_h - (double)strip_h;
+          self->free_space_rect.x = p;
+          self->free_space_rect.y = p + data_h;
+          self->free_space_rect.w = content_w;
+          self->free_space_rect.h = (double)strip_h;
+        }
+        self->free_space_rect_valid = TRUE;
+      }
+    }
+
+    layout_squarify_node(&out, self->tree_root, p, p, data_w, data_h);
+  }
 
   self->rects = out.rects;
   self->rect_count = out.n_rects;
@@ -922,15 +995,18 @@ static int treemap_hit_dir_header(const TreemapWidget *self, double px, double p
 #define DA_TREEMAP_DBG(...) ((void)0)
 #endif
 
-static gboolean treemap_draw(GtkWidget *widget, cairo_t *cr) {
-  TreemapWidget *self = TREEMAP_WIDGET(widget);
+/**
+ * Core drawing routine shared by the live GTK draw callback and the PNG export path.
+ * All state is read from @p self (layout must already be valid).
+ */
+static void treemap_draw_to_cr(TreemapWidget *self, cairo_t *cr) {
   size_t i;
 
   cairo_set_source_rgb(cr, 0.06, 0.06, 0.07);
   cairo_paint(cr);
 
   if (!self->layout_ok || self->rects == NULL || self->nodes == NULL) {
-    return FALSE;
+    return;
   }
 
   DA_TREEMAP_DBG("[g] Treemap gradient enabled=%d", self->treemap_style.enable_tile_gradients ? 1 : 0);
@@ -956,12 +1032,29 @@ static gboolean treemap_draw(GtkWidget *widget, cairo_t *cr) {
     }
   }
 
-  /* --- Pass 2: directory header strip backgrounds --- */
-  cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.58);
-  for (i = 0; i < self->dir_label_count; i++) {
-    const TreemapDirLabel *L = &self->dir_labels[i];
-    cairo_rectangle(cr, L->x, L->y, L->w, L->h);
-    cairo_fill(cr);
+  /* --- Pass 2: directory header strip backgrounds (omitted when labels are hidden) --- */
+  if (self->show_labels) {
+    for (i = 0; i < self->dir_label_count; i++) {
+      const TreemapDirLabel *L = &self->dir_labels[i];
+      /* Solid fill with #393939. */
+      cairo_set_source_rgb(cr, DA_DIR_HDR_BG_R, DA_DIR_HDR_BG_G, DA_DIR_HDR_BG_B);
+      cairo_rectangle(cr, L->x, L->y, L->w, L->h);
+      cairo_fill(cr);
+      /* 1-pixel raised bevel: highlight top/left, shadow bottom/right. */
+      if (L->w >= 4.0 && L->h >= 4.0) {
+        cairo_set_line_width(cr, 1.0);
+        cairo_set_source_rgb(cr, DA_DIR_HDR_HL_R, DA_DIR_HDR_HL_G, DA_DIR_HDR_HL_B);
+        cairo_move_to(cr, L->x + 0.5,           L->y + L->h - 0.5);
+        cairo_line_to(cr, L->x + 0.5,           L->y + 0.5);
+        cairo_line_to(cr, L->x + L->w - 0.5,    L->y + 0.5);
+        cairo_stroke(cr);
+        cairo_set_source_rgb(cr, DA_DIR_HDR_SH_R, DA_DIR_HDR_SH_G, DA_DIR_HDR_SH_B);
+        cairo_move_to(cr, L->x + L->w - 0.5,    L->y + 0.5);
+        cairo_line_to(cr, L->x + L->w - 0.5,    L->y + L->h - 0.5);
+        cairo_line_to(cr, L->x + 0.5,           L->y + L->h - 0.5);
+        cairo_stroke(cr);
+      }
+    }
   }
 
   /* --- Pass 3: hover / selected border on file/dir rects ---
@@ -1009,46 +1102,48 @@ static gboolean treemap_draw(GtkWidget *widget, cairo_t *cr) {
   }
 
   /* --- Pass 4: file rect labels (dynamic font size based on rect area) --- */
-  cairo_set_source_rgb(cr, 0.94, 0.94, 0.95);
-  for (i = 0; i < self->rect_count; i++) {
-    const treemap_rect_t *R = &self->rects[i];
-    const char *txt;
-    PangoLayout *pl;
+  if (self->show_labels) {
+    cairo_set_source_rgb(cr, 0.94, 0.94, 0.95);
+    for (i = 0; i < self->rect_count; i++) {
+      const treemap_rect_t *R = &self->rects[i];
+      const char *txt;
+      PangoLayout *pl;
 
-    if (R->w < MIN_LABEL_W || R->h < MIN_LABEL_H) {
-      continue;
-    }
-    txt = (self->rect_labels != NULL) ? self->rect_labels[i] : NULL;
-    if (txt == NULL) {
-      continue;
-    }
+      if (R->w < MIN_LABEL_W || R->h < MIN_LABEL_H) {
+        continue;
+      }
+      txt = (self->rect_labels != NULL) ? self->rect_labels[i] : NULL;
+      if (txt == NULL) {
+        continue;
+      }
 
-    /* Use normal-font layout for large rects; small-font for medium rects. */
-    if (R->w >= LARGE_W && R->h >= LARGE_H && self->pango_layout != NULL) {
-      pl = self->pango_layout;
-    } else if (self->pango_layout_sm != NULL) {
-      pl = self->pango_layout_sm;
-    } else {
-      pl = self->pango_layout;
-    }
-    if (pl == NULL) {
-      continue;
-    }
+      /* Use normal-font layout for large rects; small-font for medium rects. */
+      if (R->w >= LARGE_W && R->h >= LARGE_H && self->pango_layout != NULL) {
+        pl = self->pango_layout;
+      } else if (self->pango_layout_sm != NULL) {
+        pl = self->pango_layout_sm;
+      } else {
+        pl = self->pango_layout;
+      }
+      if (pl == NULL) {
+        continue;
+      }
 
-    pango_layout_set_width(pl, (int)((R->w - 5.0) * PANGO_SCALE));
-    pango_layout_set_ellipsize(pl, PANGO_ELLIPSIZE_END);
-    pango_layout_set_text(pl, txt, -1);
+      pango_layout_set_width(pl, (int)((R->w - 5.0) * PANGO_SCALE));
+      pango_layout_set_ellipsize(pl, PANGO_ELLIPSIZE_END);
+      pango_layout_set_text(pl, txt, -1);
 
-    cairo_save(cr);
-    cairo_rectangle(cr, R->x, R->y, R->w, R->h);
-    cairo_clip(cr);
-    cairo_move_to(cr, R->x + 3.0, R->y + 2.0);
-    pango_cairo_show_layout(cr, pl);
-    cairo_restore(cr);
+      cairo_save(cr);
+      cairo_rectangle(cr, R->x, R->y, R->w, R->h);
+      cairo_clip(cr);
+      cairo_move_to(cr, R->x + 3.0, R->y + 1.0);
+      pango_cairo_show_layout(cr, pl);
+      cairo_restore(cr);
+    }
   }
 
   /* --- Pass 5: directory header strip labels (font sized to DIR_HEADER_H) --- */
-  if (self->pango_layout_hdr != NULL) {
+  if (self->show_labels && self->pango_layout_hdr != NULL) {
     cairo_set_source_rgb(cr, 0.97, 0.97, 0.98);
     for (i = 0; i < self->dir_label_count; i++) {
       const TreemapDirLabel *L = &self->dir_labels[i];
@@ -1059,12 +1154,54 @@ static gboolean treemap_draw(GtkWidget *widget, cairo_t *cr) {
       cairo_save(cr);
       cairo_rectangle(cr, L->x, L->y, L->w, L->h);
       cairo_clip(cr);
-      cairo_move_to(cr, L->x + 3.0, L->y + 2.0);
+      cairo_move_to(cr, L->x + 3.0, L->y + 1.0);
       pango_cairo_show_layout(cr, self->pango_layout_hdr);
       cairo_restore(cr);
     }
   }
 
+  /* --- Pass 6: free-space tile (drawn last so it always appears above other content) --- */
+  if (self->free_space_rect_valid) {
+    const treemap_rect_t *FS = &self->free_space_rect;
+    /* Dark gray fill with a slightly lighter center gradient feel. */
+    cairo_set_source_rgb(cr, 0.18, 0.18, 0.20);
+    cairo_rectangle(cr, FS->x, FS->y, FS->w, FS->h);
+    cairo_fill(cr);
+    /* Thin border to separate it from the data tiles. */
+    cairo_set_source_rgba(cr, 0.50, 0.50, 0.52, 0.80);
+    cairo_set_line_width(cr, 1.0);
+    cairo_rectangle(cr, FS->x + 0.5, FS->y + 0.5, FS->w - 1.0, FS->h - 1.0);
+    cairo_stroke(cr);
+
+    /* Labels only when the tile is large enough and we have a pango layout. */
+    if (self->show_labels && self->pango_layout != NULL &&
+        FS->w >= MIN_LABEL_W && FS->h >= MIN_LABEL_H) {
+      char size_buf[64];
+      da_format_bytes(self->free_bytes_for_display, size_buf, sizeof(size_buf));
+      /* Match the statusbar hover format exactly. */
+      gchar *label;
+      if (self->free_space_root_utf8 != NULL && self->free_space_root_utf8[0] != '\0') {
+        label = g_strdup_printf("Free Space: [%s] %s", self->free_space_root_utf8, size_buf);
+      } else {
+        label = g_strdup_printf("Free Space: %s", size_buf);
+      }
+      cairo_set_source_rgb(cr, 0.80, 0.80, 0.82);
+      pango_layout_set_width(self->pango_layout, (int)((FS->w - 6.0) * PANGO_SCALE));
+      pango_layout_set_ellipsize(self->pango_layout, PANGO_ELLIPSIZE_END);
+      pango_layout_set_text(self->pango_layout, label, -1);
+      cairo_save(cr);
+      cairo_rectangle(cr, FS->x, FS->y, FS->w, FS->h);
+      cairo_clip(cr);
+      cairo_move_to(cr, FS->x + 4.0, FS->y + 4.0);
+      pango_cairo_show_layout(cr, self->pango_layout);
+      cairo_restore(cr);
+      g_free(label);
+    }
+  }
+}
+
+static gboolean treemap_draw(GtkWidget *widget, cairo_t *cr) {
+  treemap_draw_to_cr(TREEMAP_WIDGET(widget), cr);
   return FALSE;
 }
 
@@ -1074,15 +1211,30 @@ static gboolean treemap_motion(GtkWidget *w, GdkEventMotion *ev, gpointer user_d
   TreemapWidget *self = TREEMAP_WIDGET(user_data);
   int hit     = treemap_hit_index(self, ev->x, ev->y);
   int hit_dir = treemap_hit_dir_header(self, ev->x, ev->y);
+  gboolean over_free = FALSE;
   (void)w;
-  if (hit != self->hovered_index || hit_dir != self->hovered_dir_index) {
-    self->hovered_index     = hit;
-    self->hovered_dir_index = hit_dir;
+
+  /* Check whether the cursor is inside the free-space tile. */
+  if (self->free_space_rect_valid && hit < 0 && hit_dir < 0) {
+    const treemap_rect_t *FS = &self->free_space_rect;
+    if (ev->x >= FS->x && ev->x < FS->x + FS->w &&
+        ev->y >= FS->y && ev->y < FS->y + FS->h) {
+      over_free = TRUE;
+    }
+  }
+
+  if (hit != self->hovered_index || hit_dir != self->hovered_dir_index ||
+      over_free != self->hovered_free_space) {
+    self->hovered_index      = hit;
+    self->hovered_dir_index  = hit_dir;
+    self->hovered_free_space = over_free;
     gtk_widget_queue_draw(GTK_WIDGET(self));
     if (self->on_hover != NULL) {
       gint64 ix;
-      if (hit_dir >= 0 && (size_t)hit_dir < self->dir_label_count &&
-          self->dir_labels[hit_dir].scan_ix != (size_t)-1) {
+      if (over_free) {
+        ix = TREEMAP_SCAN_INDEX_FREE_SPACE;
+      } else if (hit_dir >= 0 && (size_t)hit_dir < self->dir_label_count &&
+                 self->dir_labels[hit_dir].scan_ix != (size_t)-1) {
         ix = (gint64)self->dir_labels[hit_dir].scan_ix;
       } else {
         ix = (hit < 0) ? -1 : (gint64)self->rects[hit].node_index;
@@ -1097,9 +1249,10 @@ static gboolean treemap_leave(GtkWidget *w, GdkEventCrossing *ev, gpointer user_
   TreemapWidget *self = TREEMAP_WIDGET(user_data);
   (void)w;
   (void)ev;
-  if (self->hovered_index >= 0 || self->hovered_dir_index >= 0) {
-    self->hovered_index     = -1;
-    self->hovered_dir_index = -1;
+  if (self->hovered_index >= 0 || self->hovered_dir_index >= 0 || self->hovered_free_space) {
+    self->hovered_index      = -1;
+    self->hovered_dir_index  = -1;
+    self->hovered_free_space = FALSE;
     gtk_widget_queue_draw(GTK_WIDGET(self));
     if (self->on_hover != NULL) {
       self->on_hover(GTK_WIDGET(self), -1, self->on_hover_data);
@@ -1165,6 +1318,12 @@ static gboolean treemap_button_press(GtkWidget *w, GdkEventButton *ev, gpointer 
   if (self->on_selected != NULL) {
     self->on_selected(GTK_WIDGET(self), ix, self->on_selected_data);
   }
+
+  /* Double-click fires the zoom-in callback on a tile hit. */
+  if (ev->type == GDK_2BUTTON_PRESS && (hit >= 0 || hit_dir >= 0) && self->on_zoom_in != NULL) {
+    self->on_zoom_in(GTK_WIDGET(self), ix, self->on_zoom_in_data);
+  }
+
   return FALSE;
 }
 
@@ -1247,6 +1406,7 @@ static void treemap_unrealize(GtkWidget *widget, gpointer user_data) {
 static void treemap_widget_finalize(GObject *object) {
   TreemapWidget *self = TREEMAP_WIDGET(object);
   g_free(self->root_utf8);
+  g_free(self->free_space_root_utf8);
   treemap_clear_tree(self);
   treemap_clear_layout_buffers(self);
   if (self->selected_rect_indices) {
@@ -1287,7 +1447,16 @@ static void treemap_widget_init(TreemapWidget *self) {
   self->anchor_rect_index    = -1;
   self->alloc_w = -1;
   self->alloc_h = -1;
+  self->hovered_free_space   = FALSE;
   self->treemap_style = DM_TREEMAP_STYLE_INIT_DEFAULT;
+  self->show_free_space        = FALSE;
+  self->free_bytes_for_display = 0u;
+  self->used_bytes_for_display = 0u;
+  self->free_space_root_utf8   = NULL;
+  self->free_space_rect_valid  = FALSE;
+  self->show_labels            = TRUE;
+  self->on_zoom_in             = NULL;
+  self->on_zoom_in_data        = NULL;
   g_signal_connect(self, "size-allocate", G_CALLBACK(treemap_size_allocate), self);
   g_signal_connect(self, "realize", G_CALLBACK(treemap_realize), self);
   g_signal_connect(self, "unrealize", G_CALLBACK(treemap_unrealize), self);
@@ -1491,4 +1660,172 @@ void treemap_widget_append_selected_scan_indices(TreemapWidget *w, GArray *out_n
       }
     }
   }
+}
+
+gboolean treemap_widget_has_selection(TreemapWidget *w) {
+  g_return_val_if_fail(TREEMAP_IS_WIDGET(w), FALSE);
+  if (w->selected_rect_indices != NULL && w->selected_rect_indices->len > 0) {
+    return TRUE;
+  }
+  if (w->persist_sel_nids != NULL && w->persist_sel_nids->len > 0 && w->node_count > 0) {
+    return TRUE;
+  }
+  return FALSE;
+}
+
+/* ---- new public API ------------------------------------------------------ */
+
+void treemap_widget_set_free_space(TreemapWidget *w, gboolean show,
+                                   uint64_t free_bytes, uint64_t used_bytes,
+                                   const char *root_utf8) {
+  GtkAllocation a;
+  gboolean changed;
+  g_return_if_fail(TREEMAP_IS_WIDGET(w));
+  /* Detect any meaningful change including root label update. */
+  changed = (w->show_free_space != show ||
+             w->free_bytes_for_display != free_bytes ||
+             w->used_bytes_for_display != used_bytes);
+  if (!changed) {
+    const char *old_root = w->free_space_root_utf8 != NULL ? w->free_space_root_utf8 : "";
+    const char *new_root = root_utf8 != NULL ? root_utf8 : "";
+    changed = (strcmp(old_root, new_root) != 0);
+  }
+  w->show_free_space        = show;
+  w->free_bytes_for_display = free_bytes;
+  w->used_bytes_for_display = used_bytes;
+  g_free(w->free_space_root_utf8);
+  w->free_space_root_utf8 = g_strdup(root_utf8 != NULL ? root_utf8 : "");
+  if (changed && w->tree_root != NULL && gtk_widget_get_realized(GTK_WIDGET(w))) {
+    gtk_widget_get_allocation(GTK_WIDGET(w), &a);
+    if (a.width >= 2 && a.height >= 2) {
+      treemap_run_layout(w, a.width, a.height);
+      return;
+    }
+  }
+  if (changed) {
+    gtk_widget_queue_draw(GTK_WIDGET(w));
+  }
+}
+
+void treemap_widget_set_show_labels(TreemapWidget *w, gboolean show) {
+  GtkAllocation a;
+  g_return_if_fail(TREEMAP_IS_WIDGET(w));
+  if (w->show_labels != show) {
+    w->show_labels = show;
+    /* show_labels controls whether DIR_HEADER_H space is reserved in the layout
+     * (via LayoutOut.show_headers), so a full re-layout is required, not just a redraw. */
+    if (w->tree_root != NULL && gtk_widget_get_realized(GTK_WIDGET(w))) {
+      gtk_widget_get_allocation(GTK_WIDGET(w), &a);
+      if (a.width >= 2 && a.height >= 2) {
+        treemap_run_layout(w, a.width, a.height);
+        return;
+      }
+    }
+    gtk_widget_queue_draw(GTK_WIDGET(w));
+  }
+}
+
+void treemap_widget_set_zoom_callback(TreemapWidget *w,
+                                      void (*cb)(GtkWidget *widget, gint64 scan_index, gpointer data),
+                                      gpointer data) {
+  g_return_if_fail(TREEMAP_IS_WIDGET(w));
+  w->on_zoom_in      = cb;
+  w->on_zoom_in_data = data;
+}
+
+gboolean treemap_widget_export_png(TreemapWidget *w, const char *output_path,
+                                   int width, int height,
+                                   gboolean grayscale,
+                                   gboolean show_free_space,
+                                   uint64_t free_bytes,
+                                   uint64_t used_bytes) {
+  cairo_surface_t *surf;
+  cairo_t *cr;
+  cairo_status_t status;
+  /* Saved state to restore after export. */
+  int saved_alloc_w, saved_alloc_h;
+  gboolean saved_layout_ok;
+  gboolean saved_show_free_space;
+  uint64_t saved_free_bytes, saved_used_bytes;
+  gboolean saved_free_space_rect_valid;
+  treemap_rect_t saved_free_space_rect;
+
+  g_return_val_if_fail(TREEMAP_IS_WIDGET(w), FALSE);
+  g_return_val_if_fail(output_path != NULL, FALSE);
+  if (width < 2 || height < 2 || w->tree_root == NULL) {
+    return FALSE;
+  }
+
+  /* Save live state. */
+  saved_alloc_w             = w->alloc_w;
+  saved_alloc_h             = w->alloc_h;
+  saved_layout_ok           = w->layout_ok;
+  saved_show_free_space     = w->show_free_space;
+  saved_free_bytes          = w->free_bytes_for_display;
+  saved_used_bytes          = w->used_bytes_for_display;
+  saved_free_space_rect_valid = w->free_space_rect_valid;
+  saved_free_space_rect     = w->free_space_rect;
+
+  /* Apply export overrides and run layout at export dimensions. */
+  w->show_free_space        = show_free_space;
+  w->free_bytes_for_display = free_bytes;
+  w->used_bytes_for_display = used_bytes;
+  treemap_run_layout(w, width, height);
+
+  /* Draw to offscreen image surface. */
+  surf = cairo_image_surface_create(CAIRO_FORMAT_RGB24, width, height);
+  if (cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
+    /* Restore live layout before returning. */
+    w->show_free_space        = saved_show_free_space;
+    w->free_bytes_for_display = saved_free_bytes;
+    w->used_bytes_for_display = saved_used_bytes;
+    treemap_run_layout(w, saved_alloc_w > 0 ? saved_alloc_w : 1,
+                       saved_alloc_h > 0 ? saved_alloc_h : 1);
+    cairo_surface_destroy(surf);
+    return FALSE;
+  }
+
+  cr = cairo_create(surf);
+  treemap_draw_to_cr(w, cr);
+  cairo_destroy(cr);
+
+  /* Optional grayscale conversion using luminance formula. */
+  if (grayscale && cairo_image_surface_get_format(surf) == CAIRO_FORMAT_RGB24) {
+    cairo_surface_flush(surf);
+    unsigned char *data   = cairo_image_surface_get_data(surf);
+    int stride            = cairo_image_surface_get_stride(surf);
+    int row, col;
+    for (row = 0; row < height; row++) {
+      unsigned char *px = data + row * stride;
+      for (col = 0; col < width; col++) {
+        /* Cairo RGB24: B G R (little-endian word, 4 bytes each pixel, alpha byte unused). */
+        unsigned char b = px[0];
+        unsigned char g_ch = px[1];
+        unsigned char r = px[2];
+        unsigned char lum = (unsigned char)(0.299 * r + 0.587 * g_ch + 0.114 * b + 0.5);
+        px[0] = lum;
+        px[1] = lum;
+        px[2] = lum;
+        px += 4;
+      }
+    }
+    cairo_surface_mark_dirty(surf);
+  }
+
+  status = cairo_surface_write_to_png(surf, output_path);
+  cairo_surface_destroy(surf);
+
+  /* Restore live state. */
+  w->show_free_space        = saved_show_free_space;
+  w->free_bytes_for_display = saved_free_bytes;
+  w->used_bytes_for_display = saved_used_bytes;
+  if (saved_alloc_w > 0 && saved_alloc_h > 0) {
+    treemap_run_layout(w, saved_alloc_w, saved_alloc_h);
+  } else {
+    w->layout_ok              = saved_layout_ok;
+    w->free_space_rect_valid  = saved_free_space_rect_valid;
+    w->free_space_rect        = saved_free_space_rect;
+  }
+
+  return (status == CAIRO_STATUS_SUCCESS);
 }
