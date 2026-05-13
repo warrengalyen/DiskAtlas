@@ -183,6 +183,7 @@ if(DISKATLAS_GTK3_FOUND)
     "${DISKATLAS_SRC}/app/settings_mime_tab.c"
     "${DISKATLAS_SRC}/app/dm_mime_db.c"
     "${DISKATLAS_SRC}/app/file_type_view.c"
+    "${DISKATLAS_SRC}/app/win32_shell_context_menu.c"
     ${DISKATLAS_GRESOURCE_C}
   )
   set_target_properties(diskatlas_app PROPERTIES OUTPUT_NAME diskatlas)

@@ -65,6 +65,7 @@ typedef struct AppState {
   GtkWidget *context_menu_copy_path;
   GtkWidget *context_menu_export_csv;
   GtkWidget *context_menu_copy_file_info;
+  GtkWidget *context_menu_zoom_separator;
   GtkWidget *context_menu_zoom_in;
   GtkWidget *context_menu_zoom_out;
   GtkWidget *scan_source_combo;
@@ -185,6 +186,9 @@ typedef struct AppState {
 
   /** When TRUE, File → Rename, F2, and inline name editing are allowed; persisted as `enable_rename` in `[general]`. */
   gboolean general_enable_rename;
+  /** When TRUE (Win32 only), Windows Explorer context menu is appended to the
+   *  right-click context menu; persisted as `win32_explorer_context_menu` in `[general]`. Default TRUE. */
+  gboolean general_win32_explorer_context_menu;
 
   /** Runtime MIME classification database; built at startup and rebuilt after settings changes. */
   struct DmMimeDatabase *mime_db;

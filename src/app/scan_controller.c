@@ -2414,22 +2414,8 @@ static gboolean da_collect_explicit_selected_scan_nids(AppState *app, const scan
   }
 
   if (scan_controller_is_file_view_tab(app)) {
-    gboolean treemap_used = FALSE;
-    if (app->treemap != NULL && TREEMAP_IS_WIDGET(app->treemap)) {
-      GArray *tn = g_array_new(FALSE, FALSE, sizeof(size_t));
-      treemap_widget_append_selected_scan_indices(TREEMAP_WIDGET(app->treemap), tn);
-      if (tn->len > 0) {
-        treemap_used = TRUE;
-        for (guint i = 0; i < tn->len; i++) {
-          size_t nid = g_array_index(tn, size_t, i);
-          if (nid < v->count) {
-            da_explicit_sel_nids_append_unique(out_nids, nid);
-          }
-        }
-      }
-      g_array_free(tn, TRUE);
-    }
-    if (!treemap_used && app->tree != NULL) {
+    /* File View tab: only the file-view list widget carries the selection. */
+    if (app->tree != NULL) {
       GtkTreeSelection *sel = gtk_tree_view_get_selection(GTK_TREE_VIEW(app->tree));
       GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(app->tree));
       GList *plist = gtk_tree_selection_get_selected_rows(sel, &model);
@@ -2450,30 +2436,49 @@ static gboolean da_collect_explicit_selected_scan_nids(AppState *app, const scan
         g_list_free_full(plist, (GDestroyNotify)gtk_tree_path_free);
       }
     }
-  } else if (scan_controller_is_tree_view_tab(app) && app->tree_view != NULL) {
-    GtkTreeSelection *sel = gtk_tree_view_get_selection(GTK_TREE_VIEW(app->tree_view));
-    GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(app->tree_view));
-    GList *plist = gtk_tree_selection_get_selected_rows(sel, &model);
-    if (plist != NULL) {
-      for (GList *l = plist; l != NULL; l = l->next) {
-        GtkTreeIter it;
-        if (!gtk_tree_model_get_iter(model, &it, (GtkTreePath *)l->data)) {
-          continue;
-        }
-        gint64 idx_id = DA_TV_LP_PLACEHOLDER;
-        gtk_tree_model_get(model, &it, DA_TV_COL_IDX_ID, &idx_id, -1);
-        if (idx_id == DA_TV_LP_PLACEHOLDER) {
-          continue;
-        }
-        gchar *pstr = NULL;
-        gtk_tree_model_get(model, &it, DA_TV_COL_PATH, &pstr, -1);
-        size_t nid = da_find_scan_nid_for_utf8_path(v, pstr);
-        g_free(pstr);
-        if (nid != SIZE_MAX && nid < v->count) {
-          da_explicit_sel_nids_append_unique(out_nids, nid);
+  } else if (scan_controller_is_tree_view_tab(app)) {
+    /* Tree View tab: the treemap (lower pane) takes priority; fall back to the
+     * tree-view list widget when the treemap carries no selection. */
+    gboolean treemap_used = FALSE;
+    if (app->treemap != NULL && TREEMAP_IS_WIDGET(app->treemap)) {
+      GArray *tn = g_array_new(FALSE, FALSE, sizeof(size_t));
+      treemap_widget_append_selected_scan_indices(TREEMAP_WIDGET(app->treemap), tn);
+      if (tn->len > 0) {
+        treemap_used = TRUE;
+        for (guint i = 0; i < tn->len; i++) {
+          size_t nid = g_array_index(tn, size_t, i);
+          if (nid < v->count) {
+            da_explicit_sel_nids_append_unique(out_nids, nid);
+          }
         }
       }
-      g_list_free_full(plist, (GDestroyNotify)gtk_tree_path_free);
+      g_array_free(tn, TRUE);
+    }
+    if (!treemap_used && app->tree_view != NULL) {
+      GtkTreeSelection *sel = gtk_tree_view_get_selection(GTK_TREE_VIEW(app->tree_view));
+      GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(app->tree_view));
+      GList *plist = gtk_tree_selection_get_selected_rows(sel, &model);
+      if (plist != NULL) {
+        for (GList *l = plist; l != NULL; l = l->next) {
+          GtkTreeIter it;
+          if (!gtk_tree_model_get_iter(model, &it, (GtkTreePath *)l->data)) {
+            continue;
+          }
+          gint64 idx_id = DA_TV_LP_PLACEHOLDER;
+          gtk_tree_model_get(model, &it, DA_TV_COL_IDX_ID, &idx_id, -1);
+          if (idx_id == DA_TV_LP_PLACEHOLDER) {
+            continue;
+          }
+          gchar *pstr = NULL;
+          gtk_tree_model_get(model, &it, DA_TV_COL_PATH, &pstr, -1);
+          size_t nid = da_find_scan_nid_for_utf8_path(v, pstr);
+          g_free(pstr);
+          if (nid != SIZE_MAX && nid < v->count) {
+            da_explicit_sel_nids_append_unique(out_nids, nid);
+          }
+        }
+        g_list_free_full(plist, (GDestroyNotify)gtk_tree_path_free);
+      }
     }
   }
 
@@ -2605,6 +2610,10 @@ static void da_spawn_terminal_in_dir(const char *dir_utf8) {
     g_warning("Open terminal: %s", err->message);
     g_clear_error(&err);
   }
+}
+
+gboolean scan_controller_is_tree_view_tab_active(AppState *app) {
+  return scan_controller_is_tree_view_tab(app);
 }
 
 gboolean scan_controller_file_menu_selection_commands_sensitive(AppState *app) {
@@ -2743,6 +2752,42 @@ void scan_controller_copy_selected_paths_to_clipboard(AppState *app) {
   gtk_clipboard_set_text(cb, gs->str, -1);
   g_string_free(gs, TRUE);
   g_ptr_array_free(lines, TRUE);
+}
+
+GPtrArray *scan_controller_collect_selected_utf8_paths(AppState *app) {
+  if (app == NULL || app->scan == NULL) {
+    return NULL;
+  }
+  scan_progress_t pr = scan_get_progress(app->scan);
+  if (!pr.is_complete) {
+    return NULL;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (v.nodes == NULL) {
+    return NULL;
+  }
+  GArray *nids = g_array_new(FALSE, FALSE, sizeof(size_t));
+  if (!da_collect_explicit_selected_scan_nids(app, &v, nids) || nids->len == 0) {
+    g_array_free(nids, TRUE);
+    return NULL;
+  }
+  GPtrArray *paths = g_ptr_array_new_with_free_func(g_free);
+  for (guint i = 0; i < nids->len; i++) {
+    size_t nid = g_array_index(nids, size_t, i);
+    if (nid >= v.count) {
+      continue;
+    }
+    const char *p = v.nodes[nid].path;
+    if (p != NULL && p[0] != '\0') {
+      g_ptr_array_add(paths, g_strdup(p));
+    }
+  }
+  g_array_free(nids, TRUE);
+  if (paths->len == 0) {
+    g_ptr_array_free(paths, TRUE);
+    return NULL;
+  }
+  return paths;
 }
 
 static int da_copy_row_cmp(const void *a, const void *b) {

@@ -26,6 +26,7 @@
 #include "flat_list_model.h"
 #include "format_text.h"
 #include "shell_icon.h"
+#include "win32_shell_context_menu.h"
 
 void da_ui_sync_file_menu(AppState *app) {
   gboolean ok = FALSE;
@@ -99,10 +100,17 @@ void da_ui_sync_file_menu(AppState *app) {
   if (app != NULL && app->context_menu_copy_path != NULL) {
     gtk_widget_set_sensitive(app->context_menu_copy_path, ok_sel);
   }
+  /* Zoom items only make sense on the Tree View tab (that's where the treemap lives). */
+  gboolean on_tree_tab = app != NULL && scan_controller_is_tree_view_tab_active(app);
+  if (app != NULL && app->context_menu_zoom_separator != NULL) {
+    gtk_widget_set_visible(app->context_menu_zoom_separator, on_tree_tab);
+  }
   if (app != NULL && app->context_menu_zoom_in != NULL) {
+    gtk_widget_set_visible(app->context_menu_zoom_in, on_tree_tab);
     gtk_widget_set_sensitive(app->context_menu_zoom_in, ok_zoom_in);
   }
   if (app != NULL && app->context_menu_zoom_out != NULL) {
+    gtk_widget_set_visible(app->context_menu_zoom_out, on_tree_tab);
     gtk_widget_set_sensitive(app->context_menu_zoom_out, ok_zoom_out);
   }
 }
@@ -205,6 +213,25 @@ static void on_options_menu_show_free_labels_toggled(GtkCheckMenuItem *item, gpo
   da_ini_save_interface(app);
 }
 
+static gboolean on_context_menu_cleanup_idle(gpointer data) {
+  if (GTK_IS_MENU(data)) {
+    da_win32_remove_shell_menu_items(GTK_MENU(data));
+  }
+  g_object_unref(data);
+  return G_SOURCE_REMOVE;
+}
+
+static void on_context_menu_hide(GtkWidget *w, gpointer user_data) {
+  (void)user_data;
+  /* GTK 3 fires "hide" on GtkMenuShell *before* "activate" on the selected
+   * item (gtk_menu_shell_deactivate runs before gtk_menu_item_activate in
+   * gtk_menu_shell_activate_item).  Clearing the IContextMenu pointer here
+   * would leave on_shell_item_activate with a NULL ctx.  Defer cleanup to
+   * the next main-loop iteration so "activate" fires first. */
+  g_object_ref(w);
+  g_idle_add(on_context_menu_cleanup_idle, w);
+}
+
 static gboolean on_widget_right_click(GtkWidget *w, GdkEventButton *ev, gpointer user_data) {
   (void)w;
   AppState *app = (AppState *)user_data;
@@ -212,6 +239,7 @@ static gboolean on_widget_right_click(GtkWidget *w, GdkEventButton *ev, gpointer
     return FALSE;
   }
   da_ui_sync_file_menu(app);
+  da_win32_ctx_menu_refresh(app, GTK_MENU(app->context_menu));
   gtk_menu_popup_at_pointer(GTK_MENU(app->context_menu), (GdkEvent *)ev);
   return TRUE;
 }
@@ -1064,6 +1092,7 @@ typedef struct {
   GtkWidget       *treemap_gradient_check;
   GtkWidget       *alternate_row_colors_check;
   GtkWidget       *enable_rename_check;
+  GtkWidget       *win32_explorer_context_menu_check;
 } DaSettingsDlgHandles;
 
 static void da_ui_apply_alternate_row_colors(AppState *app) {
@@ -1126,6 +1155,14 @@ static void da_settings_apply_interface_tab(DaSettingsDlgHandles *h) {
   if (h->enable_rename_check != NULL && GTK_IS_TOGGLE_BUTTON(h->enable_rename_check)) {
     h->app->general_enable_rename = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(h->enable_rename_check));
   }
+
+#if defined(G_OS_WIN32)
+  if (h->win32_explorer_context_menu_check != NULL &&
+      GTK_IS_TOGGLE_BUTTON(h->win32_explorer_context_menu_check)) {
+    h->app->general_win32_explorer_context_menu =
+        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(h->win32_explorer_context_menu_check));
+  }
+#endif
 
   da_ini_save_interface(h->app);
   da_ini_save_general(h->app);
@@ -1228,6 +1265,18 @@ static void on_tools_menu_settings_activate(GtkMenuItem *item, gpointer user_dat
   handles->enable_rename_check = GTK_WIDGET(gtk_builder_get_object(builder, "enable_rename_check"));
   if (handles->enable_rename_check != NULL && GTK_IS_TOGGLE_BUTTON(handles->enable_rename_check)) {
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(handles->enable_rename_check), app->general_enable_rename);
+  }
+  handles->win32_explorer_context_menu_check =
+      GTK_WIDGET(gtk_builder_get_object(builder, "windows_explorer_context_menu_check"));
+  if (handles->win32_explorer_context_menu_check != NULL) {
+#if !defined(G_OS_WIN32)
+    gtk_widget_hide(handles->win32_explorer_context_menu_check);
+#else
+    if (GTK_IS_TOGGLE_BUTTON(handles->win32_explorer_context_menu_check)) {
+      gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(handles->win32_explorer_context_menu_check),
+                                   app->general_win32_explorer_context_menu);
+    }
+#endif
   }
 
   GtkWidget *ok_btn = GTK_WIDGET(gtk_builder_get_object(builder, "ok_btn"));
@@ -1929,6 +1978,8 @@ void da_ui_build(AppState *app) {
     if (cm != NULL) {
       /* Keep the standalone menu alive after the builder is unreffed. */
       g_object_ref_sink(cm);
+      /* Clean up dynamic shell items when the menu closes. */
+      g_signal_connect(cm, "hide", G_CALLBACK(on_context_menu_hide), NULL);
 
       app->context_menu_explore_folder =
           GTK_WIDGET(gtk_builder_get_object(builder, "context_menu_explore_folder"));
@@ -1940,6 +1991,8 @@ void da_ui_build(AppState *app) {
           GTK_WIDGET(gtk_builder_get_object(builder, "context_menu_export_csv"));
       app->context_menu_copy_file_info =
           GTK_WIDGET(gtk_builder_get_object(builder, "context_menu_copy_file_info"));
+      app->context_menu_zoom_separator =
+          GTK_WIDGET(gtk_builder_get_object(builder, "context_menu_zoom_separator"));
       app->context_menu_zoom_in =
           GTK_WIDGET(gtk_builder_get_object(builder, "context_menu_zoom_in"));
       app->context_menu_zoom_out =

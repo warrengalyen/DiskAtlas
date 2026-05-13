@@ -37,6 +37,9 @@ void scan_controller_fill_scan_options_for_import(AppState *app, scan_options_t 
 /** Copy size (column 1, right-aligned) and full path (column 2) for current selection or entire scan/list. */
 void scan_controller_copy_scan_paths_sizes_to_clipboard(AppState *app);
 
+/** Returns TRUE when the Tree View tab is currently the visible notebook page. */
+gboolean scan_controller_is_tree_view_tab_active(AppState *app);
+
 /** TRUE when Export CSV would be enabled and the active view has at least one explicit selected path. */
 gboolean scan_controller_file_menu_selection_commands_sensitive(AppState *app);
 
@@ -48,6 +51,11 @@ void scan_controller_open_terminal_here(AppState *app);
 
 /** Copy full UTF-8 paths of selected items to the clipboard, one per line. */
 void scan_controller_copy_selected_paths_to_clipboard(AppState *app);
+
+/** Return a GPtrArray of owned gchar* UTF-8 paths for all explicitly selected
+ *  items.  Returns NULL when no scan is loaded or nothing is selected.
+ *  Caller owns the array and its strings. */
+GPtrArray *scan_controller_collect_selected_utf8_paths(AppState *app);
 
 /** Copy selected file/folder paths to the system clipboard (shell copy). */
 void scan_controller_copy_files(AppState *app);
