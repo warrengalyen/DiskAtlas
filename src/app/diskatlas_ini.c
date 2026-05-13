@@ -37,6 +37,7 @@
 #define DA_SEC_GENERAL "general"
 #define DA_KEY_ENABLE_RENAME "enable_rename"
 #define DA_KEY_WIN32_EXPLORER_CTX_MENU "win32_explorer_context_menu"
+#define DA_KEY_OPEN_FILE_DOUBLE_CLICK "open_file_double_click"
 
 static gchar *da_exe_dir_utf8(void) {
 #if defined(G_OS_WIN32)
@@ -324,6 +325,8 @@ void da_ini_load_general(AppState *app) {
   app->general_enable_rename = FALSE;
   /* Default: Windows Explorer context menu integration enabled. */
   app->general_win32_explorer_context_menu = TRUE;
+  /* Default: double-click opens files with the default application. */
+  app->general_open_file_double_click = TRUE;
   gchar *path = da_ini_path();
   if (path == NULL) {
     return;
@@ -340,6 +343,11 @@ void da_ini_load_general(AppState *app) {
       gboolean v = g_key_file_get_boolean(kf, DA_SEC_GENERAL, DA_KEY_WIN32_EXPLORER_CTX_MENU, &err);
       g_clear_error(&err);
       app->general_win32_explorer_context_menu = v;
+    }
+    if (g_key_file_has_key(kf, DA_SEC_GENERAL, DA_KEY_OPEN_FILE_DOUBLE_CLICK, NULL)) {
+      gboolean od = g_key_file_get_boolean(kf, DA_SEC_GENERAL, DA_KEY_OPEN_FILE_DOUBLE_CLICK, &err);
+      g_clear_error(&err);
+      app->general_open_file_double_click = od;
     }
   }
   g_key_file_unref(kf);
@@ -359,6 +367,8 @@ void da_ini_save_general(const AppState *app) {
   g_key_file_set_boolean(kf, DA_SEC_GENERAL, DA_KEY_ENABLE_RENAME, app->general_enable_rename);
   g_key_file_set_boolean(kf, DA_SEC_GENERAL, DA_KEY_WIN32_EXPLORER_CTX_MENU,
                          app->general_win32_explorer_context_menu);
+  g_key_file_set_boolean(kf, DA_SEC_GENERAL, DA_KEY_OPEN_FILE_DOUBLE_CLICK,
+                         app->general_open_file_double_click);
 
   gsize len = 0;
   gchar *data = g_key_file_to_data(kf, &len, NULL);

@@ -20,4 +20,10 @@ void da_tree_view_apply_zebra_cell(GtkTreeViewColumn *col, GtkCellRenderer *cell
  */
 void da_ui_sync_file_menu(AppState *app);
 
+/** Cancel deferred inline-rename on column 0 (timeout + press candidate). */
+void da_ui_cancel_pending_name_rename(AppState *app);
+
+/** Enable the name renderer and start GtkTreeView inline editing at @a path (column 0). */
+void da_ui_name_column_begin_editing_session(GtkTreeView *tv, GtkTreePath *path);
+
 #endif

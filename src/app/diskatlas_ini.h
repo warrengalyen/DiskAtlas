@@ -34,7 +34,7 @@ void da_ini_load_interface(AppState *app);
 /** Persist `[interface]` keys (merge write). */
 void da_ini_save_interface(const AppState *app);
 
-/** Load `[general]` (enable_rename, etc.). */
+/** Load `[general]` (enable_rename, open_file_double_click, etc.). */
 void da_ini_load_general(AppState *app);
 /** Persist `[general]` keys (merge write). */
 void da_ini_save_general(const AppState *app);

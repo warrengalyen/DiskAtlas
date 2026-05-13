@@ -656,9 +656,6 @@ static void da_tv_deleted_text_cell_data(GtkTreeViewColumn *col, GtkCellRenderer
 
   gboolean is_alloc = ctx->is_tree_view && (ctx->model_text_col == DA_TV_COL_ALLOC);
   da_tree_view_apply_zebra_cell(col, cell, model, iter, ctx->app, is_alloc);
-  gboolean name_editable = ctx->app != NULL && ctx->app->general_enable_rename && ctx->is_tree_view &&
-                           ctx->model_text_col == DA_TV_COL_NAME;
-  g_object_set(cell, "editable", name_editable, NULL);
 }
 
 /**
@@ -780,7 +777,6 @@ static void file_view_file_name_text_cell_data(GtkTreeViewColumn *column, GtkCel
   }
   da_apply_deleted_cell_style(cell, app, path);
   da_tree_view_apply_zebra_cell(column, cell, model, iter, app, FALSE);
-  g_object_set(cell, "editable", app != NULL && app->general_enable_rename, NULL);
 }
 
 static void file_view_path_text_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell,
@@ -798,20 +794,90 @@ static void file_view_path_text_cell_data(GtkTreeViewColumn *column, GtkCellRend
 }
 
 static void on_file_view_name_edited(GtkCellRendererText *renderer, gchar *path, gchar *new_text, gpointer user_data) {
-  (void)renderer;
   scan_controller_on_tree_name_cell_edited((AppState *)user_data, FALSE, path, new_text);
+  g_object_set(renderer, "editable", FALSE, NULL);
 }
 
 static void on_tree_view_name_edited(GtkCellRendererText *renderer, gchar *path, gchar *new_text, gpointer user_data) {
-  (void)renderer;
   scan_controller_on_tree_name_cell_edited((AppState *)user_data, TRUE, path, new_text);
+  g_object_set(renderer, "editable", FALSE, NULL);
 }
+
+static void on_tree_or_file_view_row_activated(GtkTreeView *tv, GtkTreePath *path, GtkTreeViewColumn *column,
+                                               gpointer user_data) {
+  (void)column;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || !app->general_open_file_double_click || app->scan == NULL) {
+    return;
+  }
+  scan_progress_t pr = scan_get_progress(app->scan);
+  if (!pr.is_complete) {
+    return;
+  }
+
+  GtkTreeModel *model = gtk_tree_view_get_model(tv);
+  GtkTreeIter iter;
+  if (model == NULL || !gtk_tree_model_get_iter(model, &iter, path)) {
+    return;
+  }
+
+  if (GTK_WIDGET(tv) == app->tree_view) {
+    gint64 idx_id = 0;
+    guint kind = DISKATLAS_NODE_KIND_UNKNOWN;
+    gchar *path_utf8 = NULL;
+    gtk_tree_model_get(model, &iter, DA_TV_COL_IDX_ID, &idx_id, DA_TV_COL_PATH, &path_utf8, DA_TV_COL_KIND, &kind, -1);
+    if (idx_id == DA_TV_LP_PLACEHOLDER || kind != DISKATLAS_NODE_KIND_FILE || path_utf8 == NULL ||
+        path_utf8[0] == '\0') {
+      g_free(path_utf8);
+      return;
+    }
+    if (app->deleted_path_set != NULL && g_hash_table_contains(app->deleted_path_set, path_utf8)) {
+      g_free(path_utf8);
+      return;
+    }
+    scan_controller_launch_path_with_default_app(path_utf8);
+    g_free(path_utf8);
+    return;
+  }
+
+  if (GTK_WIDGET(tv) != app->tree) {
+    return;
+  }
+
+  gint64 lp = 0;
+  gtk_tree_model_get(model, &iter, DA_COL_LP, &lp, -1);
+  if (lp == DA_TREE_LP_PLACEHOLDER) {
+    return;
+  }
+  size_t nid = SIZE_MAX;
+  if (!da_tree_lp_to_scan_nid(app, lp, &nid) || nid == SIZE_MAX) {
+    return;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (v.nodes == NULL || nid >= v.count) {
+    return;
+  }
+  uint32_t node_kind = v.nodes[nid].attributes & DISKATLAS_NODE_KIND_MASK;
+  if (node_kind != DISKATLAS_NODE_KIND_FILE) {
+    return;
+  }
+  const char *p = v.nodes[nid].path;
+  if (p == NULL || p[0] == '\0') {
+    return;
+  }
+  if (app->deleted_path_set != NULL && g_hash_table_contains(app->deleted_path_set, p)) {
+    return;
+  }
+  scan_controller_launch_path_with_default_app(p);
+}
+
+static void on_name_cell_editing_canceled(GtkCellRenderer *renderer, gpointer user_data);
 
 static void append_file_name_column(GtkTreeView *tv, AppState *app, const char *title, int sort_model_id, int width_px,
                                     int min_width_px) {
   GtkCellRenderer *pix = gtk_cell_renderer_pixbuf_new();
   GtkCellRenderer *txt = gtk_cell_renderer_text_new();
-  g_object_set(txt, "ellipsize", PANGO_ELLIPSIZE_END, "xalign", 0.0f, NULL);
+  g_object_set(txt, "ellipsize", PANGO_ELLIPSIZE_END, "xalign", 0.0f, "editable", FALSE, NULL);
 
   GtkTreeViewColumn *c = gtk_tree_view_column_new();
   gtk_tree_view_column_set_title(c, title);
@@ -820,6 +886,7 @@ static void append_file_name_column(GtkTreeView *tv, AppState *app, const char *
   gtk_tree_view_column_pack_start(c, txt, TRUE);
   gtk_tree_view_column_set_cell_data_func(c, txt, file_view_file_name_text_cell_data, app, NULL);
   g_signal_connect(txt, "edited", G_CALLBACK(on_file_view_name_edited), app);
+  g_signal_connect(txt, "editing-canceled", G_CALLBACK(on_name_cell_editing_canceled), NULL);
 
   gtk_tree_view_column_set_alignment(c, 0.0f);
   gtk_tree_view_column_set_resizable(c, TRUE);
@@ -845,6 +912,220 @@ static void append_path_column(GtkTreeView *tv, AppState *app, const char *title
   gtk_tree_view_column_set_fixed_width(c, width_px);
   gtk_tree_view_column_set_sort_column_id(c, sort_model_id);
   gtk_tree_view_append_column(tv, c);
+}
+
+typedef struct {
+  AppState     *app;
+  GtkTreeView *tv;
+  GtkTreePath *path;
+} DaRenameTimeoutCtx;
+
+static void da_rename_timeout_ctx_destroy(gpointer user_data) {
+  DaRenameTimeoutCtx *c = (DaRenameTimeoutCtx *)user_data;
+  if (c == NULL) {
+    return;
+  }
+  gtk_tree_path_free(c->path);
+  g_free(c);
+}
+
+void da_ui_cancel_pending_name_rename(AppState *app) {
+  if (app == NULL) {
+    return;
+  }
+  if (app->name_rename_pending_timeout != 0u) {
+    g_source_remove(app->name_rename_pending_timeout);
+    app->name_rename_pending_timeout = 0u;
+  }
+  gtk_tree_path_free(app->name_rename_candidate_path);
+  app->name_rename_candidate_path = NULL;
+  app->name_rename_candidate_tv = NULL;
+}
+
+void da_ui_name_column_begin_editing_session(GtkTreeView *tv, GtkTreePath *path) {
+  if (tv == NULL || path == NULL) {
+    return;
+  }
+  GtkTreeViewColumn *col = gtk_tree_view_get_column(tv, 0);
+  if (col == NULL) {
+    return;
+  }
+  GList *cells = gtk_cell_layout_get_cells(GTK_CELL_LAYOUT(col));
+  GtkCellRenderer *text_renderer = NULL;
+  for (GList *l = cells; l != NULL; l = l->next) {
+    GtkCellRenderer *r = GTK_CELL_RENDERER(l->data);
+    if (GTK_IS_CELL_RENDERER_TEXT(r) && !GTK_IS_CELL_RENDERER_PROGRESS(r)) {
+      text_renderer = r;
+      break;
+    }
+  }
+  g_list_free(cells);
+  if (text_renderer == NULL) {
+    return;
+  }
+  g_object_set(text_renderer, "editable", TRUE, NULL);
+  gtk_widget_grab_focus(GTK_WIDGET(tv));
+  gtk_tree_view_set_cursor(tv, path, col, TRUE);
+}
+
+static gboolean da_rename_timeout_fire(gpointer user_data) {
+  DaRenameTimeoutCtx *c = (DaRenameTimeoutCtx *)user_data;
+  AppState *app = c != NULL ? c->app : NULL;
+  if (app != NULL) {
+    app->name_rename_pending_timeout = 0u;
+  }
+  if (c == NULL || app == NULL || !app->general_enable_rename || c->tv == NULL || c->path == NULL) {
+    return G_SOURCE_REMOVE;
+  }
+  GtkTreeSelection *sel = gtk_tree_view_get_selection(c->tv);
+  if (!gtk_tree_selection_path_is_selected(sel, c->path)) {
+    return G_SOURCE_REMOVE;
+  }
+  da_ui_name_column_begin_editing_session(c->tv, c->path);
+  return G_SOURCE_REMOVE;
+}
+
+/** TRUE when @a bx (bin-window X) is over the expander / indent region of column 0 (not the label). */
+static gboolean da_tree_view_bin_x_in_expander_zone(GtkTreeView *tv, GtkTreeModel *model, GtkTreePath *path,
+                                                    gint bx) {
+  GtkTreeIter it;
+  if (!gtk_tree_model_get_iter(model, &it, path) || !gtk_tree_model_iter_has_child(model, &it)) {
+    return FALSE;
+  }
+  if (!gtk_tree_view_get_show_expanders(tv)) {
+    return FALSE;
+  }
+  GtkTreeViewColumn *col0 = gtk_tree_view_get_column(tv, 0);
+  if (col0 == NULL) {
+    return FALSE;
+  }
+  GdkRectangle cell_rect;
+  gtk_tree_view_get_cell_area(tv, path, col0, &cell_rect);
+  gint depth = gtk_tree_path_get_depth(path);
+  gint indent = gtk_tree_view_get_level_indentation(tv);
+  gint exp = 14;
+  gtk_widget_style_get(GTK_WIDGET(tv), "expander-size", &exp, NULL);
+  gint name_left = cell_rect.x + (depth - 1) * indent + exp;
+  return bx < name_left;
+}
+
+static gboolean da_name_column_rename_press(GtkWidget *w, GdkEventButton *ev, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  GtkTreeView *tv = GTK_TREE_VIEW(w);
+  if (app == NULL || !app->general_enable_rename) {
+    return FALSE;
+  }
+  if (ev->button != GDK_BUTTON_PRIMARY) {
+    return FALSE;
+  }
+  if (ev->type == GDK_DOUBLE_BUTTON_PRESS) {
+    da_ui_cancel_pending_name_rename(app);
+    return FALSE;
+  }
+  if (ev->type != GDK_BUTTON_PRESS) {
+    return FALSE;
+  }
+
+  GtkTreePath *path = NULL;
+  GtkTreeViewColumn *col = NULL;
+  if (!gtk_tree_view_get_path_at_pos(tv, (gint)ev->x, (gint)ev->y, &path, &col, NULL, NULL)) {
+    return FALSE;
+  }
+  if (col != gtk_tree_view_get_column(tv, 0)) {
+    gtk_tree_path_free(path);
+    if (app->name_rename_candidate_path != NULL) {
+      gtk_tree_path_free(app->name_rename_candidate_path);
+      app->name_rename_candidate_path = NULL;
+      app->name_rename_candidate_tv = NULL;
+    }
+    return FALSE;
+  }
+
+  gint bx = 0, by = 0;
+  gtk_tree_view_convert_widget_to_bin_window_coords(tv, (gint)ev->x, (gint)ev->y, &bx, &by);
+  GtkTreeModel *model = gtk_tree_view_get_model(tv);
+  if (model != NULL && GTK_WIDGET(tv) == app->tree_view &&
+      da_tree_view_bin_x_in_expander_zone(tv, model, path, bx)) {
+    gtk_tree_path_free(path);
+    return FALSE;
+  }
+
+  GtkTreeSelection *sel = gtk_tree_view_get_selection(tv);
+  if (!gtk_tree_selection_path_is_selected(sel, path)) {
+    gtk_tree_path_free(path);
+    if (app->name_rename_candidate_path != NULL) {
+      gtk_tree_path_free(app->name_rename_candidate_path);
+      app->name_rename_candidate_path = NULL;
+      app->name_rename_candidate_tv = NULL;
+    }
+    return FALSE;
+  }
+
+  if (app->name_rename_candidate_path != NULL) {
+    gtk_tree_path_free(app->name_rename_candidate_path);
+  }
+  app->name_rename_candidate_path = path;
+  app->name_rename_candidate_tv = tv;
+  return FALSE;
+}
+
+static gboolean da_name_column_rename_release(GtkWidget *w, GdkEventButton *ev, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  GtkTreeView *tv = GTK_TREE_VIEW(w);
+  if (app == NULL || !app->general_enable_rename) {
+    return FALSE;
+  }
+  if (ev->type != GDK_BUTTON_RELEASE || ev->button != GDK_BUTTON_PRIMARY) {
+    return FALSE;
+  }
+
+  GtkTreePath *path = NULL;
+  GtkTreeViewColumn *col = NULL;
+  if (!gtk_tree_view_get_path_at_pos(tv, (gint)ev->x, (gint)ev->y, &path, &col, NULL, NULL)) {
+    return FALSE;
+  }
+  if (col != gtk_tree_view_get_column(tv, 0)) {
+    gtk_tree_path_free(path);
+    return FALSE;
+  }
+
+  if (app->name_rename_candidate_path == NULL || app->name_rename_candidate_tv != tv ||
+      gtk_tree_path_compare(app->name_rename_candidate_path, path) != 0) {
+    gtk_tree_path_free(path);
+    return FALSE;
+  }
+  gtk_tree_path_free(path);
+
+  gint dct = 400;
+  GtkSettings *sett = gtk_widget_get_settings(w);
+  if (sett != NULL) {
+    g_object_get(sett, "gtk-double-click-time", &dct, NULL);
+  }
+
+  DaRenameTimeoutCtx *c = g_new(DaRenameTimeoutCtx, 1);
+  c->app = app;
+  c->tv = tv;
+  c->path = gtk_tree_path_copy(app->name_rename_candidate_path);
+
+  gtk_tree_path_free(app->name_rename_candidate_path);
+  app->name_rename_candidate_path = NULL;
+  app->name_rename_candidate_tv = NULL;
+
+  if (app->name_rename_pending_timeout != 0u) {
+    g_source_remove(app->name_rename_pending_timeout);
+    app->name_rename_pending_timeout = 0u;
+  }
+
+  app->name_rename_pending_timeout =
+      (guint)g_timeout_add_full(G_PRIORITY_DEFAULT, dct, da_rename_timeout_fire, c, da_rename_timeout_ctx_destroy);
+  return FALSE;
+}
+
+static void on_name_cell_editing_canceled(GtkCellRenderer *renderer, gpointer user_data) {
+  (void)user_data;
+  if (GTK_IS_CELL_RENDERER_TEXT(renderer)) {
+    g_object_set(renderer, "editable", FALSE, NULL);
+  }
 }
 
 static void on_search_clear_clicked(GtkButton *btn, gpointer user_data) {
@@ -1092,6 +1373,7 @@ typedef struct {
   GtkWidget       *treemap_gradient_check;
   GtkWidget       *alternate_row_colors_check;
   GtkWidget       *enable_rename_check;
+  GtkWidget       *open_file_double_click_check;
   GtkWidget       *win32_explorer_context_menu_check;
 } DaSettingsDlgHandles;
 
@@ -1154,6 +1436,14 @@ static void da_settings_apply_interface_tab(DaSettingsDlgHandles *h) {
 
   if (h->enable_rename_check != NULL && GTK_IS_TOGGLE_BUTTON(h->enable_rename_check)) {
     h->app->general_enable_rename = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(h->enable_rename_check));
+  }
+  if (!h->app->general_enable_rename) {
+    da_ui_cancel_pending_name_rename(h->app);
+  }
+
+  if (h->open_file_double_click_check != NULL && GTK_IS_TOGGLE_BUTTON(h->open_file_double_click_check)) {
+    h->app->general_open_file_double_click =
+        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(h->open_file_double_click_check));
   }
 
 #if defined(G_OS_WIN32)
@@ -1265,6 +1555,11 @@ static void on_tools_menu_settings_activate(GtkMenuItem *item, gpointer user_dat
   handles->enable_rename_check = GTK_WIDGET(gtk_builder_get_object(builder, "enable_rename_check"));
   if (handles->enable_rename_check != NULL && GTK_IS_TOGGLE_BUTTON(handles->enable_rename_check)) {
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(handles->enable_rename_check), app->general_enable_rename);
+  }
+  handles->open_file_double_click_check = GTK_WIDGET(gtk_builder_get_object(builder, "open_file_double_click_check"));
+  if (handles->open_file_double_click_check != NULL && GTK_IS_TOGGLE_BUTTON(handles->open_file_double_click_check)) {
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(handles->open_file_double_click_check),
+                                 app->general_open_file_double_click);
   }
   handles->win32_explorer_context_menu_check =
       GTK_WIDGET(gtk_builder_get_object(builder, "windows_explorer_context_menu_check"));
@@ -1525,7 +1820,7 @@ static void da_setup_tree_view(AppState *app) {
   {
     GtkCellRenderer *pix = gtk_cell_renderer_pixbuf_new();
     GtkCellRenderer *txt = gtk_cell_renderer_text_new();
-    g_object_set(txt, "ellipsize", PANGO_ELLIPSIZE_END, "xalign", 0.0f, NULL);
+    g_object_set(txt, "ellipsize", PANGO_ELLIPSIZE_END, "xalign", 0.0f, "editable", FALSE, NULL);
     GtkTreeViewColumn *c = gtk_tree_view_column_new();
     gtk_tree_view_column_set_title(c, "Folder");
     gtk_tree_view_column_pack_start(c, pix, FALSE);
@@ -1540,6 +1835,7 @@ static void da_setup_tree_view(AppState *app) {
       gtk_tree_view_column_set_cell_data_func(c, txt, da_tv_deleted_text_cell_data, ctx, g_free);
     }
     g_signal_connect(txt, "edited", G_CALLBACK(on_tree_view_name_edited), app);
+    g_signal_connect(txt, "editing-canceled", G_CALLBACK(on_name_cell_editing_canceled), NULL);
     gtk_tree_view_column_set_alignment(c, 0.0f);
     gtk_tree_view_column_set_resizable(c, TRUE);
     gtk_tree_view_column_set_sizing(c, GTK_TREE_VIEW_COLUMN_FIXED);
@@ -1720,6 +2016,17 @@ void da_ui_build(AppState *app) {
   }
 
   da_setup_tree_view(app);
+
+  if (app->tree != NULL) {
+    g_signal_connect(app->tree, "row-activated", G_CALLBACK(on_tree_or_file_view_row_activated), app);
+    g_signal_connect(app->tree, "button-press-event", G_CALLBACK(da_name_column_rename_press), app);
+    g_signal_connect_after(app->tree, "button-release-event", G_CALLBACK(da_name_column_rename_release), app);
+  }
+  if (app->tree_view != NULL) {
+    g_signal_connect(app->tree_view, "row-activated", G_CALLBACK(on_tree_or_file_view_row_activated), app);
+    g_signal_connect(app->tree_view, "button-press-event", G_CALLBACK(da_name_column_rename_press), app);
+    g_signal_connect_after(app->tree_view, "button-release-event", G_CALLBACK(da_name_column_rename_release), app);
+  }
 
   /* Install deleted-state cell data functions on tree view text columns 2–7
    * (view indices): Size(2), Allocated(3), Items(4), Files(5), Folders(6), Modified(7).

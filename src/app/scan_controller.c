@@ -1258,6 +1258,7 @@ static void kill_all_timers(AppState *app) {
   kill_timer(&app->timer_fill);
   kill_timer(&app->timer_filter);
   kill_timer(&app->timer_search);
+  da_ui_cancel_pending_name_rename(app);
 }
 
 static void panel_scan_set_text(AppState *app, const char *text) {
@@ -2543,6 +2544,24 @@ static void da_spawn_explore_folder(const char *dir_utf8) {
   }
 }
 
+void scan_controller_launch_path_with_default_app(const gchar *path_utf8) {
+  if (path_utf8 == NULL || path_utf8[0] == '\0') {
+    return;
+  }
+  GFile *file = g_file_new_for_path(path_utf8);
+  gchar *uri = g_file_get_uri(file);
+  g_object_unref(file);
+  if (uri == NULL) {
+    return;
+  }
+  GError *err = NULL;
+  if (!g_app_info_launch_default_for_uri(uri, NULL, &err)) {
+    g_warning("Open with default app: %s", err->message);
+    g_clear_error(&err);
+  }
+  g_free(uri);
+}
+
 static void da_spawn_terminal_in_dir(const char *dir_utf8) {
   if (dir_utf8 == NULL || dir_utf8[0] == '\0') {
     return;
@@ -3567,8 +3586,7 @@ void scan_controller_begin_rename_selection(AppState *app) {
     return;
   }
 
-  GtkTreeViewColumn *col = gtk_tree_view_get_column(tv, 0);
   gtk_widget_grab_focus(GTK_WIDGET(tv));
-  gtk_tree_view_set_cursor(tv, tp, col, TRUE);
+  da_ui_name_column_begin_editing_session(tv, tp);
   gtk_tree_path_free(tp);
 }

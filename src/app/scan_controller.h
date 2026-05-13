@@ -46,6 +46,9 @@ gboolean scan_controller_file_menu_selection_commands_sensitive(AppState *app);
 /** Open each distinct parent folder of the current selection in the system file manager. */
 void scan_controller_explore_selected_folders(AppState *app);
 
+/** Open @a path_utf8 with the platform default application (`file:` URI). No-op if @a path_utf8 is empty. */
+void scan_controller_launch_path_with_default_app(const gchar *path_utf8);
+
 /** Open an interactive shell in each distinct folder of the current selection (platform default terminal/cmd). */
 void scan_controller_open_terminal_here(AppState *app);
 

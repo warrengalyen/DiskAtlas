@@ -190,6 +190,15 @@ typedef struct AppState {
    *  right-click context menu; persisted as `win32_explorer_context_menu` in `[general]`. Default TRUE. */
   gboolean general_win32_explorer_context_menu;
 
+  /** When TRUE, double-click on a file row in Tree View / File View opens it with the system default app;
+   *  persisted as `open_file_double_click` in `[general]`. Default TRUE. */
+  gboolean general_open_file_double_click;
+
+  /** Transient: second-click rename gesture on column 0 (see `da_ui_cancel_pending_name_rename`). */
+  GtkTreePath *name_rename_candidate_path;
+  GtkTreeView *name_rename_candidate_tv;
+  guint name_rename_pending_timeout;
+
   /** Runtime MIME classification database; built at startup and rebuilt after settings changes. */
   struct DmMimeDatabase *mime_db;
 
