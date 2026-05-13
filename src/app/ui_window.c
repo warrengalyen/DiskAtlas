@@ -27,6 +27,8 @@
 #include "format_text.h"
 #include "shell_icon.h"
 #include "win32_shell_context_menu.h"
+#include "da_fs_monitor.h"
+#include "da_drag_drop.h"
 
 void da_ui_sync_file_menu(AppState *app) {
   gboolean ok = FALSE;
@@ -651,6 +653,7 @@ static void da_tv_deleted_text_cell_data(GtkTreeViewColumn *col, GtkCellRenderer
   /* Deleted styling: read path from DA_TV_COL_PATH. */
   gchar *path = NULL;
   gtk_tree_model_get(model, iter, DA_TV_COL_PATH, &path, -1);
+
   da_apply_deleted_cell_style(cell, ctx->app, path);
   g_free(path);
 
@@ -1375,6 +1378,8 @@ typedef struct {
   GtkWidget       *enable_rename_check;
   GtkWidget       *open_file_double_click_check;
   GtkWidget       *win32_explorer_context_menu_check;
+  GtkWidget       *monitor_file_system_check;
+  GtkWidget       *enable_drag_and_drop_check;
 } DaSettingsDlgHandles;
 
 static void da_ui_apply_alternate_row_colors(AppState *app) {
@@ -1453,6 +1458,22 @@ static void da_settings_apply_interface_tab(DaSettingsDlgHandles *h) {
         gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(h->win32_explorer_context_menu_check));
   }
 #endif
+
+  if (h->monitor_file_system_check != NULL && GTK_IS_TOGGLE_BUTTON(h->monitor_file_system_check)) {
+    h->app->general_fs_monitor =
+        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(h->monitor_file_system_check));
+    if (h->app->general_fs_monitor) {
+      da_fs_monitor_start(h->app);
+    } else {
+      da_fs_monitor_stop(h->app);
+    }
+  }
+
+  if (h->enable_drag_and_drop_check != NULL && GTK_IS_TOGGLE_BUTTON(h->enable_drag_and_drop_check)) {
+    h->app->general_enable_drag_drop =
+        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(h->enable_drag_and_drop_check));
+    da_drag_drop_setup(h->app);
+  }
 
   da_ini_save_interface(h->app);
   da_ini_save_general(h->app);
@@ -1572,6 +1593,18 @@ static void on_tools_menu_settings_activate(GtkMenuItem *item, gpointer user_dat
                                    app->general_win32_explorer_context_menu);
     }
 #endif
+  }
+  handles->monitor_file_system_check =
+      GTK_WIDGET(gtk_builder_get_object(builder, "monitor_file_system_check"));
+  if (handles->monitor_file_system_check != NULL && GTK_IS_TOGGLE_BUTTON(handles->monitor_file_system_check)) {
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(handles->monitor_file_system_check),
+                                 app->general_fs_monitor);
+  }
+  handles->enable_drag_and_drop_check =
+      GTK_WIDGET(gtk_builder_get_object(builder, "enable_drag_and_drop_check"));
+  if (handles->enable_drag_and_drop_check != NULL && GTK_IS_TOGGLE_BUTTON(handles->enable_drag_and_drop_check)) {
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(handles->enable_drag_and_drop_check),
+                                 app->general_enable_drag_drop);
   }
 
   GtkWidget *ok_btn = GTK_WIDGET(gtk_builder_get_object(builder, "ok_btn"));
@@ -2382,3 +2415,4 @@ void da_ui_build(AppState *app) {
   }
 #endif
 }
+

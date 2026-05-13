@@ -87,6 +87,14 @@ void scan_controller_on_tree_name_cell_edited(AppState *app, gboolean is_tree_vi
 void scan_controller_reclassify_mime(AppState *app);
 
 /**
+ * Mark @a path_utf8 as deleted with the red-strikethrough visual style used by
+ * File → Delete commands.  If the path refers to a directory, all of its scan
+ * descendants are also marked.  No-op when no scan is loaded or the path is empty.
+ * Called by the file-system monitor when an external deletion is detected.
+ */
+void scan_controller_mark_path_deleted(AppState *app, const gchar *path_utf8);
+
+/**
  * Zoom the treemap into the currently selected tile (directory or parent of a file).
  * No-op when no scan is loaded or no tile is selected.
  */

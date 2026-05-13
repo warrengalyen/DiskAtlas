@@ -184,6 +184,8 @@ if(DISKATLAS_GTK3_FOUND)
     "${DISKATLAS_SRC}/app/dm_mime_db.c"
     "${DISKATLAS_SRC}/app/file_type_view.c"
     "${DISKATLAS_SRC}/app/win32_shell_context_menu.c"
+    "${DISKATLAS_SRC}/app/da_fs_monitor.c"
+    "${DISKATLAS_SRC}/app/da_drag_drop.c"
     ${DISKATLAS_GRESOURCE_C}
   )
   set_target_properties(diskatlas_app PROPERTIES OUTPUT_NAME diskatlas)
@@ -198,7 +200,7 @@ if(DISKATLAS_GTK3_FOUND)
     target_link_libraries(diskatlas_app PRIVATE "-framework" "AppKit")
   endif()
   if(WIN32)
-    target_link_libraries(diskatlas_app PRIVATE shell32 advapi32)
+    target_link_libraries(diskatlas_app PRIVATE shell32 advapi32 ole32)
     set_target_properties(diskatlas_app PROPERTIES ENABLE_EXPORTS OFF)
     if(DISKATLAS_WIN32_WINDOWS_SUBSYSTEM)
       if(MINGW OR CMAKE_C_COMPILER_ID STREQUAL "GNU")

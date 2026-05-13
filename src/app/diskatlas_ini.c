@@ -38,6 +38,8 @@
 #define DA_KEY_ENABLE_RENAME "enable_rename"
 #define DA_KEY_WIN32_EXPLORER_CTX_MENU "win32_explorer_context_menu"
 #define DA_KEY_OPEN_FILE_DOUBLE_CLICK "open_file_double_click"
+#define DA_KEY_FS_MONITOR "monitor_file_system"
+#define DA_KEY_ENABLE_DRAG_DROP "enable_drag_and_drop"
 
 static gchar *da_exe_dir_utf8(void) {
 #if defined(G_OS_WIN32)
@@ -327,6 +329,10 @@ void da_ini_load_general(AppState *app) {
   app->general_win32_explorer_context_menu = TRUE;
   /* Default: double-click opens files with the default application. */
   app->general_open_file_double_click = TRUE;
+  /* Default: file system monitor enabled. */
+  app->general_fs_monitor = TRUE;
+  /* Default: drag-and-drop enabled. */
+  app->general_enable_drag_drop = TRUE;
   gchar *path = da_ini_path();
   if (path == NULL) {
     return;
@@ -349,6 +355,16 @@ void da_ini_load_general(AppState *app) {
       g_clear_error(&err);
       app->general_open_file_double_click = od;
     }
+    if (g_key_file_has_key(kf, DA_SEC_GENERAL, DA_KEY_FS_MONITOR, NULL)) {
+      gboolean fm = g_key_file_get_boolean(kf, DA_SEC_GENERAL, DA_KEY_FS_MONITOR, &err);
+      g_clear_error(&err);
+      app->general_fs_monitor = fm;
+    }
+    if (g_key_file_has_key(kf, DA_SEC_GENERAL, DA_KEY_ENABLE_DRAG_DROP, NULL)) {
+      gboolean dd = g_key_file_get_boolean(kf, DA_SEC_GENERAL, DA_KEY_ENABLE_DRAG_DROP, &err);
+      g_clear_error(&err);
+      app->general_enable_drag_drop = dd;
+    }
   }
   g_key_file_unref(kf);
   g_free(path);
@@ -369,6 +385,8 @@ void da_ini_save_general(const AppState *app) {
                          app->general_win32_explorer_context_menu);
   g_key_file_set_boolean(kf, DA_SEC_GENERAL, DA_KEY_OPEN_FILE_DOUBLE_CLICK,
                          app->general_open_file_double_click);
+  g_key_file_set_boolean(kf, DA_SEC_GENERAL, DA_KEY_FS_MONITOR, app->general_fs_monitor);
+  g_key_file_set_boolean(kf, DA_SEC_GENERAL, DA_KEY_ENABLE_DRAG_DROP, app->general_enable_drag_drop);
 
   gsize len = 0;
   gchar *data = g_key_file_to_data(kf, &len, NULL);

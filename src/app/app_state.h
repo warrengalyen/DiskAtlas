@@ -194,6 +194,20 @@ typedef struct AppState {
    *  persisted as `open_file_double_click` in `[general]`. Default TRUE. */
   gboolean general_open_file_double_click;
 
+  /** When TRUE, a GFileMonitor watches scan_root_utf8 after each scan; detected deletions are
+   *  immediately marked with red strikethrough and other changes trigger a status bar notice.
+   *  Persisted as `monitor_file_system` in `[general]`. Default TRUE. */
+  gboolean general_fs_monitor;
+
+  /** When TRUE, column-0 rows in file_view_tree and tree_view_tree can be dragged out to the OS
+   *  file manager (move by default, copy when Ctrl is held).
+   *  Persisted as `enable_drag_and_drop` in `[general]`. Default TRUE. */
+  gboolean general_enable_drag_drop;
+
+  /** Live GFileMonitor watching scan_root_utf8; NULL when inactive.
+   *  Owned: cancel + unref via da_fs_monitor_stop(). */
+  GFileMonitor *fs_monitor;
+
   /** Transient: second-click rename gesture on column 0 (see `da_ui_cancel_pending_name_rename`). */
   GtkTreePath *name_rename_candidate_path;
   GtkTreeView *name_rename_candidate_tv;

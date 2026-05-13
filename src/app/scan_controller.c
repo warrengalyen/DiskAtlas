@@ -22,6 +22,8 @@
 #include "volumes.h"
 #include "diskatlas_ini.h"
 #include "file_ops.h"
+#include "da_fs_monitor.h"
+#include "da_drag_drop.h"
 
 /* Must match main_notebook child order in diskatlas_window.ui: page 0 = Tree View, page 1 = File View. */
 #define DA_TREE_VIEW_NOTEBOOK_PAGE 0
@@ -1678,6 +1680,9 @@ static gboolean on_timer_fill_chunk(gpointer data) {
   /* Populate folder tree view (background thread after tv-background-thread task). */
   da_tree_view_populate(app);
 
+  /* Start watching scan_root_utf8 for external file-system changes. */
+  da_fs_monitor_start(app);
+
   /* Populate file-type stats view. */
   da_file_type_view_populate(app);
 
@@ -1835,6 +1840,9 @@ static void start_scan(AppState *app) {
   if (app == NULL || app->scan_root_utf8 == NULL || app->scan_root_utf8[0] == '\0') {
     return;
   }
+
+  /* Stop any active file-system monitor before the new scan resets state. */
+  da_fs_monitor_stop(app);
 
   if (!app->mft_dump_internal_scan) {
     mft_dump_flow_clear(app);
@@ -2228,6 +2236,9 @@ void scan_controller_attach(AppState *app) {
     /* Apply initial label and show-labels state from loaded preferences. */
     treemap_widget_set_show_labels(TREEMAP_WIDGET(app->treemap), app->interface_treemap_show_labels);
   }
+
+  /* Set up outbound drag-and-drop on both tree views (column 0 only). */
+  da_drag_drop_setup(app);
 }
 
 void scan_controller_fill_scan_options_for_import(AppState *app, scan_options_t *out) {
@@ -2275,6 +2286,9 @@ void scan_controller_apply_imported_scan(AppState *app, scan_result_t *new_scan,
     scan_result_free(new_scan);
     return;
   }
+
+  /* Stop file-system monitor; imported scans reflect a snapshot, not live state. */
+  da_fs_monitor_stop(app);
 
   kill_all_timers(app);
   if (app->flat_list_model != NULL) {
@@ -3164,6 +3178,56 @@ static void da_mark_deleted_paths(AppState *app, const char **paths, size_t coun
   da_ui_sync_file_menu(app);
 }
 
+void scan_controller_mark_path_deleted(AppState *app, const gchar *path_utf8) {
+  if (app == NULL || path_utf8 == NULL || path_utf8[0] == '\0') {
+    return;
+  }
+
+  /* Determine whether the path is a directory by searching the scan nodes,
+   * so that da_mark_deleted_paths can recursively mark all children.
+   *
+   * Use the scan node's own path pointer as the canonical key so that the
+   * string inserted into deleted_path_set is byte-for-byte identical to what
+   * cell-data functions look up (v.nodes[nid].path / DA_TV_COL_PATH).
+   * This avoids mismatches caused by path-separator normalisation differences
+   * between g_file_get_path() and the scan engine on Windows. */
+  uint32_t kind           = DISKATLAS_NODE_KIND_FILE;
+  const char *canonical   = path_utf8;   /* fallback: use as-is */
+
+  if (app->scan != NULL) {
+    scan_results_view_t v = scan_get_results(app->scan);
+    for (size_t i = 0; i < v.count; i++) {
+      if (v.nodes[i].path == NULL) {
+        continue;
+      }
+#ifdef G_OS_WIN32
+      /* Windows paths are case-insensitive.  The scan engine stores paths with
+       * backslashes while the Win32 monitor produces forward slashes, so we
+       * normalise both separators to '/' before comparing. */
+      gboolean match = FALSE;
+      { const char *_np = v.nodes[i].path, *_ip = path_utf8;
+        for (;;) {
+          char _nc = (*_np == '\\') ? '/' : *_np;
+          char _ic = (*_ip == '\\') ? '/' : *_ip;
+          if (g_ascii_tolower(_nc) != g_ascii_tolower(_ic)) break;
+          if (_nc == '\0') { match = TRUE; break; }
+          _np++; _ip++;
+        }
+      }
+#else
+      gboolean match = (strcmp(v.nodes[i].path, path_utf8) == 0);
+#endif
+      if (match) {
+        kind      = v.nodes[i].attributes & DISKATLAS_NODE_KIND_MASK;
+        canonical = v.nodes[i].path;
+        break;
+      }
+    }
+  }
+
+  da_mark_deleted_paths(app, &canonical, 1, &kind);
+}
+
 /* Shared boilerplate: verify app state, get results, collect selected nids.
  * Returns a GArray* of size_t nids that must be freed by the caller,
  * or NULL if not actionable. */
@@ -3590,3 +3654,4 @@ void scan_controller_begin_rename_selection(AppState *app) {
   da_ui_name_column_begin_editing_session(tv, tp);
   gtk_tree_path_free(tp);
 }
+
