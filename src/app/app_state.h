@@ -58,6 +58,15 @@ typedef struct AppState {
   GtkWidget *file_menu_delete_trash;
   GtkWidget *file_menu_delete_permanent;
   GtkWidget *file_menu_rename;
+  /** Standalone context menu shown on right-click in treemap/file-view/tree-view. */
+  GtkWidget *context_menu;
+  GtkWidget *context_menu_explore_folder;
+  GtkWidget *context_menu_terminal_here;
+  GtkWidget *context_menu_copy_path;
+  GtkWidget *context_menu_export_csv;
+  GtkWidget *context_menu_copy_file_info;
+  GtkWidget *context_menu_zoom_in;
+  GtkWidget *context_menu_zoom_out;
   GtkWidget *scan_source_combo;
   gint scan_source_last_stable_active;
   GtkWidget *scan_btn;

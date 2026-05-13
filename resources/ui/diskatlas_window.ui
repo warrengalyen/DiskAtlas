@@ -3,9 +3,71 @@
 <!-- GtkBuilder UI — edit with Glade (gtk+-3.0) -->
 <interface>
   <requires lib="gtk+" version="3.20"/>
-  <object class="GtkMenu">
+  <object class="GtkMenu" id="context_menu">
     <property name="visible">True</property>
     <property name="can-focus">False</property>
+    <child>
+      <object class="GtkMenuItem" id="context_menu_explore_folder">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="label" translatable="yes">Explore Folder</property>
+        <property name="use-underline">True</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkMenuItem" id="context_menu_terminal_here">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="label" translatable="yes">Command Prompt Here</property>
+        <property name="use-underline">True</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkMenuItem" id="context_menu_copy_path">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="label" translatable="yes">Copy Path</property>
+        <property name="use-underline">True</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkMenuItem" id="context_menu_export_csv">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="label" translatable="yes">Export to CSV file...</property>
+        <property name="use-underline">True</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkMenuItem" id="context_menu_copy_file_info">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="label" translatable="yes">Copy file and size info to clipboard</property>
+        <property name="use-underline">True</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkSeparatorMenuItem">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkMenuItem" id="context_menu_zoom_in">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="label" translatable="yes">Zoom in Treemap</property>
+        <property name="use-underline">True</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkMenuItem" id="context_menu_zoom_out">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="label" translatable="yes">Zoom out Teemap</property>
+        <property name="use-underline">True</property>
+      </object>
+    </child>
   </object>
   <object class="GtkApplicationWindow" id="main_window">
     <property name="can-focus">False</property>
@@ -351,7 +413,6 @@
                         <property name="can-focus">False</property>
                         <property name="label" translatable="yes">Show Free Space in Treemap</property>
                         <property name="use-underline">True</property>
-                        <property name="active">False</property>
                       </object>
                     </child>
                     <child>

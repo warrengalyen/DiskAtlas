@@ -1,7 +1,9 @@
 build/
 bin/
+dist/
 .vscode/
 *.log
 *.ui~
 *.ui#
 *.glade~
+scripts/

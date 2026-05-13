@@ -11,6 +11,8 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
 option(DISKATLAS_BUILD_GUI "Build GTK graphical application" ON)
+# When ON: GUI exe uses the Windows subsystem (no extra console). MinGW: -mwindows; MSVC: /SUBSYSTEM:WINDOWS.
+option(DISKATLAS_WIN32_WINDOWS_SUBSYSTEM "Windows: link GUI exe without a console (subsystem windows)" OFF)
 
 set(DISKATLAS_SRC "${CMAKE_SOURCE_DIR}/src")
 set(DISKATLAS_BIN_DIR "${CMAKE_SOURCE_DIR}/bin")
@@ -197,9 +199,16 @@ if(DISKATLAS_GTK3_FOUND)
   if(WIN32)
     target_link_libraries(diskatlas_app PRIVATE shell32 advapi32)
     set_target_properties(diskatlas_app PROPERTIES ENABLE_EXPORTS OFF)
-  endif()
-  if(WIN32 AND MINGW)
-    # Omit -mwindows so g_log/GTK errors can print to console when run from shell; remove if you want no console.
+    if(DISKATLAS_WIN32_WINDOWS_SUBSYSTEM)
+      if(MINGW OR CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        target_link_options(diskatlas_app PRIVATE "-mwindows")
+      elseif(MSVC)
+        target_link_options(diskatlas_app PRIVATE
+          "/SUBSYSTEM:WINDOWS"
+          "/ENTRY:mainCRTStartup"
+        )
+      endif()
+    endif()
   endif()
 else()
   if(DISKATLAS_BUILD_GUI)

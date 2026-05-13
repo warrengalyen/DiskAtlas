@@ -82,6 +82,29 @@ void da_ui_sync_file_menu(AppState *app) {
   if (app != NULL && app->file_menu_zoom_out != NULL) {
     gtk_widget_set_sensitive(app->file_menu_zoom_out, ok_zoom_out);
   }
+
+  /* Context menu: mirror the same sensitivity rules. */
+  if (app != NULL && app->context_menu_export_csv != NULL) {
+    gtk_widget_set_sensitive(app->context_menu_export_csv, ok);
+  }
+  if (app != NULL && app->context_menu_copy_file_info != NULL) {
+    gtk_widget_set_sensitive(app->context_menu_copy_file_info, ok);
+  }
+  if (app != NULL && app->context_menu_explore_folder != NULL) {
+    gtk_widget_set_sensitive(app->context_menu_explore_folder, ok_sel);
+  }
+  if (app != NULL && app->context_menu_terminal_here != NULL) {
+    gtk_widget_set_sensitive(app->context_menu_terminal_here, ok_sel);
+  }
+  if (app != NULL && app->context_menu_copy_path != NULL) {
+    gtk_widget_set_sensitive(app->context_menu_copy_path, ok_sel);
+  }
+  if (app != NULL && app->context_menu_zoom_in != NULL) {
+    gtk_widget_set_sensitive(app->context_menu_zoom_in, ok_zoom_in);
+  }
+  if (app != NULL && app->context_menu_zoom_out != NULL) {
+    gtk_widget_set_sensitive(app->context_menu_zoom_out, ok_zoom_out);
+  }
 }
 
 #define DA_SIZE_FMT_MENU_DATA_KEY "da-size-fmt"
@@ -180,6 +203,17 @@ static void on_options_menu_show_free_labels_toggled(GtkCheckMenuItem *item, gpo
     treemap_widget_set_show_labels(TREEMAP_WIDGET(app->treemap), app->interface_treemap_show_labels);
   }
   da_ini_save_interface(app);
+}
+
+static gboolean on_widget_right_click(GtkWidget *w, GdkEventButton *ev, gpointer user_data) {
+  (void)w;
+  AppState *app = (AppState *)user_data;
+  if (ev->button != 3 || ev->type != GDK_BUTTON_PRESS || app == NULL || app->context_menu == NULL) {
+    return FALSE;
+  }
+  da_ui_sync_file_menu(app);
+  gtk_menu_popup_at_pointer(GTK_MENU(app->context_menu), (GdkEvent *)ev);
+  return TRUE;
 }
 
 static void on_file_menu_zoom_in_activate(GtkMenuItem *item, gpointer user_data) {
@@ -1884,6 +1918,83 @@ void da_ui_build(AppState *app) {
         g_signal_handlers_block_by_func(w, G_CALLBACK(on_size_display_format_activate), app);
         gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(w), TRUE);
         g_signal_handlers_unblock_by_func(w, G_CALLBACK(on_size_display_format_activate), app);
+      }
+    }
+  }
+
+  /* ---- context menu -------------------------------------------------------- */
+  {
+    GtkWidget *cm = GTK_WIDGET(gtk_builder_get_object(builder, "context_menu"));
+    app->context_menu = cm;
+    if (cm != NULL) {
+      /* Keep the standalone menu alive after the builder is unreffed. */
+      g_object_ref_sink(cm);
+
+      app->context_menu_explore_folder =
+          GTK_WIDGET(gtk_builder_get_object(builder, "context_menu_explore_folder"));
+      app->context_menu_terminal_here =
+          GTK_WIDGET(gtk_builder_get_object(builder, "context_menu_terminal_here"));
+      app->context_menu_copy_path =
+          GTK_WIDGET(gtk_builder_get_object(builder, "context_menu_copy_path"));
+      app->context_menu_export_csv =
+          GTK_WIDGET(gtk_builder_get_object(builder, "context_menu_export_csv"));
+      app->context_menu_copy_file_info =
+          GTK_WIDGET(gtk_builder_get_object(builder, "context_menu_copy_file_info"));
+      app->context_menu_zoom_in =
+          GTK_WIDGET(gtk_builder_get_object(builder, "context_menu_zoom_in"));
+      app->context_menu_zoom_out =
+          GTK_WIDGET(gtk_builder_get_object(builder, "context_menu_zoom_out"));
+
+      if (app->context_menu_terminal_here != NULL && GTK_IS_MENU_ITEM(app->context_menu_terminal_here)) {
+#if defined(G_OS_WIN32)
+        gtk_menu_item_set_label(GTK_MENU_ITEM(app->context_menu_terminal_here), "Command Prompt Here");
+#else
+        gtk_menu_item_set_label(GTK_MENU_ITEM(app->context_menu_terminal_here), "Terminal Here");
+#endif
+      }
+
+      if (app->context_menu_explore_folder != NULL) {
+        g_signal_connect(app->context_menu_explore_folder, "activate",
+                         G_CALLBACK(on_file_menu_explore_folder_activate), app);
+      }
+      if (app->context_menu_terminal_here != NULL) {
+        g_signal_connect(app->context_menu_terminal_here, "activate",
+                         G_CALLBACK(on_file_menu_terminal_activate), app);
+      }
+      if (app->context_menu_copy_path != NULL) {
+        g_signal_connect(app->context_menu_copy_path, "activate",
+                         G_CALLBACK(on_file_menu_copy_path_activate), app);
+      }
+      if (app->context_menu_export_csv != NULL) {
+        g_signal_connect(app->context_menu_export_csv, "activate",
+                         G_CALLBACK(on_file_menu_export_csv_activate), app);
+      }
+      if (app->context_menu_copy_file_info != NULL) {
+        g_signal_connect(app->context_menu_copy_file_info, "activate",
+                         G_CALLBACK(on_file_menu_copy_clipboard_activate), app);
+      }
+      if (app->context_menu_zoom_in != NULL) {
+        g_signal_connect(app->context_menu_zoom_in, "activate",
+                         G_CALLBACK(on_file_menu_zoom_in_activate), app);
+      }
+      if (app->context_menu_zoom_out != NULL) {
+        g_signal_connect(app->context_menu_zoom_out, "activate",
+                         G_CALLBACK(on_file_menu_zoom_out_activate), app);
+      }
+
+      /* Attach right-click handler to the three target widgets. */
+      if (app->treemap != NULL) {
+        gtk_widget_add_events(app->treemap, GDK_BUTTON_PRESS_MASK);
+        g_signal_connect(app->treemap, "button-press-event",
+                         G_CALLBACK(on_widget_right_click), app);
+      }
+      if (app->tree != NULL) {
+        g_signal_connect(app->tree, "button-press-event",
+                         G_CALLBACK(on_widget_right_click), app);
+      }
+      if (app->tree_view != NULL) {
+        g_signal_connect(app->tree_view, "button-press-event",
+                         G_CALLBACK(on_widget_right_click), app);
       }
     }
   }
