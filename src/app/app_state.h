@@ -111,6 +111,10 @@ typedef struct AppState {
   GCancellable *tv_build_cancel;
   /** Scan kept alive while the background tree-view build worker is running. */
   scan_result_t *tv_held_scan;
+  /** When TRUE, `tv_build_done` will call `da_fs_monitor_scan_phase_end` after the GTask finishes. */
+  gboolean defer_fs_monitor_phase_end;
+  /** TRUE from `da_tree_view_populate` scheduling a GTask until `tv_build_done` finishes (worker + GTK). */
+  gboolean tv_build_worker_pending;
 
   scan_result_t *scan;
   guint timer_scan;
@@ -198,6 +202,11 @@ typedef struct AppState {
    *  immediately marked with red strikethrough and other changes trigger a status bar notice.
    *  Persisted as `monitor_file_system` in `[general]`. Default TRUE. */
   gboolean general_fs_monitor;
+
+  /** TRUE from `da_fs_monitor_scan_phase_begin` until `da_fs_monitor_scan_phase_end`: blocks
+   *  `da_fs_monitor_start` (including from settings) and ignores stray monitor callbacks so the
+   *  live watcher does not run while a scan or list rebuild is in progress. */
+  gboolean fs_monitor_pause_for_scan;
 
   /** When TRUE, column-0 rows in file_view_tree and tree_view_tree can be dragged out to the OS
    *  file manager (move by default, copy when Ctrl is held).

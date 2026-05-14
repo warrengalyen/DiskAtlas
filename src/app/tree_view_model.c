@@ -10,6 +10,7 @@
 #include "diskatlas.h"
 #include "tree_view_model.h"
 #include "format_text.h"
+#include "da_fs_monitor.h"
 
 /* ---- Internal entry (one per scan node, in depth-sorted order) ---- */
 
@@ -335,6 +336,13 @@ static void tv_build_worker(GTask *task, gpointer source_object,
     return;
   }
   for (size_t i = 0; i < n; i++) {
+    if ((i & 0x1FFu) == 0u && g_cancellable_is_cancelled(cancellable)) {
+      free(sorted_idx);
+      free(entries);
+      g_task_return_error(task,
+        g_error_new_literal(G_IO_ERROR, G_IO_ERROR_CANCELLED, "tree-view build cancelled"));
+      return;
+    }
     entries[i].kind             = 0;
     entries[i].path             = NULL;
     entries[i].scan_nid         = SIZE_MAX;
@@ -354,6 +362,14 @@ static void tv_build_worker(GTask *task, gpointer source_object,
   GHashTable *path_map = g_hash_table_new(g_str_hash, g_str_equal);
 
   for (size_t pos = 0; pos < n; pos++) {
+    if ((pos & 0x1FFu) == 0u && g_cancellable_is_cancelled(cancellable)) {
+      g_hash_table_destroy(path_map);
+      free(sorted_idx);
+      free(entries);
+      g_task_return_error(task,
+        g_error_new_literal(G_IO_ERROR, G_IO_ERROR_CANCELLED, "tree-view build cancelled"));
+      return;
+    }
     size_t ni = sorted_idx[pos];
     const file_node_t *node = &v.nodes[ni];
     DaTvEntry *e = &entries[pos];
@@ -402,6 +418,12 @@ static void tv_build_worker(GTask *task, gpointer source_object,
 
   /* Step 4: bottom-up aggregation. */
   for (int32_t pos = (int32_t)n - 1; pos >= 0; pos--) {
+    if ((pos & 0x3FF) == 0 && g_cancellable_is_cancelled(cancellable)) {
+      free(entries);
+      g_task_return_error(task,
+        g_error_new_literal(G_IO_ERROR, G_IO_ERROR_CANCELLED, "tree-view build cancelled"));
+      return;
+    }
     DaTvEntry *e = &entries[pos];
     if (e->parent_id < 0) { continue; }
     DaTvEntry *parent = &entries[e->parent_id];
@@ -495,15 +517,15 @@ static void tv_build_done(GObject *source_object, GAsyncResult *res, gpointer us
     g_error_free(err);
     /* Cancelled or OOM — discard without updating the tree. */
     tv_build_data_free(bd);
-    return;
+    goto done;
   }
   if (bd == NULL) {
-    return;
+    goto done;
   }
 
   if (app->tree_view_store == NULL) {
     tv_build_data_free(bd);
-    return;
+    goto done;
   }
 
   /* Swap model. */
@@ -516,13 +538,13 @@ static void tv_build_done(GObject *source_object, GAsyncResult *res, gpointer us
 
   if (bd->entries == NULL || bd->count == 0) {
     tv_build_data_free(bd);
-    return;
+    goto done;
   }
 
   DaTreeViewModel *model = (DaTreeViewModel *)malloc(sizeof(DaTreeViewModel));
   if (model == NULL) {
     tv_build_data_free(bd);
-    return;
+    goto done;
   }
   model->entries       = bd->entries;
   model->count         = bd->count;
@@ -550,18 +572,25 @@ static void tv_build_done(GObject *source_object, GAsyncResult *res, gpointer us
   if (app->tree_view != NULL) {
     g_idle_add(da_tv_expand_top_level_idle, app);
   }
+
+done:
+  app->tv_build_worker_pending = FALSE;
+  if (app->defer_fs_monitor_phase_end) {
+    app->defer_fs_monitor_phase_end = FALSE;
+    da_fs_monitor_scan_phase_end(app);
+  }
 }
 
 /* ---- Public: populate ---- */
 
-void da_tree_view_populate(AppState *app) {
+gboolean da_tree_view_populate(AppState *app) {
   if (app == NULL || app->scan == NULL || app->tree_view_store == NULL) {
-    return;
+    return FALSE;
   }
 
   scan_results_view_t v = scan_get_results(app->scan);
   if (v.nodes == NULL || v.count == 0) {
-    return;
+    return FALSE;
   }
 
   /* Cancel any pending build first. */
@@ -570,6 +599,7 @@ void da_tree_view_populate(AppState *app) {
     g_object_unref(app->tv_build_cancel);
     app->tv_build_cancel = NULL;
   }
+  app->defer_fs_monitor_phase_end = FALSE;
 
   /* Keep the scan alive while the worker runs. */
   app->tv_held_scan = app->scan;
@@ -589,10 +619,14 @@ void da_tree_view_populate(AppState *app) {
   GCancellable *cancel = g_cancellable_new();
   app->tv_build_cancel = cancel;
 
+  app->defer_fs_monitor_phase_end = TRUE;
+  app->tv_build_worker_pending = TRUE;
+
   GTask *task = g_task_new(NULL, cancel, tv_build_done, app);
   g_task_set_task_data(task, bd, NULL);
   g_task_run_in_thread(task, tv_build_worker);
   g_object_unref(task);
+  return TRUE;
 }
 
 /* ---- Public: clear ---- */
@@ -601,6 +635,7 @@ void da_tree_view_clear(AppState *app) {
   if (app == NULL) {
     return;
   }
+  app->defer_fs_monitor_phase_end = FALSE;
   /* Cancel any background build; the callback will free tv_held_scan. */
   if (app->tv_build_cancel != NULL) {
     g_cancellable_cancel(app->tv_build_cancel);

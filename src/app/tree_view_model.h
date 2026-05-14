@@ -33,8 +33,11 @@ GtkTreeStore *da_tree_view_store_new(void);
  * Build the hierarchical tree model from the current scan results and
  * populate the root level of app->tree_view_store.  Children are loaded
  * lazily via da_tree_view_on_row_expanded.
+ *
+ * @return TRUE if a background GTask was started (caller must not call
+ *         `da_fs_monitor_scan_phase_end` until `tv_build_done` runs).
  */
-void da_tree_view_populate(AppState *app);
+gboolean da_tree_view_populate(AppState *app);
 
 /** Clear the tree view store and release the internal entry array. */
 void da_tree_view_clear(AppState *app);

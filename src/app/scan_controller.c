@@ -1607,6 +1607,7 @@ static void begin_populate_list(AppState *app) {
     da_file_type_view_clear(app);
     da_refresh_treemap(app);
     scan_controller_sync_file_view_status(app);
+    da_fs_monitor_scan_phase_end(app);
     return;
   }
 
@@ -1618,6 +1619,7 @@ static gboolean on_timer_fill_chunk(gpointer data) {
   AppState *app = (AppState *)data;
   if (app->scan == NULL || app->populate_total == 0) {
     kill_timer(&app->timer_fill);
+    da_fs_monitor_scan_phase_end(app);
     return G_SOURCE_REMOVE;
   }
 
@@ -1629,6 +1631,7 @@ static gboolean on_timer_fill_chunk(gpointer data) {
       app->list_populated = TRUE;
       enable_scan_button(app, TRUE);
       scan_controller_sync_file_view_status(app);
+      da_fs_monitor_scan_phase_end(app);
       return G_SOURCE_REMOVE;
     }
     panel_scan_set_text(app, "Sorting entries by size…");
@@ -1643,6 +1646,7 @@ static gboolean on_timer_fill_chunk(gpointer data) {
                                             "Out of memory while preparing the sorted file list.");
       gtk_dialog_run(GTK_DIALOG(d));
       gtk_widget_destroy(d);
+      da_fs_monitor_scan_phase_end(app);
       return G_SOURCE_REMOVE;
     }
     return G_SOURCE_CONTINUE;
@@ -1657,6 +1661,7 @@ static gboolean on_timer_fill_chunk(gpointer data) {
     app->list_populated = TRUE;
     enable_scan_button(app, TRUE);
     scan_controller_sync_file_view_status(app);
+    da_fs_monitor_scan_phase_end(app);
     return G_SOURCE_REMOVE;
   }
 
@@ -1677,11 +1682,10 @@ static gboolean on_timer_fill_chunk(gpointer data) {
   }
   enable_scan_button(app, TRUE);
 
-  /* Populate folder tree view (background thread after tv-background-thread task). */
-  da_tree_view_populate(app);
-
-  /* Start watching scan_root_utf8 for external file-system changes. */
-  da_fs_monitor_start(app);
+  /* Folder tree builds asynchronously; defer fs monitor until `tv_build_done`. */
+  if (!da_tree_view_populate(app)) {
+    da_fs_monitor_scan_phase_end(app);
+  }
 
   /* Populate file-type stats view. */
   da_file_type_view_populate(app);
@@ -1737,6 +1741,7 @@ static void mft_dump_run_stream_copy(AppState *app, gchar *vol_owned, gchar *des
     g_free(dest_owned);
     scan_controller_refresh_volume_labels(app);
     enable_scan_button(app, TRUE);
+    da_fs_monitor_scan_phase_end(app);
     return;
   }
   panel_scan_set_text(app, "MFT data dump complete.");
@@ -1760,6 +1765,7 @@ static gboolean on_timer_scan_tick(gpointer data) {
   if (app->scan == NULL) {
     kill_timer(&app->timer_scan);
     da_ui_sync_file_menu(app);
+    da_fs_monitor_scan_phase_end(app);
     return G_SOURCE_REMOVE;
   }
   scan_progress_t pr = scan_get_progress(app->scan);
@@ -1841,8 +1847,8 @@ static void start_scan(AppState *app) {
     return;
   }
 
-  /* Stop any active file-system monitor before the new scan resets state. */
-  da_fs_monitor_stop(app);
+  /* Stop monitor and block restarts until populate finishes (also blocks settings Apply). */
+  da_fs_monitor_scan_phase_begin(app);
 
   if (!app->mft_dump_internal_scan) {
     mft_dump_flow_clear(app);
@@ -1944,6 +1950,7 @@ static void start_scan(AppState *app) {
     scan_progress_reset_idle(app);
     panel_scan_set_text(app, "Could not start scan.");
     da_ui_sync_file_menu(app);
+    da_fs_monitor_scan_phase_end(app);
     return;
   }
 
@@ -1966,6 +1973,11 @@ void scan_controller_request_scan(AppState *app) {
       panel_scan_set_text(app, "Cancelling…");
       return;
     }
+  }
+  /* Avoid racing a new scan against the folder-tree GTask (uses tv_held_scan / scan nodes). */
+  if (app->tv_build_worker_pending) {
+    panel_scan_set_text(app, "Finishing folder tree…");
+    return;
   }
   start_scan(app);
 }
@@ -2287,8 +2299,8 @@ void scan_controller_apply_imported_scan(AppState *app, scan_result_t *new_scan,
     return;
   }
 
-  /* Stop file-system monitor; imported scans reflect a snapshot, not live state. */
-  da_fs_monitor_stop(app);
+  /* Stop monitor; imported scans reflect a snapshot, not live state. */
+  da_fs_monitor_scan_phase_begin(app);
 
   kill_all_timers(app);
   if (app->flat_list_model != NULL) {

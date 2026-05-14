@@ -23,9 +23,14 @@ typedef struct {
 
 static gboolean da_delete_on_main(gpointer user_data) {
   DaDeleteIdleData *d = (DaDeleteIdleData *)user_data;
+  if (d->app != NULL && d->app->fs_monitor_pause_for_scan) {
+    /* Stale idle from before stop, or posted while a new scan was starting. */
+    goto out;
+  }
   if (d->app && d->path_utf8 && d->path_utf8[0] != '\0') {
     scan_controller_mark_path_deleted(d->app, d->path_utf8);
   }
+out:
   g_free(d->path_utf8);
   g_free(d);
   return G_SOURCE_REMOVE;
@@ -97,8 +102,14 @@ static DWORD WINAPI da_win32_monitor_thread(LPVOID param) {
           DaDeleteIdleData *d = g_new(DaDeleteIdleData, 1);
           d->app       = mon->app;
           d->path_utf8 = abs;
-          g_main_context_invoke_full(NULL, G_PRIORITY_DEFAULT,
-                                     da_delete_on_main, d, NULL);
+          /* Must not use g_main_context_invoke_full from this thread: it blocks
+           * until the default main context runs the callback. Stopping the
+           * monitor (da_win32_monitor_stop_impl) runs on the UI thread and
+           * waits on this thread — if we are inside invoke_full, that deadlocks. */
+          if (g_idle_add(da_delete_on_main, d) == 0) {
+            g_free(abs);
+            g_free(d);
+          }
         }
       }
 
@@ -116,9 +127,10 @@ static void da_win32_monitor_stop_impl(void) {
 
   g_atomic_int_set(&mon->running, 0);
 
-  /* Close the directory handle — this unblocks the synchronous
-   * ReadDirectoryChangesW call in the background thread. */
+  /* Tear down directory I/O: cancel any in-flight ReadDirectoryChangesW before CloseHandle.
+   * Without CancelIoEx, CloseHandle can block the UI thread indefinitely on some volumes. */
   if (mon->hDir != INVALID_HANDLE_VALUE) {
+    (void)CancelIoEx(mon->hDir, NULL);
     CloseHandle(mon->hDir);
     mon->hDir = INVALID_HANDLE_VALUE;
   }
@@ -195,6 +207,9 @@ static void on_fs_monitor_changed(GFileMonitor      *monitor,
   (void)other_file;
   AppState *app = (AppState *)user_data;
   if (app == NULL) return;
+  if (app->fs_monitor_pause_for_scan) {
+    return;
+  }
 
   switch (event_type) {
     case G_FILE_MONITOR_EVENT_DELETED:
@@ -227,6 +242,9 @@ static void on_fs_monitor_changed(GFileMonitor      *monitor,
 
 void da_fs_monitor_start(AppState *app) {
   if (app == NULL || !app->general_fs_monitor) return;
+  if (app->fs_monitor_pause_for_scan) {
+    return;
+  }
   if (app->scan_root_utf8 == NULL || app->scan_root_utf8[0] == '\0') return;
 
 #ifdef G_OS_WIN32
@@ -249,6 +267,22 @@ void da_fs_monitor_start(AppState *app) {
 
   g_signal_connect(app->fs_monitor, "changed", G_CALLBACK(on_fs_monitor_changed), app);
 #endif
+}
+
+void da_fs_monitor_scan_phase_begin(AppState *app) {
+  if (app == NULL) {
+    return;
+  }
+  da_fs_monitor_stop(app);
+  app->fs_monitor_pause_for_scan = TRUE;
+}
+
+void da_fs_monitor_scan_phase_end(AppState *app) {
+  if (app == NULL) {
+    return;
+  }
+  app->fs_monitor_pause_for_scan = FALSE;
+  da_fs_monitor_start(app);
 }
 
 void da_fs_monitor_stop(AppState *app) {
