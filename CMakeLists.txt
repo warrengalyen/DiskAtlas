@@ -181,6 +181,7 @@ if(DISKATLAS_GTK3_FOUND)
     "${DISKATLAS_SRC}/app/diskatlas_ini.c"
     "${DISKATLAS_SRC}/app/da_default_mime_categories.c"
     "${DISKATLAS_SRC}/app/settings_mime_tab.c"
+    "${DISKATLAS_SRC}/app/da_color_picker_dialog.c"
     "${DISKATLAS_SRC}/app/dm_mime_db.c"
     "${DISKATLAS_SRC}/app/file_type_view.c"
     "${DISKATLAS_SRC}/app/win32_shell_context_menu.c"

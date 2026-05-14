@@ -3,6 +3,7 @@
 #include <glib.h>
 #include <gtk/gtk.h>
 
+#include "da_color_picker_dialog.h"
 #include "diskatlas_ini.h"
 #include "settings_mime_tab.h"
 
@@ -10,7 +11,7 @@ struct DaSettingsMimeCtx {
   GtkWindow *settings_window;
   GtkListBox *category_list;
   GtkEntry *name_entry;
-  GtkColorButton *color_btn;
+  GtkWidget *color_btn;
   GtkEntry *hex_entry;
   GtkTextView *pat_ins;
   GtkTextView *pat_sens;
@@ -58,6 +59,51 @@ static void da_text_view_set_text(GtkTextView *tv, const gchar *text) {
 static gchar *da_hex_from_rgba(const GdkRGBA *rgba) {
   return g_strdup_printf("#%02X%02X%02X", (guint)(rgba->red * 255.0 + 0.5), (guint)(rgba->green * 255.0 + 0.5),
                          (guint)(rgba->blue * 255.0 + 0.5));
+}
+
+static gboolean da_mime_color_swatch_draw(GtkWidget *w, cairo_t *cr, gpointer user_data) {
+  (void)user_data;
+  GdkRGBA rgba;
+  gdk_rgba_parse(&rgba, "#808080");
+  GdkRGBA *stored = g_object_get_data(G_OBJECT(w), "da-swatch-color");
+  if (stored != NULL) {
+    rgba = *stored;
+  }
+
+  GtkAllocation a;
+  gtk_widget_get_allocation(w, &a);
+  gdk_cairo_set_source_rgba(cr, &rgba);
+  cairo_rectangle(cr, 0.5, 0.5, (gdouble)a.width - 1.0, (gdouble)a.height - 1.0);
+  cairo_fill_preserve(cr);
+  cairo_set_source_rgb(cr, 0.45, 0.45, 0.45);
+  cairo_set_line_width(cr, 1.0);
+  cairo_stroke(cr);
+  return FALSE;
+}
+
+static void da_mime_attach_color_swatch(GtkWidget *btn) {
+  if (btn == NULL || gtk_bin_get_child(GTK_BIN(btn)) != NULL) {
+    return;
+  }
+  GtkWidget *da = gtk_drawing_area_new();
+  gtk_widget_set_size_request(da, 32, 22);
+  g_signal_connect(da, "draw", G_CALLBACK(da_mime_color_swatch_draw), NULL);
+  gtk_container_add(GTK_CONTAINER(btn), da);
+  gtk_widget_show(da);
+}
+
+static void da_mime_color_preview_update(GtkWidget *btn, const GdkRGBA *rgba) {
+  if (btn == NULL || rgba == NULL) {
+    return;
+  }
+  GtkWidget *da = gtk_bin_get_child(GTK_BIN(btn));
+  if (da == NULL || !GTK_IS_DRAWING_AREA(da)) {
+    return;
+  }
+  GdkRGBA *copy = g_new(GdkRGBA, 1);
+  *copy = *rgba;
+  g_object_set_data_full(G_OBJECT(da), "da-swatch-color", copy, g_free);
+  gtk_widget_queue_draw(da);
 }
 
 static void da_normalize_color_hex_in_place(DaIniMimeCategory *c) {
@@ -276,7 +322,7 @@ static void da_mime_load_row(DaSettingsMimeCtx *ctx, gint idx) {
   }
   GdkRGBA rgba;
   if (ctx->color_btn != NULL && gdk_rgba_parse(&rgba, hx)) {
-    gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(ctx->color_btn), &rgba);
+    da_mime_color_preview_update(ctx->color_btn, &rgba);
   }
   if (ctx->pat_ins != NULL) {
     da_text_view_set_text(ctx->pat_ins, c->patterns_insensitive);
@@ -302,7 +348,7 @@ static void da_mime_clear_fields(DaSettingsMimeCtx *ctx) {
   GdkRGBA rgba;
   gdk_rgba_parse(&rgba, "#808080");
   if (ctx->color_btn != NULL) {
-    gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(ctx->color_btn), &rgba);
+    da_mime_color_preview_update(ctx->color_btn, &rgba);
   }
   if (ctx->pat_ins != NULL) {
     da_text_view_set_text(ctx->pat_ins, "");
@@ -464,19 +510,35 @@ static void on_category_remove_clicked(GtkButton *btn, gpointer user_data) {
   da_mime_rebuild_list(ctx, next_sel);
 }
 
-static void on_color_btn_color_set(GtkColorButton *btn, gpointer user_data) {
-  (void)btn;
+static void on_category_color_btn_clicked(GtkButton *btn, gpointer user_data) {
   DaSettingsMimeCtx *ctx = (DaSettingsMimeCtx *)user_data;
-  if (ctx->frozen) {
+  if (ctx->frozen || ctx->hex_entry == NULL) {
     return;
   }
   GdkRGBA rgba;
-  gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(ctx->color_btn), &rgba);
-  gchar *hx = da_hex_from_rgba(&rgba);
-  ctx->frozen = TRUE;
-  gtk_entry_set_text(ctx->hex_entry, hx);
-  ctx->frozen = FALSE;
-  g_free(hx);
+  const gchar *hx = gtk_entry_get_text(ctx->hex_entry);
+  if (hx == NULL || hx[0] == '\0' || !gdk_rgba_parse(&rgba, hx)) {
+    gdk_rgba_parse(&rgba, "#808080");
+  }
+
+  GtkWindow *parent = ctx->settings_window;
+  if (parent == NULL && ctx->color_btn != NULL) {
+    GtkWidget *top = gtk_widget_get_toplevel(ctx->color_btn);
+    if (top != NULL && GTK_IS_WINDOW(top)) {
+      parent = GTK_WINDOW(top);
+    }
+  }
+
+  GdkRGBA initial = rgba;
+  GdkRGBA original = rgba;
+  if (da_color_picker_dialog_run(parent, &initial, &original, &rgba)) {
+    gchar *hex = da_hex_from_rgba(&rgba);
+    ctx->frozen = TRUE;
+    gtk_entry_set_text(ctx->hex_entry, hex);
+    ctx->frozen = FALSE;
+    g_free(hex);
+    da_mime_color_preview_update(GTK_WIDGET(btn), &rgba);
+  }
 }
 
 static void on_hex_entry_changed(GtkEditable *ed, gpointer user_data) {
@@ -487,9 +549,9 @@ static void on_hex_entry_changed(GtkEditable *ed, gpointer user_data) {
   }
   const gchar *t = gtk_entry_get_text(ctx->hex_entry);
   GdkRGBA rgba;
-  if (t != NULL && gdk_rgba_parse(&rgba, t)) {
+  if (ctx->color_btn != NULL && t != NULL && gdk_rgba_parse(&rgba, t)) {
     ctx->frozen = TRUE;
-    gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(ctx->color_btn), &rgba);
+    da_mime_color_preview_update(ctx->color_btn, &rgba);
     ctx->frozen = FALSE;
   }
 }
@@ -525,7 +587,7 @@ DaSettingsMimeCtx *da_settings_mime_tab_bind(GtkBuilder *builder) {
   o = gtk_builder_get_object(builder, "category_name_text");
   ctx->name_entry = (o != NULL && GTK_IS_ENTRY(o)) ? GTK_ENTRY(o) : NULL;
   o = gtk_builder_get_object(builder, "category_color_btn");
-  ctx->color_btn = (o != NULL && GTK_IS_COLOR_BUTTON(o)) ? GTK_COLOR_BUTTON(o) : NULL;
+  ctx->color_btn = (o != NULL && GTK_IS_BUTTON(o)) ? GTK_WIDGET(o) : NULL;
   o = gtk_builder_get_object(builder, "category_color_hex_txt");
   ctx->hex_entry = (o != NULL && GTK_IS_ENTRY(o)) ? GTK_ENTRY(o) : NULL;
   o = gtk_builder_get_object(builder, "patterns_insensitive_text");
@@ -567,17 +629,14 @@ DaSettingsMimeCtx *da_settings_mime_tab_bind(GtkBuilder *builder) {
     g_signal_connect(rm_btn, "clicked", G_CALLBACK(on_category_remove_clicked), ctx);
   }
   if (ctx->color_btn != NULL) {
-    g_signal_connect(ctx->color_btn, "color-set", G_CALLBACK(on_color_btn_color_set), ctx);
+    da_mime_attach_color_swatch(ctx->color_btn);
+    g_signal_connect(ctx->color_btn, "clicked", G_CALLBACK(on_category_color_btn_clicked), ctx);
   }
   if (ctx->hex_entry != NULL) {
     g_signal_connect(ctx->hex_entry, "changed", G_CALLBACK(on_hex_entry_changed), ctx);
   }
   if (ctx->name_entry != NULL) {
     g_signal_connect(ctx->name_entry, "changed", G_CALLBACK(on_name_entry_changed), ctx);
-  }
-
-  if (ctx->color_btn != NULL) {
-    gtk_color_chooser_set_use_alpha(GTK_COLOR_CHOOSER(ctx->color_btn), FALSE);
   }
 
   da_mime_rebuild_list(ctx, 0);

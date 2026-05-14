@@ -382,10 +382,11 @@
                           </packing>
                         </child>
                         <child>
-                          <object class="GtkColorButton" id="category_color_btn">
+                          <object class="GtkButton" id="category_color_btn">
                             <property name="visible">True</property>
                             <property name="can-focus">True</property>
                             <property name="receives-default">True</property>
+                            <property name="tooltip-text" translatable="yes">Choose color…</property>
                           </object>
                           <packing>
                             <property name="expand">False</property>

@@ -7,3 +7,5 @@ dist/
 *.ui#
 *.glade~
 scripts/
+installer/
+cert/
