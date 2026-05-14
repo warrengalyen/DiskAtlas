@@ -713,6 +713,14 @@ static GtkWidget *da_color_picker_build_ui(DaColorPicker *p) {
                                                (GtkDialogFlags)(GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT),
                                                "_Cancel", GTK_RESPONSE_CANCEL, "_OK", GTK_RESPONSE_OK, NULL);
   p->dialog = dlg;
+  /* Header bar for decoration only; keep OK/Cancel in the dialog action area. */
+  g_object_set(G_OBJECT(dlg), "use-header-bar", FALSE, NULL);
+  {
+    GtkWidget *hb = gtk_header_bar_new();
+    gtk_header_bar_set_title(GTK_HEADER_BAR(hb), "Choose category color");
+    gtk_header_bar_set_show_close_button(GTK_HEADER_BAR(hb), TRUE);
+    gtk_window_set_titlebar(GTK_WINDOW(dlg), hb);
+  }
   gtk_window_set_default_size(GTK_WINDOW(dlg), 480, 360);
   gtk_window_set_resizable(GTK_WINDOW(dlg), FALSE);
   gtk_window_set_icon(GTK_WINDOW(dlg), NULL);
