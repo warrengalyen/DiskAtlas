@@ -10,6 +10,7 @@
 #endif
 #include <windows.h>
 #include <shellapi.h>
+#include <wchar.h>
 
 #include <glib.h>
 #include <gtk/gtk.h>
@@ -203,15 +204,37 @@ static LPWSTR skip_first_command_line_arg(LPWSTR cmd) {
   return p;
 }
 
-gboolean da_win32_restart_elevated_self(void) {
+gboolean da_win32_restart_elevated_self(gboolean append_elevated_marker) {
   WCHAR exe[MAX_PATH];
   DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
   if (n == 0 || n >= MAX_PATH) {
     return FALSE;
   }
   LPWSTR tail = skip_first_command_line_arg(GetCommandLineW());
+
+  WCHAR *params_buf = NULL;
+  const WCHAR *params = tail;
+
+  if (append_elevated_marker) {
+    gboolean already = (tail != NULL && wcsstr(tail, L"--elevated") != NULL);
+    if (!already) {
+      static const WCHAR suf[] = L" --elevated";
+      size_t tlen = (tail != NULL) ? wcslen(tail) : 0;
+      if (tlen > 0) {
+        size_t need = tlen + (sizeof(suf) / sizeof(suf[0]));
+        params_buf = g_new(WCHAR, need);
+        wcscpy(params_buf, tail);
+        wcscat(params_buf, suf);
+        params = params_buf;
+      } else {
+        params = L"--elevated";
+      }
+    }
+  }
+
   HINSTANCE hi =
-      ShellExecuteW(NULL, L"runas", exe, (tail != NULL && tail[0] != L'\0') ? tail : NULL, NULL, SW_SHOW);
+      ShellExecuteW(NULL, L"runas", exe, (params != NULL && params[0] != L'\0') ? params : NULL, NULL, SW_SHOW);
+  g_free(params_buf);
   return (INT_PTR)hi > 32;
 }
 

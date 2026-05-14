@@ -382,7 +382,7 @@ static void on_restart_admin_clicked(GtkButton *btn, gpointer user_data) {
       gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app->dont_show_again_check))) {
     da_win32_set_admin_ntfs_notice_hidden(TRUE);
   }
-  if (da_win32_restart_elevated_self() && app->gtk_app != NULL) {
+  if (da_win32_restart_elevated_self(FALSE) && app->gtk_app != NULL) {
     g_application_quit(G_APPLICATION(app->gtk_app));
   }
 }
@@ -1406,6 +1406,7 @@ typedef struct {
   GtkWidget       *win32_explorer_context_menu_check;
   GtkWidget       *monitor_file_system_check;
   GtkWidget       *enable_drag_and_drop_check;
+  GtkWidget       *always_run_as_admin_check;
 } DaSettingsDlgHandles;
 
 static void da_ui_apply_alternate_row_colors(AppState *app) {
@@ -1500,6 +1501,13 @@ static void da_settings_apply_interface_tab(DaSettingsDlgHandles *h) {
         gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(h->enable_drag_and_drop_check));
     da_drag_drop_setup(h->app);
   }
+
+#if defined(G_OS_WIN32)
+  if (h->always_run_as_admin_check != NULL && GTK_IS_TOGGLE_BUTTON(h->always_run_as_admin_check)) {
+    h->app->general_always_run_as_admin =
+        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(h->always_run_as_admin_check));
+  }
+#endif
 
   da_ini_save_interface(h->app);
   da_ini_save_general(h->app);
@@ -1631,6 +1639,18 @@ static void on_tools_menu_settings_activate(GtkMenuItem *item, gpointer user_dat
   if (handles->enable_drag_and_drop_check != NULL && GTK_IS_TOGGLE_BUTTON(handles->enable_drag_and_drop_check)) {
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(handles->enable_drag_and_drop_check),
                                  app->general_enable_drag_drop);
+  }
+  handles->always_run_as_admin_check =
+      GTK_WIDGET(gtk_builder_get_object(builder, "always_run_as_admin_check"));
+  if (handles->always_run_as_admin_check != NULL) {
+#if !defined(G_OS_WIN32)
+    gtk_widget_hide(handles->always_run_as_admin_check);
+#else
+    if (GTK_IS_TOGGLE_BUTTON(handles->always_run_as_admin_check)) {
+      gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(handles->always_run_as_admin_check),
+                                   app->general_always_run_as_admin);
+    }
+#endif
   }
 
   GtkWidget *ok_btn = GTK_WIDGET(gtk_builder_get_object(builder, "ok_btn"));

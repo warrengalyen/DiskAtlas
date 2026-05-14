@@ -213,6 +213,10 @@ typedef struct AppState {
    *  Persisted as `enable_drag_and_drop` in `[general]`. Default TRUE. */
   gboolean general_enable_drag_drop;
 
+  /** Windows: when TRUE, startup attempts elevation once per launch and passes `--elevated` on the child
+   *  command line to avoid UAC failure loops. Persisted as `always_run_as_admin` in `[general]`. Default FALSE. */
+  gboolean general_always_run_as_admin;
+
   /** Live GFileMonitor watching scan_root_utf8; NULL when inactive.
    *  Owned: cancel + unref via da_fs_monitor_stop(). */
   GFileMonitor *fs_monitor;

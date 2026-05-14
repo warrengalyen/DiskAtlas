@@ -3,6 +3,8 @@
 #include <glib.h>
 #include <gtk/gtk.h>
 
+#include <string.h>
+
 #include "app.h"
 #include "diskatlas.h"
 #include "volumes.h"
@@ -29,11 +31,35 @@ static void activate(GtkApplication *gtk_app, gpointer user_data) {
   g_signal_connect(app->window, "destroy", G_CALLBACK(on_window_destroy), app);
 }
 
+static gboolean da_argv_has_token(int argc, char **argv, const char *token) {
+  for (int i = 1; i < argc; i++) {
+    if (argv[i] != NULL && strcmp(argv[i], token) == 0) {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+static void da_argv_remove_token(int *argc, char **argv, const char *token) {
+  int w = 1;
+  for (int r = 1; r < *argc; r++) {
+    if (argv[r] != NULL && strcmp(argv[r], token) == 0) {
+      continue;
+    }
+    argv[w++] = argv[r];
+  }
+  argv[w] = NULL;
+  *argc = w;
+}
+
 int diskatlas_app_run(int argc, char **argv) {
   AppState *app = (AppState *)calloc(1, sizeof(AppState));
   if (app == NULL) {
     return 1;
   }
+
+  gboolean launched_for_elevation = da_argv_has_token(argc, argv, "--elevated");
+  da_argv_remove_token(&argc, argv, "--elevated");
 
   if (argc > 1 && argv[1] != NULL && argv[1][0] != '\0') {
     app->scan_root_utf8 = g_strdup(argv[1]);
@@ -44,6 +70,18 @@ int diskatlas_app_run(int argc, char **argv) {
       app->scan_root_utf8 = g_strdup(h != NULL ? h : ".");
     }
   }
+
+  da_ini_load_general(app);
+
+#if defined(G_OS_WIN32)
+  if (app->general_always_run_as_admin && !da_win32_is_process_elevated() && !launched_for_elevation) {
+    if (da_win32_restart_elevated_self(TRUE)) {
+      g_free(app->scan_root_utf8);
+      free(app);
+      return 0;
+    }
+  }
+#endif
 
   GPtrArray *ini_cats = da_ini_mime_categories_load();
   app->mime_db = dm_mime_db_build(ini_cats);

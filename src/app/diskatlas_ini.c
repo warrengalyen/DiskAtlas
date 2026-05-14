@@ -40,6 +40,7 @@
 #define DA_KEY_OPEN_FILE_DOUBLE_CLICK "open_file_double_click"
 #define DA_KEY_FS_MONITOR "monitor_file_system"
 #define DA_KEY_ENABLE_DRAG_DROP "enable_drag_and_drop"
+#define DA_KEY_ALWAYS_RUN_AS_ADMIN "always_run_as_admin"
 
 static gchar *da_exe_dir_utf8(void) {
 #if defined(G_OS_WIN32)
@@ -333,6 +334,8 @@ void da_ini_load_general(AppState *app) {
   app->general_fs_monitor = TRUE;
   /* Default: drag-and-drop enabled. */
   app->general_enable_drag_drop = TRUE;
+  /* Default: do not force elevation on startup. */
+  app->general_always_run_as_admin = FALSE;
   gchar *path = da_ini_path();
   if (path == NULL) {
     return;
@@ -365,6 +368,11 @@ void da_ini_load_general(AppState *app) {
       g_clear_error(&err);
       app->general_enable_drag_drop = dd;
     }
+    if (g_key_file_has_key(kf, DA_SEC_GENERAL, DA_KEY_ALWAYS_RUN_AS_ADMIN, NULL)) {
+      gboolean ar = g_key_file_get_boolean(kf, DA_SEC_GENERAL, DA_KEY_ALWAYS_RUN_AS_ADMIN, &err);
+      g_clear_error(&err);
+      app->general_always_run_as_admin = ar;
+    }
   }
   g_key_file_unref(kf);
   g_free(path);
@@ -387,6 +395,7 @@ void da_ini_save_general(const AppState *app) {
                          app->general_open_file_double_click);
   g_key_file_set_boolean(kf, DA_SEC_GENERAL, DA_KEY_FS_MONITOR, app->general_fs_monitor);
   g_key_file_set_boolean(kf, DA_SEC_GENERAL, DA_KEY_ENABLE_DRAG_DROP, app->general_enable_drag_drop);
+  g_key_file_set_boolean(kf, DA_SEC_GENERAL, DA_KEY_ALWAYS_RUN_AS_ADMIN, app->general_always_run_as_admin);
 
   gsize len = 0;
   gchar *data = g_key_file_to_data(kf, &len, NULL);

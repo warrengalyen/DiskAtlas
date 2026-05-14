@@ -29,7 +29,8 @@ gboolean da_volume_is_exact_root_path(const gchar *path_utf8, const gchar *volum
 void da_win32_file_chooser_set_drive_places_only(GtkFileChooser *chooser);
 
 gboolean da_win32_is_process_elevated(void);
-gboolean da_win32_restart_elevated_self(void);
+/** ShellExecuteW "runas" restart; if @a append_elevated_marker, append ` --elevated` when absent (see app.c). */
+gboolean da_win32_restart_elevated_self(gboolean append_elevated_marker);
 gboolean da_win32_admin_ntfs_notice_saved_hidden(void);
 void da_win32_set_admin_ntfs_notice_hidden(gboolean hide);
 /** Resolves @a path_utf8 to its volume root (e.g. "D:\\"); caller frees @a *out_root. */
