@@ -1384,6 +1384,15 @@ static void on_file_menu_export_mft_activate(GtkMenuItem *item, gpointer user_da
 #endif
 }
 
+static void on_file_menu_exit_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->window == NULL) {
+    return;
+  }
+  gtk_widget_destroy(app->window);
+}
+
 typedef struct {
   GtkDialog       *dialog;
   DaSettingsMimeCtx *mime;
@@ -2300,6 +2309,12 @@ void da_ui_build(AppState *app) {
     GtkWidget *w = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_treemap_image"));
     if (w != NULL) {
       g_signal_connect(w, "activate", G_CALLBACK(on_file_menu_treemap_image_activate), app);
+    }
+  }
+  {
+    GtkWidget *w = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_exit"));
+    if (w != NULL) {
+      g_signal_connect(w, "activate", G_CALLBACK(on_file_menu_exit_activate), app);
     }
   }
   {
