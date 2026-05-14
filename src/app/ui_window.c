@@ -470,6 +470,7 @@ static void da_file_view_paned_on_allocate(GtkWidget *widget, GdkRectangle *allo
 #define DISKATLAS_WINDOW_UI_RESOURCE "/ui/diskatlas_window.ui"
 #define DISKATLAS_SETTINGS_DIALOG_RESOURCE "/ui/settings_dialog.glade"
 #define DISKATLAS_APP_CSS_RESOURCE "/app.css"
+#define DISKATLAS_APP_ICON_RESOURCE "/app-icon.ico"
 /** gtk_style_context_add_class for percent-column progress CSS (file list + Tree View tabs). */
 #define DISKATLAS_TREE_PROGRESS_STYLE_CLASS "diskatlas-tree-progress"
 /** Default GtkCellRendererText background for Allocated columns (file list + Tree View tab). */
@@ -547,6 +548,22 @@ void da_tree_view_apply_zebra_cell(GtkTreeViewColumn *col, GtkCellRenderer *cell
   } else {
     da_cell_renderer_apply_row_bg(cell, NULL, FALSE);
   }
+}
+
+static void da_apply_application_icon(GtkWindow *window) {
+  GError *err = NULL;
+  GdkPixbuf *pb = gdk_pixbuf_new_from_resource(DISKATLAS_APP_ICON_RESOURCE, &err);
+  if (pb == NULL) {
+    g_warning("Could not load application icon (%s): %s", DISKATLAS_APP_ICON_RESOURCE,
+              err != NULL ? err->message : "unknown error");
+    g_clear_error(&err);
+    return;
+  }
+  gtk_window_set_default_icon(pb);
+  if (window != NULL) {
+    gtk_window_set_icon(window, pb);
+  }
+  g_object_unref(pb);
 }
 
 static void da_load_global_app_css(void) {
@@ -1907,6 +1924,7 @@ void da_ui_build(AppState *app) {
 
   app->window = GTK_WIDGET(gtk_builder_get_object(builder, "main_window"));
   gtk_window_set_application(GTK_WINDOW(app->window), app->gtk_app);
+  da_apply_application_icon(GTK_WINDOW(app->window));
 
   app->scan_source_combo = GTK_WIDGET(gtk_builder_get_object(builder, "scan_source_combo"));
 

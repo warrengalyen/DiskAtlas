@@ -155,6 +155,7 @@ if(DISKATLAS_GTK3_FOUND)
       ${DISKATLAS_GRESOURCE_XML}
       ${DISKATLAS_RES_DIR}/ui/diskatlas_window.ui
       ${DISKATLAS_RES_DIR}/ui/settings_dialog.glade
+      ${DISKATLAS_RES_DIR}/app-icon.ico
       ${DISKATLAS_RES_DIR}/app.css
     COMMENT "glib-compile-resources diskatlas"
     VERBATIM
@@ -201,6 +202,19 @@ if(DISKATLAS_GTK3_FOUND)
     target_link_libraries(diskatlas_app PRIVATE "-framework" "AppKit")
   endif()
   if(WIN32)
+    enable_language(RC)
+    set(DISKATLAS_WIN_ICON_PATH_SLASH "${DISKATLAS_RES_DIR}/app-icon.ico")
+    string(REPLACE "\\" "/" DISKATLAS_WIN_ICON_PATH_SLASH "${DISKATLAS_WIN_ICON_PATH_SLASH}")
+    set(DISKATLAS_WIN_APP_RC_GEN "${CMAKE_CURRENT_BINARY_DIR}/diskatlas_win_app.rc")
+    configure_file(
+      "${DISKATLAS_RES_DIR}/diskatlas_win_app.rc.in"
+      "${DISKATLAS_WIN_APP_RC_GEN}"
+      @ONLY
+    )
+    target_sources(diskatlas_app PRIVATE "${DISKATLAS_WIN_APP_RC_GEN}")
+    set_source_files_properties("${DISKATLAS_WIN_APP_RC_GEN}" PROPERTIES
+      OBJECT_DEPENDS "${DISKATLAS_RES_DIR}/app-icon.ico"
+    )
     target_link_libraries(diskatlas_app PRIVATE shell32 advapi32 ole32)
     set_target_properties(diskatlas_app PROPERTIES ENABLE_EXPORTS OFF)
     if(DISKATLAS_WIN32_WINDOWS_SUBSYSTEM)
