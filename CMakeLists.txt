@@ -155,6 +155,8 @@ if(DISKATLAS_GTK3_FOUND)
       ${DISKATLAS_GRESOURCE_XML}
       ${DISKATLAS_RES_DIR}/ui/diskatlas_window.ui
       ${DISKATLAS_RES_DIR}/ui/settings_dialog.glade
+      ${DISKATLAS_RES_DIR}/ui/about_dialog.glade
+      ${DISKATLAS_RES_DIR}/icons/about-icon.png
       ${DISKATLAS_RES_DIR}/app-icon.ico
       ${DISKATLAS_RES_DIR}/app.css
     COMMENT "glib-compile-resources diskatlas"

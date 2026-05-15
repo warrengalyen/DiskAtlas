@@ -473,6 +473,8 @@ static void da_file_view_paned_on_allocate(GtkWidget *widget, GdkRectangle *allo
 
 #define DISKATLAS_WINDOW_UI_RESOURCE "/ui/diskatlas_window.ui"
 #define DISKATLAS_SETTINGS_DIALOG_RESOURCE "/ui/settings_dialog.glade"
+#define DISKATLAS_ABOUT_DIALOG_RESOURCE "/ui/about_dialog.glade"
+#define DISKATLAS_ABOUT_ICON_RESOURCE "/icons/about-icon.png"
 #define DISKATLAS_APP_CSS_RESOURCE "/app.css"
 #define DISKATLAS_APP_ICON_RESOURCE "/app-icon.ico"
 /** gtk_style_context_add_class for percent-column progress CSS (file list + Tree View tabs). */
@@ -1693,6 +1695,47 @@ static void on_tools_menu_settings_activate(GtkMenuItem *item, gpointer user_dat
   g_object_unref(builder);
 }
 
+static void on_help_menu_about_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->window == NULL) {
+    return;
+  }
+
+  GError *err = NULL;
+  GtkBuilder *builder = gtk_builder_new();
+  if (!gtk_builder_add_from_resource(builder, DISKATLAS_ABOUT_DIALOG_RESOURCE, &err)) {
+    g_warning("Failed to load about dialog (%s): %s", DISKATLAS_ABOUT_DIALOG_RESOURCE, err->message);
+    g_clear_error(&err);
+    g_object_unref(builder);
+    return;
+  }
+
+  GObject *obj = gtk_builder_get_object(builder, "about_dialog");
+  if (obj == NULL || !GTK_IS_ABOUT_DIALOG(obj)) {
+    g_warning("about_dialog object missing or not a GtkAboutDialog");
+    g_object_unref(builder);
+    return;
+  }
+
+  GtkWidget *about = GTK_WIDGET(obj);
+  g_object_ref(about);
+  g_object_unref(builder);
+
+  gtk_window_set_transient_for(GTK_WINDOW(about), GTK_WINDOW(app->window));
+
+  GdkPixbuf *logo = gdk_pixbuf_new_from_resource(DISKATLAS_ABOUT_ICON_RESOURCE, &err);
+  if (logo != NULL) {
+    gtk_about_dialog_set_logo(GTK_ABOUT_DIALOG(about), logo);
+    g_object_unref(logo);
+  } else {
+    g_clear_error(&err);
+  }
+
+  gtk_dialog_run(GTK_DIALOG(about));
+  gtk_widget_destroy(about);
+}
+
 static void pct_of_drive_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *cell, GtkTreeModel *model,
                                    GtkTreeIter *iter, gpointer user_data) {
   AppState *app = (AppState *)user_data;
@@ -2272,6 +2315,12 @@ void da_ui_build(AppState *app) {
     GtkWidget *options_menu_settings = GTK_WIDGET(gtk_builder_get_object(builder, "options_menu_settings"));
     if (options_menu_settings != NULL) {
       g_signal_connect(options_menu_settings, "activate", G_CALLBACK(on_tools_menu_settings_activate), app);
+    }
+  }
+  {
+    GtkWidget *help_menu_about = GTK_WIDGET(gtk_builder_get_object(builder, "help_menu_about"));
+    if (help_menu_about != NULL) {
+      g_signal_connect(help_menu_about, "activate", G_CALLBACK(on_help_menu_about_activate), app);
     }
   }
   {
