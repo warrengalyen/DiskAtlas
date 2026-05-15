@@ -44,6 +44,8 @@ typedef struct AppState {
   GtkWidget *treemap_panel;
   /** File menu "Export to CSV…"; sensitivity synced to exportable scan state. */
   GtkWidget *file_menu_export_csv;
+  /** File menu "Export File Types to CSV…"; same sensitivity as export CSV. */
+  GtkWidget *file_menu_export_file_types_csv;
   /** File menu zoom in/out; sensitivity synced when a scan with a treemap is active. */
   GtkWidget *file_menu_zoom_in;
   GtkWidget *file_menu_zoom_out;

@@ -9,6 +9,7 @@
 #include "scan_controller.h"
 #include "shell_icon.h"
 #include "volumes.h"
+#include "da_message_dialog.h"
 
 typedef enum {
   DA_SCAN_ROW_KIND_PATH = 0,
@@ -295,6 +296,7 @@ void da_scan_source_combo_run_csv_import(AppState *app) {
       } else {
         GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
                                               GTK_BUTTONS_OK, "%s", err[0] != '\0' ? err : "CSV import failed.");
+        da_message_dialog_apply_layout(d);
         gtk_dialog_run(GTK_DIALOG(d));
         gtk_widget_destroy(d);
         da_scan_source_combo_rebuild(app);
@@ -325,6 +327,7 @@ static void run_open_file_dialog(AppState *app, gboolean csv_mode) {
             GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_OK, "%s",
             "Select a drive or folder in the combo first. It must be on the same NTFS volume as this $MFT dump "
             "(used to read the boot sector and to scope paths).");
+        da_message_dialog_apply_layout(d);
         gtk_dialog_run(GTK_DIALOG(d));
         gtk_widget_destroy(d);
         da_scan_source_combo_rebuild(app);
@@ -340,6 +343,7 @@ static void run_open_file_dialog(AppState *app, gboolean csv_mode) {
           GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
                                                 GTK_BUTTONS_OK, "%s",
                                                 err[0] != '\0' ? err : "MFT dump import failed.");
+          da_message_dialog_apply_layout(d);
           gtk_dialog_run(GTK_DIALOG(d));
           gtk_widget_destroy(d);
           da_scan_source_combo_rebuild(app);
@@ -348,7 +352,8 @@ static void run_open_file_dialog(AppState *app, gboolean csv_mode) {
 #else
       GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
                                             GTK_BUTTONS_OK, "%s",
-                                            "Importing a raw NTFS $MFT dump is only supported on Windows.");
+                                            "Importing a raw NTFS MFT dump is only supported on Windows.");
+      da_message_dialog_apply_layout(d);
       gtk_dialog_run(GTK_DIALOG(d));
       gtk_widget_destroy(d);
       da_scan_source_combo_rebuild(app);

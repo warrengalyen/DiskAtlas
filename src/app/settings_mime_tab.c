@@ -6,6 +6,7 @@
 #include "da_color_picker_dialog.h"
 #include "diskatlas_ini.h"
 #include "settings_mime_tab.h"
+#include "da_message_dialog.h"
 
 struct DaSettingsMimeCtx {
   GtkWindow *settings_window;
@@ -438,6 +439,7 @@ static gchar *da_mime_prompt_new_category_name(GtkWindow *parent) {
       GtkWidget *warn = gtk_message_dialog_new(
           GTK_WINDOW(dlg), GTK_DIALOG_MODAL, GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
           "%s", "Please enter a category name, or click Cancel.");
+      da_message_dialog_apply_layout(warn);
       gtk_dialog_run(GTK_DIALOG(warn));
       gtk_widget_destroy(warn);
       g_free(trim);
@@ -664,7 +666,8 @@ gboolean da_settings_mime_tab_save(DaSettingsMimeCtx *ctx, GtkWindow *parent) {
   GString *err = g_string_new(NULL);
   if (!da_validate_categories(ctx->categories, err)) {
     GtkWidget *dlg = gtk_message_dialog_new(parent, GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_BUTTONS_OK, "%s",
-                                              err->str);
+                                            err->str);
+    da_message_dialog_apply_layout(dlg);
     gtk_dialog_run(GTK_DIALOG(dlg));
     gtk_widget_destroy(dlg);
     g_string_free(err, TRUE);

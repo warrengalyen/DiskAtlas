@@ -180,6 +180,7 @@ if(DISKATLAS_GTK3_FOUND)
     "${DISKATLAS_SRC}/app/format_text.c"
     "${DISKATLAS_SRC}/app/scan_source_combo.c"
     "${DISKATLAS_SRC}/app/csv_export.c"
+    "${DISKATLAS_SRC}/app/da_message_dialog.c"
     "${DISKATLAS_SRC}/app/volumes.c"
     "${DISKATLAS_SRC}/app/diskatlas_ini.c"
     "${DISKATLAS_SRC}/app/da_default_mime_categories.c"

@@ -9,10 +9,12 @@
 
 #include "diskatlas.h"
 #include "csv_export.h"
+#include "file_type_view.h"
 #include "format_text.h"
 #include "volumes.h"
 
 #define DA_CSV_UI_HEADER_BASE "File Name,Size,Allocated,Modified,Attributes,Files,Folders,DRIVECAPACITY,FREESPACE,USEDSPACE"
+#define DA_CSV_FILE_TYPES_HEADER "Extension,File Type,Percent,Size,Allocated,Files"
 
 typedef struct {
   uint64_t subtree_files;
@@ -227,6 +229,116 @@ write_fail:
     (void)snprintf(errbuf, errlen, "write error");
   }
   g_hash_table_destroy(dir_stats);
+  fclose(out);
+  return -1;
+}
+
+int da_export_file_types_csv(AppState *app, const char *utf8_path, char *errbuf, size_t errlen) {
+  if (errbuf != NULL && errlen > 0) {
+    errbuf[0] = '\0';
+  }
+  if (app == NULL || utf8_path == NULL || utf8_path[0] == '\0') {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "invalid arguments");
+    }
+    return -1;
+  }
+  if (app->scan == NULL) {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "no scan data");
+    }
+    return -1;
+  }
+  scan_progress_t pr = scan_get_progress(app->scan);
+  if (!pr.is_complete) {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "scan is not complete");
+    }
+    return -1;
+  }
+  scan_results_view_t v = scan_get_results(app->scan);
+  if (v.nodes == NULL) {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "no scan nodes");
+    }
+    return -1;
+  }
+  if (app->file_type_tree == NULL) {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "file types view not available");
+    }
+    return -1;
+  }
+  GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(app->file_type_tree));
+  if (model == NULL) {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "no file types data");
+    }
+    return -1;
+  }
+
+  FILE *out = g_fopen(utf8_path, "wb");
+  if (out == NULL) {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "cannot open for write: %s", strerror(errno));
+    }
+    return -1;
+  }
+
+  enum { IOBUF = 256 * 1024 };
+  char stackbuf[IOBUF];
+  setvbuf(out, stackbuf, _IOFBF, sizeof stackbuf);
+
+  if (fprintf(out, "%s\n", DA_CSV_FILE_TYPES_HEADER) < 0) {
+    goto write_fail;
+  }
+
+  GtkTreeIter iter;
+  gboolean valid = gtk_tree_model_get_iter_first(model, &iter);
+  while (valid) {
+    gchar *ext = NULL, *ftype = NULL;
+    gint pct_val = 0;
+    guint64 size_raw = 0, alloc_raw = 0, files_raw = 0;
+    gtk_tree_model_get(model, &iter, DA_FT_COL_EXT, &ext, DA_FT_COL_TYPE, &ftype, DA_FT_COL_PCT_VAL, &pct_val,
+                       DA_FT_COL_SIZE_RAW, &size_raw, DA_FT_COL_ALLOC_RAW, &alloc_raw, DA_FT_COL_FILES_RAW,
+                       &files_raw, -1);
+
+    fprint_csv_utf8_field(out, ext);
+    if (fputc(',', out) < 0) {
+      goto row_fail;
+    }
+    fprint_csv_utf8_field(out, ftype);
+    if (fputc(',', out) < 0) {
+      goto row_fail;
+    }
+    if (fprintf(out, "%d,%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n", pct_val, (uint64_t)size_raw,
+                 (uint64_t)alloc_raw, (uint64_t)files_raw) < 0) {
+      goto row_fail;
+    }
+
+    g_free(ext);
+    g_free(ftype);
+    valid = gtk_tree_model_iter_next(model, &iter);
+    continue;
+
+  row_fail:
+    g_free(ext);
+    g_free(ftype);
+    goto write_fail;
+  }
+
+  if (fclose(out) != 0) {
+    if (errbuf != NULL && errlen > 0) {
+      (void)snprintf(errbuf, errlen, "close error: %s", strerror(errno));
+    }
+    return -1;
+  }
+  return 0;
+
+write_fail:
+  if (errbuf != NULL && errlen > 0) {
+    (void)snprintf(errbuf, errlen, "write error");
+  }
   fclose(out);
   return -1;
 }

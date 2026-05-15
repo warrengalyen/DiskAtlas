@@ -16,6 +16,7 @@
 #include "scan_source_combo.h"
 #include "file_ops.h"
 #include "csv_export.h"
+#include "da_message_dialog.h"
 #include "ui_window.h"
 #include "volumes.h"
 #include "diskatlas_ini.h"
@@ -41,6 +42,9 @@ void da_ui_sync_file_menu(AppState *app) {
   }
   if (app != NULL && app->file_menu_export_csv != NULL) {
     gtk_widget_set_sensitive(app->file_menu_export_csv, ok);
+  }
+  if (app != NULL && app->file_menu_export_file_types_csv != NULL) {
+    gtk_widget_set_sensitive(app->file_menu_export_file_types_csv, ok);
   }
   if (app != NULL && app->file_menu_copy_clipboard != NULL) {
     gtk_widget_set_sensitive(app->file_menu_copy_clipboard, ok);
@@ -265,28 +269,31 @@ static void on_file_menu_treemap_image_activate(GtkMenuItem *item, gpointer user
     return;
   }
 
-  /* Step 1: file chooser for output path. */
-  GtkWidget *chooser = gtk_file_chooser_dialog_new(
-      "Save Treemap as PNG",
-      GTK_WINDOW(app->window),
-      GTK_FILE_CHOOSER_ACTION_SAVE,
-      "_Cancel", GTK_RESPONSE_CANCEL,
-      "_Save",   GTK_RESPONSE_ACCEPT,
-      NULL);
-  gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(chooser), TRUE);
-  gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(chooser), "treemap.png");
+  /* Step 1: native file chooser for output path. */
+  GtkFileChooserNative *native =
+      gtk_file_chooser_native_new("Save Treemap as PNG", GTK_WINDOW(app->window), GTK_FILE_CHOOSER_ACTION_SAVE,
+                                  "_Save", "_Cancel");
+  GtkFileChooser *chooser = GTK_FILE_CHOOSER(native);
+  gtk_file_chooser_set_do_overwrite_confirmation(chooser, TRUE);
+  gtk_file_chooser_set_current_name(chooser, "treemap.png");
 
-  GtkFileFilter *ff = gtk_file_filter_new();
-  gtk_file_filter_set_name(ff, "PNG images (*.png)");
-  gtk_file_filter_add_pattern(ff, "*.png");
-  gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(chooser), ff);
+  GtkFileFilter *png_ff = gtk_file_filter_new();
+  gtk_file_filter_set_name(png_ff, "PNG images (*.png)");
+  gtk_file_filter_add_pattern(png_ff, "*.png");
+  GtkFileFilter *all_ff = gtk_file_filter_new();
+  gtk_file_filter_set_name(all_ff, "All files (*)");
+  gtk_file_filter_add_pattern(all_ff, "*");
+  gtk_file_chooser_add_filter(chooser, png_ff);
+  gtk_file_chooser_add_filter(chooser, all_ff);
+  gtk_file_chooser_set_filter(chooser, png_ff);
 
-  if (gtk_dialog_run(GTK_DIALOG(chooser)) != GTK_RESPONSE_ACCEPT) {
-    gtk_widget_destroy(chooser);
+  gint resp = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
+  if (resp != GTK_RESPONSE_ACCEPT) {
+    gtk_native_dialog_destroy(GTK_NATIVE_DIALOG(native));
     return;
   }
-  gchar *output_path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(chooser));
-  gtk_widget_destroy(chooser);
+  gchar *output_path = gtk_file_chooser_get_filename(chooser);
+  gtk_native_dialog_destroy(GTK_NATIVE_DIALOG(native));
   if (output_path == NULL) {
     return;
   }
@@ -356,6 +363,7 @@ static void on_file_menu_treemap_image_activate(GtkMenuItem *item, gpointer user
                                             GTK_BUTTONS_OK,
                                             "Failed to export treemap PNG.\n"
                                             "Make sure the treemap is visible and a scan is loaded.");
+    da_message_dialog_apply_layout(err);
     gtk_dialog_run(GTK_DIALOG(err));
     gtk_widget_destroy(err);
   }
@@ -473,6 +481,9 @@ static void da_file_view_paned_on_allocate(GtkWidget *widget, GdkRectangle *allo
 
 #define DISKATLAS_WINDOW_UI_RESOURCE "/ui/diskatlas_window.ui"
 #define DISKATLAS_SETTINGS_DIALOG_RESOURCE "/ui/settings_dialog.glade"
+/** Natural size of MIME tab + GtkTextView can exceed this unless layout is constrained; geometry caps the toplevel. */
+#define DA_SETTINGS_DIALOG_WIDTH_PX 650
+#define DA_SETTINGS_DIALOG_HEIGHT_PX 500
 #define DISKATLAS_ABOUT_DIALOG_RESOURCE "/ui/about_dialog.glade"
 #define DISKATLAS_ABOUT_ICON_RESOURCE "/icons/about-icon.png"
 #define DISKATLAS_APP_CSS_RESOURCE "/app.css"
@@ -1225,6 +1236,49 @@ static void on_file_menu_select_folder_activate(GtkMenuItem *item, gpointer user
   da_scan_source_combo_request_select_folder((AppState *)user_data);
 }
 
+/**
+ * Default CSV save basename: "<stem>_YYYYMMDDHHMMSS.csv" (local time, no separators).
+ */
+static gchar *da_ui_default_csv_export_filename(const gchar *stem) {
+  GDateTime *dt = g_date_time_new_now_local();
+  gchar *stamp = g_date_time_format(dt, "%Y%m%d%H%M%S");
+  g_date_time_unref(dt);
+  if (stamp == NULL) {
+    stamp = g_strdup("00000000000000");
+  }
+  gchar *out = g_strdup_printf("%s_%s.csv", stem, stamp);
+  g_free(stamp);
+  return out;
+}
+
+/** CSV save dialogs: "*.csv" filter selected by default, plus All files; overwrite confirmation like treemap PNG. */
+static void da_ui_configure_export_save_csv_chooser(GtkFileChooser *chooser) {
+  GtkFileFilter *csv_ff = gtk_file_filter_new();
+  gtk_file_filter_set_name(csv_ff, "CSV files (*.csv)");
+  gtk_file_filter_add_pattern(csv_ff, "*.csv");
+  GtkFileFilter *all_ff = gtk_file_filter_new();
+  gtk_file_filter_set_name(all_ff, "All files (*)");
+  gtk_file_filter_add_pattern(all_ff, "*");
+  gtk_file_chooser_add_filter(chooser, csv_ff);
+  gtk_file_chooser_add_filter(chooser, all_ff);
+  gtk_file_chooser_set_filter(chooser, csv_ff);
+  gtk_file_chooser_set_do_overwrite_confirmation(chooser, TRUE);
+}
+
+/** MFT dump save dialog: "*.mft" filter selected by default; overwrite confirmation like treemap PNG. */
+static void da_ui_configure_export_save_mft_chooser(GtkFileChooser *chooser) {
+  GtkFileFilter *mft_ff = gtk_file_filter_new();
+  gtk_file_filter_set_name(mft_ff, "MFT dump (*.mft)");
+  gtk_file_filter_add_pattern(mft_ff, "*.mft");
+  GtkFileFilter *all_ff = gtk_file_filter_new();
+  gtk_file_filter_set_name(all_ff, "All files (*)");
+  gtk_file_filter_add_pattern(all_ff, "*");
+  gtk_file_chooser_add_filter(chooser, mft_ff);
+  gtk_file_chooser_add_filter(chooser, all_ff);
+  gtk_file_chooser_set_filter(chooser, mft_ff);
+  gtk_file_chooser_set_do_overwrite_confirmation(chooser, TRUE);
+}
+
 static void on_file_menu_export_csv_activate(GtkMenuItem *item, gpointer user_data) {
   (void)item;
   AppState *app = (AppState *)user_data;
@@ -1234,6 +1288,7 @@ static void on_file_menu_export_csv_activate(GtkMenuItem *item, gpointer user_da
   if (app->scan == NULL) {
     GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
                                           GTK_BUTTONS_OK, "Nothing to export (no scan data).");
+    da_message_dialog_apply_layout(d);
     gtk_dialog_run(GTK_DIALOG(d));
     gtk_widget_destroy(d);
     return;
@@ -1242,6 +1297,7 @@ static void on_file_menu_export_csv_activate(GtkMenuItem *item, gpointer user_da
   if (!pr.is_complete) {
     GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
                                           GTK_BUTTONS_OK, "Wait until the scan finishes before exporting.");
+    da_message_dialog_apply_layout(d);
     gtk_dialog_run(GTK_DIALOG(d));
     gtk_widget_destroy(d);
     return;
@@ -1251,7 +1307,10 @@ static void on_file_menu_export_csv_activate(GtkMenuItem *item, gpointer user_da
       gtk_file_chooser_native_new("Export to CSV…", GTK_WINDOW(app->window), GTK_FILE_CHOOSER_ACTION_SAVE,
                                   "_Export", "_Cancel");
   GtkFileChooser *chooser = GTK_FILE_CHOOSER(native);
-  gtk_file_chooser_set_current_name(chooser, "diskatlas_export.csv");
+  da_ui_configure_export_save_csv_chooser(chooser);
+  gchar *defname = da_ui_default_csv_export_filename("diskatlas_export");
+  gtk_file_chooser_set_current_name(chooser, defname);
+  g_free(defname);
 
   gint resp = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
   if (resp == GTK_RESPONSE_ACCEPT) {
@@ -1261,6 +1320,70 @@ static void on_file_menu_export_csv_activate(GtkMenuItem *item, gpointer user_da
       if (da_export_scan_csv(app, fn, TRUE, err, sizeof err) != 0) {
         GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
                                               GTK_BUTTONS_OK, "%s", err[0] != '\0' ? err : "Export failed.");
+        da_message_dialog_apply_layout(d);
+        gtk_dialog_run(GTK_DIALOG(d));
+        gtk_widget_destroy(d);
+      } else {
+        GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
+                                              GTK_BUTTONS_OK, "%s", "Export complete.");
+        da_message_dialog_apply_layout(d);
+        gtk_dialog_run(GTK_DIALOG(d));
+        gtk_widget_destroy(d);
+      }
+      g_free(fn);
+    }
+  }
+  gtk_native_dialog_destroy(GTK_NATIVE_DIALOG(native));
+}
+
+static void on_file_menu_export_file_types_csv_activate(GtkMenuItem *item, gpointer user_data) {
+  (void)item;
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || app->window == NULL) {
+    return;
+  }
+  if (app->scan == NULL) {
+    GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
+                                          GTK_BUTTONS_OK, "Nothing to export (no scan data).");
+    da_message_dialog_apply_layout(d);
+    gtk_dialog_run(GTK_DIALOG(d));
+    gtk_widget_destroy(d);
+    return;
+  }
+  scan_progress_t pr = scan_get_progress(app->scan);
+  if (!pr.is_complete) {
+    GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
+                                          GTK_BUTTONS_OK, "Wait until the scan finishes before exporting.");
+    da_message_dialog_apply_layout(d);
+    gtk_dialog_run(GTK_DIALOG(d));
+    gtk_widget_destroy(d);
+    return;
+  }
+
+  GtkFileChooserNative *native =
+      gtk_file_chooser_native_new("Export File Types to CSV…", GTK_WINDOW(app->window), GTK_FILE_CHOOSER_ACTION_SAVE,
+                                  "_Export", "_Cancel");
+  GtkFileChooser *chooser = GTK_FILE_CHOOSER(native);
+  da_ui_configure_export_save_csv_chooser(chooser);
+  gchar *defname = da_ui_default_csv_export_filename("diskatlas_file_types");
+  gtk_file_chooser_set_current_name(chooser, defname);
+  g_free(defname);
+
+  gint resp = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
+  if (resp == GTK_RESPONSE_ACCEPT) {
+    gchar *fn = gtk_file_chooser_get_filename(chooser);
+    if (fn != NULL) {
+      char err[512];
+      if (da_export_file_types_csv(app, fn, err, sizeof err) != 0) {
+        GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
+                                              GTK_BUTTONS_OK, "%s", err[0] != '\0' ? err : "Export failed.");
+        da_message_dialog_apply_layout(d);
+        gtk_dialog_run(GTK_DIALOG(d));
+        gtk_widget_destroy(d);
+      } else {
+        GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
+                                              GTK_BUTTONS_OK, "%s", "Export complete.");
+        da_message_dialog_apply_layout(d);
         gtk_dialog_run(GTK_DIALOG(d));
         gtk_widget_destroy(d);
       }
@@ -1322,6 +1445,7 @@ static void on_file_menu_export_mft_activate(GtkMenuItem *item, gpointer user_da
     GtkWidget *d =
         gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
                                "%s", "Please restart DiskAtlas as administrator to dump the MFT file.");
+    da_message_dialog_apply_layout(d);
     gtk_dialog_run(GTK_DIALOG(d));
     gtk_widget_destroy(d);
     return;
@@ -1332,6 +1456,7 @@ static void on_file_menu_export_mft_activate(GtkMenuItem *item, gpointer user_da
     GtkWidget *d =
         gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
                                "%s", "Please select an NTFS formatted drive.");
+    da_message_dialog_apply_layout(d);
     gtk_dialog_run(GTK_DIALOG(d));
     gtk_widget_destroy(d);
     return;
@@ -1341,6 +1466,7 @@ static void on_file_menu_export_mft_activate(GtkMenuItem *item, gpointer user_da
     GtkWidget *d =
         gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
                                "%s", "Please select an NTFS formatted drive.");
+    da_message_dialog_apply_layout(d);
     gtk_dialog_run(GTK_DIALOG(d));
     gtk_widget_destroy(d);
     return;
@@ -1350,7 +1476,8 @@ static void on_file_menu_export_mft_activate(GtkMenuItem *item, gpointer user_da
       gtk_file_chooser_native_new("Dump MFT file…", GTK_WINDOW(app->window), GTK_FILE_CHOOSER_ACTION_SAVE,
                                   "_Save", "_Cancel");
   GtkFileChooser *chooser = GTK_FILE_CHOOSER(native);
-  gtk_file_chooser_set_current_name(chooser, "MFT");
+  da_ui_configure_export_save_mft_chooser(chooser);
+  gtk_file_chooser_set_current_name(chooser, "MFT.mft");
   gint resp = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
   if (resp != GTK_RESPONSE_ACCEPT) {
     g_free(vol_root);
@@ -1385,6 +1512,7 @@ static void on_file_menu_export_mft_activate(GtkMenuItem *item, gpointer user_da
   GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
                                         GTK_BUTTONS_OK, "%s",
                                         "Dumping the NTFS MFT file is only supported on Windows.");
+  da_message_dialog_apply_layout(d);
   gtk_dialog_run(GTK_DIALOG(d));
   gtk_widget_destroy(d);
 #endif
@@ -1592,7 +1720,21 @@ static void on_tools_menu_settings_activate(GtkMenuItem *item, gpointer user_dat
   }
 
   GtkDialog *dialog = GTK_DIALOG(obj);
-  gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(app->window));
+  GtkWindow *settings_win = GTK_WINDOW(dialog);
+  gtk_window_set_transient_for(settings_win, GTK_WINDOW(app->window));
+
+  {
+    GdkGeometry geom;
+    memset(&geom, 0, sizeof(geom));
+    geom.min_width  = 320;
+    geom.min_height = 360;
+    geom.max_width  = DA_SETTINGS_DIALOG_WIDTH_PX;
+    geom.max_height = 16384;
+    gtk_window_set_geometry_hints(settings_win, NULL, &geom,
+                                  GDK_HINT_MIN_SIZE | GDK_HINT_MAX_SIZE);
+  }
+  gtk_window_set_default_size(settings_win, DA_SETTINGS_DIALOG_WIDTH_PX, DA_SETTINGS_DIALOG_HEIGHT_PX);
+  gtk_window_resize(settings_win, DA_SETTINGS_DIALOG_WIDTH_PX, DA_SETTINGS_DIALOG_HEIGHT_PX);
 
   DaSettingsDlgHandles *handles = g_new0(DaSettingsDlgHandles, 1);
   handles->dialog = dialog;
@@ -2226,6 +2368,13 @@ void da_ui_build(AppState *app) {
     app->file_menu_export_csv = file_menu_export_csv;
     if (file_menu_export_csv != NULL) {
       g_signal_connect(file_menu_export_csv, "activate", G_CALLBACK(on_file_menu_export_csv_activate), app);
+    }
+    GtkWidget *file_menu_export_file_types_csv =
+        GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_export_file_types_csv"));
+    app->file_menu_export_file_types_csv = file_menu_export_file_types_csv;
+    if (file_menu_export_file_types_csv != NULL) {
+      g_signal_connect(file_menu_export_file_types_csv, "activate",
+                       G_CALLBACK(on_file_menu_export_file_types_csv_activate), app);
     }
   }
   {

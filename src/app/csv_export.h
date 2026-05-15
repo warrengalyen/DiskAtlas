@@ -17,4 +17,13 @@
 int da_export_scan_csv(AppState *app, const char *utf8_path, gboolean include_reserved_space_column, char *errbuf,
                        size_t errlen);
 
-#endif
+/**
+ * Export the File Types list (same logical columns as the tree view except the color swatch) to CSV
+ * (RFC4180-style, UTF-8). Extension and File Type are quoted when needed; Percent is an integer 0–100
+ * (no percent sign); Size and Allocated are byte counts; Files is a plain integer (no grouping).
+ * Requires a completed scan with node data; reads the current rows from `app->file_type_tree` in
+ * model order (sorted order when the list is sorted).
+ */
+int da_export_file_types_csv(AppState *app, const char *utf8_path, char *errbuf, size_t errlen);
+
+#endif  /* CSV_EXPORT_H */

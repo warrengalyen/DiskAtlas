@@ -24,6 +24,7 @@
 #include "file_ops.h"
 #include "da_fs_monitor.h"
 #include "da_drag_drop.h"
+#include "da_message_dialog.h"
 
 /* Must match main_notebook child order in diskatlas_window.ui: page 0 = Tree View, page 1 = File View. */
 #define DA_TREE_VIEW_NOTEBOOK_PAGE 0
@@ -1440,6 +1441,7 @@ static void apply_search_filter(AppState *app) {
     GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
                                           GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
                                           "Could not allocate filter buffer.");
+    da_message_dialog_apply_layout(d);
     gtk_dialog_run(GTK_DIALOG(d));
     gtk_widget_destroy(d);
     app->filter_active = FALSE;
@@ -1510,6 +1512,7 @@ static gboolean on_timer_filter_chunk(gpointer data) {
         GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
                                               GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
                                               "Out of memory while filtering.");
+        da_message_dialog_apply_layout(d);
         gtk_dialog_run(GTK_DIALOG(d));
         gtk_widget_destroy(d);
         flat_model_commit_indices(app);
@@ -1644,6 +1647,7 @@ static gboolean on_timer_fill_chunk(gpointer data) {
       GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
                                             GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
                                             "Out of memory while preparing the sorted file list.");
+      da_message_dialog_apply_layout(d);
       gtk_dialog_run(GTK_DIALOG(d));
       gtk_widget_destroy(d);
       da_fs_monitor_scan_phase_end(app);
@@ -1736,6 +1740,7 @@ static void mft_dump_run_stream_copy(AppState *app, gchar *vol_owned, gchar *des
     scan_progress_reset_idle(app);
     GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
                                           GTK_BUTTONS_OK, "%s", err[0] != '\0' ? err : "MFT dump failed.");
+    da_message_dialog_apply_layout(d);
     gtk_dialog_run(GTK_DIALOG(d));
     gtk_widget_destroy(d);
     g_free(dest_owned);
@@ -1751,6 +1756,7 @@ static void mft_dump_run_stream_copy(AppState *app, gchar *vol_owned, gchar *des
     GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
                                           GTK_BUTTONS_OK, "%s", msg);
     g_free(msg);
+    da_message_dialog_apply_layout(d);
     gtk_dialog_run(GTK_DIALOG(d));
     gtk_widget_destroy(d);
   }
@@ -1944,6 +1950,7 @@ static void start_scan(AppState *app) {
     GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
                                           GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
                                           "scan_start failed (path or allocator).");
+    da_message_dialog_apply_layout(d);
     gtk_dialog_run(GTK_DIALOG(d));
     gtk_widget_destroy(d);
     enable_scan_button(app, TRUE);
@@ -2002,6 +2009,7 @@ static void on_show_folders_toggled(GtkToggleButton *btn, gpointer user_data) {
     GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
                                           GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
                                           "Out of memory while rebuilding the file list.");
+    da_message_dialog_apply_layout(d);
     gtk_dialog_run(GTK_DIALOG(d));
     gtk_widget_destroy(d);
     return;
@@ -3339,6 +3347,7 @@ void scan_controller_delete_to_trash(AppState *app) {
       GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
                                             GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
                                             "Could not move to trash: %s", err->message);
+      da_message_dialog_apply_layout(d);
       gtk_dialog_run(GTK_DIALOG(d));
       gtk_widget_destroy(d);
       g_clear_error(&err);
@@ -3403,6 +3412,8 @@ void scan_controller_delete_permanent(AppState *app) {
   gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_CANCEL);
   gtk_window_set_title(GTK_WINDOW(dlg), "Confirm Permanent Delete");
 
+  da_message_dialog_apply_layout(dlg);
+
   gint resp = gtk_dialog_run(GTK_DIALOG(dlg));
   gtk_widget_destroy(dlg);
 
@@ -3419,6 +3430,7 @@ void scan_controller_delete_permanent(AppState *app) {
     GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
                                           GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
                                           "Delete failed: %s", err->message);
+    da_message_dialog_apply_layout(d);
     gtk_dialog_run(GTK_DIALOG(d));
     gtk_widget_destroy(d);
     g_clear_error(&err);
@@ -3489,6 +3501,7 @@ static gboolean da_rename_one_path(AppState *app, const char *old_path_utf8, con
   if (strchr(trim, '/') != NULL || strchr(trim, '\\') != NULL) {
     GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_WARNING,
                                           GTK_BUTTONS_OK, "Name cannot contain path separators.");
+    da_message_dialog_apply_layout(d);
     gtk_dialog_run(GTK_DIALOG(d));
     gtk_widget_destroy(d);
     g_free(trim);
@@ -3519,6 +3532,7 @@ static gboolean da_rename_one_path(AppState *app, const char *old_path_utf8, con
   if (!mv) {
     GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
                                           GTK_BUTTONS_OK, "Rename failed: %s", err != NULL ? err->message : "unknown error");
+    da_message_dialog_apply_layout(d);
     gtk_dialog_run(GTK_DIALOG(d));
     gtk_widget_destroy(d);
     g_clear_error(&err);
@@ -3529,6 +3543,7 @@ static gboolean da_rename_one_path(AppState *app, const char *old_path_utf8, con
   if (scan_result_paths_after_rename(app->scan, old_path_utf8, new_full) < 0) {
     GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
                                           GTK_BUTTONS_OK, "Renamed on disk but updating the scan snapshot failed.");
+    da_message_dialog_apply_layout(d);
     gtk_dialog_run(GTK_DIALOG(d));
     gtk_widget_destroy(d);
     g_free(new_full);
