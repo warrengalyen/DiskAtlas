@@ -366,11 +366,14 @@ static void on_file_menu_treemap_image_activate(GtkMenuItem *item, gpointer user
 
 static void on_dont_show_admin_ntfs_toggled(GtkToggleButton *tb, gpointer user_data) {
   AppState *app = (AppState *)user_data;
-  (void)tb;
-  if (gtk_toggle_button_get_active(tb)) {
-    da_win32_set_admin_ntfs_notice_hidden(TRUE);
-    if (app->admin_ntfs_notice_panel != NULL) {
+  gboolean hide = gtk_toggle_button_get_active(tb);
+  app->general_hide_admin_ntfs_notice = hide;
+  da_ini_save_general(app);
+  if (app->admin_ntfs_notice_panel != NULL) {
+    if (da_win32_is_process_elevated() || hide) {
       gtk_widget_hide(app->admin_ntfs_notice_panel);
+    } else {
+      gtk_widget_show(app->admin_ntfs_notice_panel);
     }
   }
 }
@@ -380,7 +383,8 @@ static void on_restart_admin_clicked(GtkButton *btn, gpointer user_data) {
   AppState *app = (AppState *)user_data;
   if (app->dont_show_again_check != NULL &&
       gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app->dont_show_again_check))) {
-    da_win32_set_admin_ntfs_notice_hidden(TRUE);
+    app->general_hide_admin_ntfs_notice = TRUE;
+    da_ini_save_general(app);
   }
   if (da_win32_restart_elevated_self(FALSE) && app->gtk_app != NULL) {
     g_application_quit(G_APPLICATION(app->gtk_app));
@@ -2143,6 +2147,10 @@ void da_ui_build(AppState *app) {
     g_signal_connect(app->restart_admin_btn, "clicked", G_CALLBACK(on_restart_admin_clicked), app);
   }
   if (app->dont_show_again_check != NULL) {
+    if (GTK_IS_TOGGLE_BUTTON(app->dont_show_again_check)) {
+      gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app->dont_show_again_check),
+                                   app->general_hide_admin_ntfs_notice);
+    }
     g_signal_connect(app->dont_show_again_check, "toggled", G_CALLBACK(on_dont_show_admin_ntfs_toggled),
                      app);
   }
@@ -2459,7 +2467,7 @@ void da_ui_build(AppState *app) {
 
 #if defined(G_OS_WIN32)
   /* gtk_widget_show_all reveals hidden descendants — re-apply admin banner visibility last. */
-  if (da_win32_is_process_elevated() || da_win32_admin_ntfs_notice_saved_hidden()) {
+  if (da_win32_is_process_elevated() || app->general_hide_admin_ntfs_notice) {
     if (app->admin_ntfs_notice_panel != NULL) {
       gtk_widget_hide(app->admin_ntfs_notice_panel);
     }

@@ -217,6 +217,10 @@ typedef struct AppState {
    *  command line to avoid UAC failure loops. Persisted as `always_run_as_admin` in `[general]`. Default FALSE. */
   gboolean general_always_run_as_admin;
 
+  /** Windows: when TRUE, the NTFS/admin notice banner stays hidden (`dont_show_again_check`).
+   *  Persisted as `hide_admin_ntfs_notice` in `[general]`. Default FALSE. */
+  gboolean general_hide_admin_ntfs_notice;
+
   /** Live GFileMonitor watching scan_root_utf8; NULL when inactive.
    *  Owned: cancel + unref via da_fs_monitor_stop(). */
   GFileMonitor *fs_monitor;

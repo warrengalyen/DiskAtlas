@@ -3,6 +3,9 @@
   <gresource prefix="">
     <file compressed="true" preprocess="xml-stripblanks">ui/diskatlas_window.ui</file>
     <file compressed="true" preprocess="xml-stripblanks">ui/settings_dialog.glade</file>
+    <file compressed="true">icons/search.png</file>
+    <file compressed="true">icons/warning.png</file>
+    <file compressed="true">icons/scan.png</file>
     <file compressed="true">app-icon.ico</file>
     <file compressed="true">app.css</file>
   </gresource>

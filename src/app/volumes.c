@@ -159,27 +159,6 @@ gboolean da_win32_admin_ntfs_notice_saved_hidden(void) {
   return hide;
 }
 
-void da_win32_set_admin_ntfs_notice_hidden(gboolean hide) {
-  gchar *path = da_win32_settings_path();
-  gchar *dir = g_path_get_dirname(path);
-  g_mkdir_with_parents(dir, 0700);
-  g_free(dir);
-
-  GKeyFile *kf = g_key_file_new();
-  (void)g_key_file_load_from_file(kf, path, G_KEY_FILE_NONE, NULL);
-  g_key_file_set_boolean(kf, "ui", "hide_admin_ntfs_notice", hide);
-  gsize len = 0;
-  gchar *data = g_key_file_to_data(kf, &len, NULL);
-  g_key_file_unref(kf);
-  if (data != NULL) {
-    GError *werr = NULL;
-    g_file_set_contents(path, data, (gssize)len, &werr);
-    g_clear_error(&werr);
-    g_free(data);
-  }
-  g_free(path);
-}
-
 static LPWSTR skip_first_command_line_arg(LPWSTR cmd) {
   if (cmd == NULL || *cmd == L'\0') {
     return cmd;
