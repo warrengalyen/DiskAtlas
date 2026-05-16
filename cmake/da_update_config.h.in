@@ -1,0 +1,7 @@
+#ifndef DA_UPDATE_CONFIG_H
+#define DA_UPDATE_CONFIG_H
+/** Shown in Help > About (from CMake project() VERSION). */
+#define DISKATLAS_APP_VERSION_LABEL "Version @PROJECT_VERSION@"
+/** HTTPS URL for libupdate JSON manifest (version, download_url, checksum). Empty = disabled. Set at configure time; CMake may append /update.json when the cache URL has no ? and no .json suffix. */
+#define DA_UPDATE_MANIFEST_URL "@DA_EMBED_UPDATE_MANIFEST_URL@"
+#endif

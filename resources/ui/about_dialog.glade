@@ -9,7 +9,6 @@
     <property name="window-position">center-on-parent</property>
     <property name="type-hint">dialog</property>
     <property name="program-name">DiskAtlas</property>
-    <property name="version">Version 1.0.0 (Beta)</property>
     <property name="copyright" translatable="yes">Copyright © 2026 Mechanika Design. All Rights Reserved.</property>
     <property name="website">https://software.mechanikadesign.com/software/diskatlas</property>
     <property name="website-label" translatable="yes">www.mechanikadesign.com</property>

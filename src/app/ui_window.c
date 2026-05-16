@@ -17,6 +17,8 @@
 #include "file_ops.h"
 #include "csv_export.h"
 #include "da_message_dialog.h"
+#include "da_app_update.h"
+#include "da_update_config.h"
 #include "ui_window.h"
 #include "volumes.h"
 #include "diskatlas_ini.h"
@@ -1865,6 +1867,7 @@ static void on_help_menu_about_activate(GtkMenuItem *item, gpointer user_data) {
   g_object_unref(builder);
 
   gtk_window_set_transient_for(GTK_WINDOW(about), GTK_WINDOW(app->window));
+  gtk_about_dialog_set_version(GTK_ABOUT_DIALOG(about), DISKATLAS_APP_VERSION_LABEL);
 
   GdkPixbuf *logo = gdk_pixbuf_new_from_resource(DISKATLAS_ABOUT_ICON_RESOURCE, &err);
   if (logo != NULL) {
@@ -2467,6 +2470,10 @@ void da_ui_build(AppState *app) {
     }
   }
   {
+    GtkWidget *help_menu_check_updates = GTK_WIDGET(gtk_builder_get_object(builder, "help_menu_check_updates"));
+    if (help_menu_check_updates != NULL) {
+      g_signal_connect(help_menu_check_updates, "activate", G_CALLBACK(da_help_menu_check_for_updates), app);
+    }
     GtkWidget *help_menu_about = GTK_WIDGET(gtk_builder_get_object(builder, "help_menu_about"));
     if (help_menu_about != NULL) {
       g_signal_connect(help_menu_about, "activate", G_CALLBACK(on_help_menu_about_activate), app);

@@ -466,6 +466,13 @@
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
                     <child>
+                      <object class="GtkMenuItem" id="help_menu_check_updates">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="label" translatable="yes">Check for Updates</property>
+                      </object>
+                    </child>
+                    <child>
                       <object class="GtkMenuItem" id="help_menu_about">
                         <property name="visible">True</property>
                         <property name="can-focus">False</property>

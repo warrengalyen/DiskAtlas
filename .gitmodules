@@ -1,0 +1,3 @@
+[submodule "lib/libupdate"]
+	path = lib/libupdate
+	url = https://github.com/warrengalyen/libupdate

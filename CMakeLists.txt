@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.18)
 
 project(diskatlas
-  VERSION 0.1.0
+  VERSION 1.0.0
   DESCRIPTION "Disk space analyzer — DiskAtlas (GTK 3 GUI + core library)"
   LANGUAGES C
 )
@@ -13,11 +13,34 @@ set(CMAKE_C_EXTENSIONS OFF)
 option(DISKATLAS_BUILD_GUI "Build GTK graphical application" ON)
 # When ON: GUI exe uses the Windows subsystem (no extra console). MinGW: -mwindows; MSVC: /SUBSYSTEM:WINDOWS.
 option(DISKATLAS_WIN32_WINDOWS_SUBSYSTEM "Windows: link GUI exe without a console (subsystem windows)" OFF)
+set(DISKATLAS_UPDATE_MANIFEST_URL "https://www.mechanikadesign.com/software/diskatlas/" CACHE STRING
+    "HTTPS URL to the update manifest JSON document (e.g. .../update.json). If the URL has no ?query and does not end with .json, CMake appends /update.json (directory-style base). URLs containing ? are left unchanged. Leave empty to disable Help > Check for Updates.")
+
+# URL compiled into the app (libupdate fetches this string as-is).
+set(DA_EMBED_UPDATE_MANIFEST_URL "${DISKATLAS_UPDATE_MANIFEST_URL}")
+if(NOT DA_EMBED_UPDATE_MANIFEST_URL STREQUAL "")
+  string(FIND "${DA_EMBED_UPDATE_MANIFEST_URL}" "?" _da_manifest_query)
+  if(_da_manifest_query EQUAL -1)
+    string(TOLOWER "${DA_EMBED_UPDATE_MANIFEST_URL}" _da_manifest_low)
+    if(NOT _da_manifest_low MATCHES "\\.json$")
+      string(REGEX REPLACE "/+$" "" DA_EMBED_UPDATE_MANIFEST_URL "${DA_EMBED_UPDATE_MANIFEST_URL}")
+      set(DA_EMBED_UPDATE_MANIFEST_URL "${DA_EMBED_UPDATE_MANIFEST_URL}/update.json")
+    endif()
+  endif()
+endif()
 
 set(DISKATLAS_SRC "${CMAKE_SOURCE_DIR}/src")
 set(DISKATLAS_BIN_DIR "${CMAKE_SOURCE_DIR}/bin")
 set(DISKATLAS_RES_DIR "${CMAKE_SOURCE_DIR}/resources")
 file(MAKE_DIRECTORY "${DISKATLAS_BIN_DIR}")
+
+configure_file(
+  "${CMAKE_SOURCE_DIR}/cmake/da_update_config.h.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/da_update_config.h"
+  @ONLY
+)
+
+option(DISKATLAS_BUILD_LIBUPDATE "Build bundled libupdate (update shared library + updater) into bin/" ON)
 
 function(diskatlas_set_exe_bin_output target)
   set_target_properties(${target} PROPERTIES
@@ -122,6 +145,10 @@ endif()
 
 diskatlas_set_core_shared_bin_output(diskatlas_core)
 
+if(DISKATLAS_BUILD_LIBUPDATE AND EXISTS "${CMAKE_SOURCE_DIR}/lib/libupdate/libupdate/third_party/miniz/miniz.h")
+  include("${CMAKE_SOURCE_DIR}/cmake/libupdate_in_tree.cmake")
+endif()
+
 # --- GTK GUI (pkg-config gtk+-3.0) ---
 set(DISKATLAS_GTK3_FOUND FALSE)
 if(DISKATLAS_BUILD_GUI)
@@ -191,15 +218,20 @@ if(DISKATLAS_GTK3_FOUND)
     "${DISKATLAS_SRC}/app/win32_shell_context_menu.c"
     "${DISKATLAS_SRC}/app/da_fs_monitor.c"
     "${DISKATLAS_SRC}/app/da_drag_drop.c"
+    "${DISKATLAS_SRC}/app/da_app_update.c"
     ${DISKATLAS_GRESOURCE_C}
   )
   set_target_properties(diskatlas_app PROPERTIES OUTPUT_NAME diskatlas)
   diskatlas_set_exe_bin_output(diskatlas_app)
-  target_include_directories(diskatlas_app PRIVATE "${DISKATLAS_SRC}/include")
+  target_include_directories(diskatlas_app PRIVATE "${DISKATLAS_SRC}/include" "${CMAKE_CURRENT_BINARY_DIR}")
   target_compile_options(diskatlas_app PRIVATE ${GTK3_CFLAGS_OTHER})
   target_include_directories(diskatlas_app PRIVATE ${GTK3_INCLUDE_DIRS})
   target_link_directories(diskatlas_app PRIVATE ${GTK3_LIBRARY_DIRS})
   target_link_libraries(diskatlas_app PRIVATE diskatlas_core ${GTK3_LIBRARIES})
+  target_compile_definitions(diskatlas_app PRIVATE "DISKATLAS_HAVE_LIBUPDATE=$<BOOL:$<TARGET_EXISTS:update>>")
+  if(TARGET update)
+    target_link_libraries(diskatlas_app PRIVATE update)
+  endif()
   if(APPLE)
     target_sources(diskatlas_app PRIVATE "${DISKATLAS_SRC}/app/shell_icon_apple.m")
     target_link_libraries(diskatlas_app PRIVATE "-framework" "AppKit")
