@@ -103,7 +103,7 @@ static void flat_list_model_init(FlatListModel *m) {
   m->child_map        = NULL;
   m->has_any_children = FALSE;
   m->stamp            = 1;
-  m->sort_col         = GTK_TREE_SORTABLE_UNSORTED_SORT_COLUMN_ID;
+  m->sort_col         = DA_COL_ALLOCATED;
   m->sort_ord         = GTK_SORT_DESCENDING;
 }
 

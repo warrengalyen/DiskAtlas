@@ -256,7 +256,7 @@ void da_file_type_view_setup(AppState *app) {
   );
 
   gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(store),
-                                       DA_FT_COL_SIZE_RAW,
+                                       DA_FT_COL_ALLOC_RAW,
                                        GTK_SORT_DESCENDING);
 
   gtk_tree_view_set_model(tv, GTK_TREE_MODEL(store));

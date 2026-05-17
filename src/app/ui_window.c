@@ -2318,6 +2318,8 @@ void da_ui_build(AppState *app) {
     }
   }
 
+  da_ini_apply_interface_tree_columns(app);
+
   da_ui_apply_alternate_row_colors(app);
   da_ui_sync_file_menu(app);
   if (app->tree != NULL) {

@@ -34,6 +34,9 @@ void da_ini_load_interface(AppState *app);
 /** Persist `[interface]` keys (merge write). */
 void da_ini_save_interface(const AppState *app);
 
+/** Apply tree column widths and sort state loaded by `da_ini_load_interface` (call after all tree views have columns). */
+void da_ini_apply_interface_tree_columns(AppState *app);
+
 /** Load `[general]` (enable_rename, open_file_double_click, hide_admin_ntfs_notice, etc.). */
 void da_ini_load_general(AppState *app);
 /** Persist `[general]` keys (merge write). */

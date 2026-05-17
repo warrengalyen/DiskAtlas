@@ -184,6 +184,22 @@ typedef struct AppState {
   /** When TRUE, treemap renders file/folder name labels on tiles; persisted as `treemap_show_labels` in `[interface]`. Default TRUE. */
   gboolean interface_treemap_show_labels;
 
+  /** From `[interface]` at startup; applied once in `da_ini_apply_interface_tree_columns`, then cleared. */
+  gboolean interface_ini_file_view_sort_set;
+  gint     interface_ini_file_view_sort_col;
+  gint     interface_ini_file_view_sort_order;
+  gchar   *interface_ini_file_view_col_widths;
+
+  gboolean interface_ini_folder_tree_sort_set;
+  gint     interface_ini_folder_tree_sort_col;
+  gint     interface_ini_folder_tree_sort_order;
+  gchar   *interface_ini_folder_tree_col_widths;
+
+  gboolean interface_ini_file_type_sort_set;
+  gint     interface_ini_file_type_sort_col;
+  gint     interface_ini_file_type_sort_order;
+  gchar   *interface_ini_file_type_col_widths;
+
   /** Cached free bytes from the most-recent volume query (used for free-space tile). 0 when unknown. */
   uint64_t volume_free_bytes;
 

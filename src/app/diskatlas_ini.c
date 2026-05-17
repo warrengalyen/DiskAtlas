@@ -6,7 +6,9 @@
 #include "diskatlas_ini.h"
 #include "dm_treemap_colors.h"
 #include "da_default_mime_categories.h"
+#include "file_type_view.h"
 #include "format_text.h"
+#include "tree_view_model.h"
 
 #if defined(G_OS_WIN32)
 #ifndef DISKATLAS_INI_H
@@ -43,6 +45,331 @@
 #define DA_KEY_ENABLE_DRAG_DROP "enable_drag_and_drop"
 #define DA_KEY_ALWAYS_RUN_AS_ADMIN "always_run_as_admin"
 #define DA_KEY_HIDE_ADMIN_NTFS_NOTICE "hide_admin_ntfs_notice"
+
+#define DA_KEY_FV_SORT_COL "file_view_tree_sort_column"
+#define DA_KEY_FV_SORT_ORD "file_view_tree_sort_order"
+#define DA_KEY_FV_WIDTHS "file_view_tree_column_widths"
+#define DA_KEY_TV_SORT_COL "folder_tree_sort_column"
+#define DA_KEY_TV_SORT_ORD "folder_tree_sort_order"
+#define DA_KEY_TV_WIDTHS "folder_tree_column_widths"
+#define DA_KEY_FT_SORT_COL "file_type_tree_sort_column"
+#define DA_KEY_FT_SORT_ORD "file_type_tree_sort_order"
+#define DA_KEY_FT_WIDTHS "file_type_tree_column_widths"
+
+static gboolean da_ini_file_view_sort_col_ok(gint col) {
+  return col == 0 || col == 1 || col == DA_COL_PCT || (col >= 3 && col <= 8);
+}
+
+static gboolean da_ini_folder_tree_sort_col_ok(gint col) {
+  return col == DA_TV_COL_NAME || col == DA_TV_COL_PCT_VAL || col == DA_TV_COL_SIZE || col == DA_TV_COL_ALLOC ||
+         col == DA_TV_COL_ITEMS || col == DA_TV_COL_FILES || col == DA_TV_COL_FOLDERS || col == DA_TV_COL_MODIFIED ||
+         col == DA_TV_COL_ATTRS;
+}
+
+static gboolean da_ini_file_type_sort_col_ok(gint col) {
+  return col == DA_FT_COL_EXT || col == DA_FT_COL_TYPE || col == DA_FT_COL_SIZE_RAW || col == DA_FT_COL_ALLOC_RAW ||
+         col == DA_FT_COL_FILES_RAW;
+}
+
+static gboolean da_ini_sort_order_ok(gint ord) {
+  return ord == (gint)GTK_SORT_ASCENDING || ord == (gint)GTK_SORT_DESCENDING;
+}
+
+static void da_ini_clear_interface_tree_prefs(AppState *app) {
+  if (app == NULL) {
+    return;
+  }
+  app->interface_ini_file_view_sort_set = FALSE;
+  app->interface_ini_folder_tree_sort_set = FALSE;
+  app->interface_ini_file_type_sort_set = FALSE;
+  g_free(app->interface_ini_file_view_col_widths);
+  app->interface_ini_file_view_col_widths = NULL;
+  g_free(app->interface_ini_folder_tree_col_widths);
+  app->interface_ini_folder_tree_col_widths = NULL;
+  g_free(app->interface_ini_file_type_col_widths);
+  app->interface_ini_file_type_col_widths = NULL;
+}
+
+static void da_ini_read_tree_prefs(GKeyFile *kf, AppState *app) {
+  if (kf == NULL || app == NULL) {
+    return;
+  }
+  GError *err = NULL;
+  if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_FV_SORT_COL, NULL)) {
+    gint c = g_key_file_get_integer(kf, DA_SEC_INTERFACE, DA_KEY_FV_SORT_COL, &err);
+    g_clear_error(&err);
+    if (da_ini_file_view_sort_col_ok(c) || c == GTK_TREE_SORTABLE_UNSORTED_SORT_COLUMN_ID) {
+      app->interface_ini_file_view_sort_col = c;
+      app->interface_ini_file_view_sort_order = (gint)GTK_SORT_DESCENDING;
+      if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_FV_SORT_ORD, NULL)) {
+        gint o = g_key_file_get_integer(kf, DA_SEC_INTERFACE, DA_KEY_FV_SORT_ORD, &err);
+        g_clear_error(&err);
+        if (da_ini_sort_order_ok(o)) {
+          app->interface_ini_file_view_sort_order = o;
+        }
+      }
+      app->interface_ini_file_view_sort_set = TRUE;
+    }
+  }
+  if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_FV_WIDTHS, NULL)) {
+    gchar *w = g_key_file_get_string(kf, DA_SEC_INTERFACE, DA_KEY_FV_WIDTHS, &err);
+    g_clear_error(&err);
+    if (w != NULL && w[0] != '\0') {
+      g_free(app->interface_ini_file_view_col_widths);
+      app->interface_ini_file_view_col_widths = w;
+    } else {
+      g_free(w);
+    }
+  }
+
+  if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_TV_SORT_COL, NULL)) {
+    gint c = g_key_file_get_integer(kf, DA_SEC_INTERFACE, DA_KEY_TV_SORT_COL, &err);
+    g_clear_error(&err);
+    if (da_ini_folder_tree_sort_col_ok(c) || c == GTK_TREE_SORTABLE_UNSORTED_SORT_COLUMN_ID) {
+      app->interface_ini_folder_tree_sort_col = c;
+      app->interface_ini_folder_tree_sort_order = (gint)GTK_SORT_ASCENDING;
+      if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_TV_SORT_ORD, NULL)) {
+        gint o = g_key_file_get_integer(kf, DA_SEC_INTERFACE, DA_KEY_TV_SORT_ORD, &err);
+        g_clear_error(&err);
+        if (da_ini_sort_order_ok(o)) {
+          app->interface_ini_folder_tree_sort_order = o;
+        }
+      }
+      app->interface_ini_folder_tree_sort_set = TRUE;
+    }
+  }
+  if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_TV_WIDTHS, NULL)) {
+    gchar *w = g_key_file_get_string(kf, DA_SEC_INTERFACE, DA_KEY_TV_WIDTHS, &err);
+    g_clear_error(&err);
+    if (w != NULL && w[0] != '\0') {
+      g_free(app->interface_ini_folder_tree_col_widths);
+      app->interface_ini_folder_tree_col_widths = w;
+    } else {
+      g_free(w);
+    }
+  }
+
+  if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_FT_SORT_COL, NULL)) {
+    gint c = g_key_file_get_integer(kf, DA_SEC_INTERFACE, DA_KEY_FT_SORT_COL, &err);
+    g_clear_error(&err);
+    if (da_ini_file_type_sort_col_ok(c) || c == GTK_TREE_SORTABLE_UNSORTED_SORT_COLUMN_ID) {
+      app->interface_ini_file_type_sort_col = c;
+      app->interface_ini_file_type_sort_order = (gint)GTK_SORT_DESCENDING;
+      if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_FT_SORT_ORD, NULL)) {
+        gint o = g_key_file_get_integer(kf, DA_SEC_INTERFACE, DA_KEY_FT_SORT_ORD, &err);
+        g_clear_error(&err);
+        if (da_ini_sort_order_ok(o)) {
+          app->interface_ini_file_type_sort_order = o;
+        }
+      }
+      app->interface_ini_file_type_sort_set = TRUE;
+    }
+  }
+  if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_FT_WIDTHS, NULL)) {
+    gchar *w = g_key_file_get_string(kf, DA_SEC_INTERFACE, DA_KEY_FT_WIDTHS, &err);
+    g_clear_error(&err);
+    if (w != NULL && w[0] != '\0') {
+      g_free(app->interface_ini_file_type_col_widths);
+      app->interface_ini_file_type_col_widths = w;
+    } else {
+      g_free(w);
+    }
+  }
+}
+
+static gchar *da_ini_join_column_widths(GtkTreeView *tv) {
+  if (tv == NULL) {
+    return NULL;
+  }
+  gint n = gtk_tree_view_get_n_columns(tv);
+  if (n <= 0) {
+    return NULL;
+  }
+  GString *s = g_string_new(NULL);
+  for (gint i = 0; i < n; i++) {
+    GtkTreeViewColumn *c = gtk_tree_view_get_column(tv, i);
+    gint w = 0;
+    if (c != NULL) {
+      w = gtk_tree_view_column_get_fixed_width(c);
+      if (w <= 0) {
+        w = gtk_tree_view_column_get_width(c);
+      }
+    }
+    if (i > 0) {
+      g_string_append_c(s, ',');
+    }
+    g_string_append_printf(s, "%d", w);
+  }
+  return g_string_free(s, FALSE);
+}
+
+static void da_ini_apply_width_csv(GtkTreeView *tv, const gchar *csv) {
+  if (tv == NULL || csv == NULL || csv[0] == '\0') {
+    return;
+  }
+  gchar **parts = g_strsplit(csv, ",", -1);
+  if (parts == NULL) {
+    return;
+  }
+  gint n = gtk_tree_view_get_n_columns(tv);
+  for (gint i = 0; parts[i] != NULL && i < n; i++) {
+    char *end = NULL;
+    glong v = g_ascii_strtoll(parts[i], &end, 10);
+    if (end == parts[i]) {
+      continue;
+    }
+    GtkTreeViewColumn *col = gtk_tree_view_get_column(tv, i);
+    if (col == NULL) {
+      break;
+    }
+    gint minw = gtk_tree_view_column_get_min_width(col);
+    gint wi = (gint)v;
+    if (wi < minw) {
+      wi = minw;
+    }
+    if (wi > 16000) {
+      wi = 16000;
+    }
+    gtk_tree_view_column_set_fixed_width(col, wi);
+  }
+  g_strfreev(parts);
+}
+
+void da_ini_apply_interface_tree_columns(AppState *app) {
+  if (app == NULL) {
+    return;
+  }
+  if (app->tree != NULL && GTK_IS_TREE_VIEW(app->tree)) {
+    GtkTreeView *tv = GTK_TREE_VIEW(app->tree);
+    if (app->interface_ini_file_view_col_widths != NULL) {
+      da_ini_apply_width_csv(tv, app->interface_ini_file_view_col_widths);
+    }
+    if (app->interface_ini_file_view_sort_set && app->flat_list_model != NULL) {
+      gint c = app->interface_ini_file_view_sort_col;
+      gint o = app->interface_ini_file_view_sort_order;
+      if (c == GTK_TREE_SORTABLE_UNSORTED_SORT_COLUMN_ID) {
+        gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(app->flat_list_model),
+                                             GTK_TREE_SORTABLE_UNSORTED_SORT_COLUMN_ID, GTK_SORT_ASCENDING);
+      } else if (da_ini_file_view_sort_col_ok(c) && da_ini_sort_order_ok(o)) {
+        gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(app->flat_list_model), c, (GtkSortType)o);
+      }
+    } else if (app->flat_list_model != NULL) {
+      gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(app->flat_list_model), DA_COL_ALLOCATED,
+                                           GTK_SORT_DESCENDING);
+    }
+    g_free(app->interface_ini_file_view_col_widths);
+    app->interface_ini_file_view_col_widths = NULL;
+    app->interface_ini_file_view_sort_set = FALSE;
+  }
+
+  if (app->tree_view != NULL && GTK_IS_TREE_VIEW(app->tree_view) && app->tree_view_store != NULL) {
+    GtkTreeView *tv = GTK_TREE_VIEW(app->tree_view);
+    if (app->interface_ini_folder_tree_col_widths != NULL) {
+      da_ini_apply_width_csv(tv, app->interface_ini_folder_tree_col_widths);
+    }
+    if (app->interface_ini_folder_tree_sort_set) {
+      gint c = app->interface_ini_folder_tree_sort_col;
+      gint o = app->interface_ini_folder_tree_sort_order;
+      if (c == GTK_TREE_SORTABLE_UNSORTED_SORT_COLUMN_ID) {
+        gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(app->tree_view_store),
+                                             GTK_TREE_SORTABLE_UNSORTED_SORT_COLUMN_ID, GTK_SORT_ASCENDING);
+      } else if (da_ini_folder_tree_sort_col_ok(c) && da_ini_sort_order_ok(o)) {
+        gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(app->tree_view_store), c, (GtkSortType)o);
+      }
+    } else {
+      gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(app->tree_view_store), DA_TV_COL_ALLOC,
+                                           GTK_SORT_DESCENDING);
+    }
+    g_free(app->interface_ini_folder_tree_col_widths);
+    app->interface_ini_folder_tree_col_widths = NULL;
+    app->interface_ini_folder_tree_sort_set = FALSE;
+  }
+
+  if (app->file_type_tree != NULL && GTK_IS_TREE_VIEW(app->file_type_tree)) {
+    GtkTreeView *tv = GTK_TREE_VIEW(app->file_type_tree);
+    GtkTreeModel *md = gtk_tree_view_get_model(tv);
+    if (app->interface_ini_file_type_col_widths != NULL) {
+      da_ini_apply_width_csv(tv, app->interface_ini_file_type_col_widths);
+    }
+    if (app->interface_ini_file_type_sort_set && md != NULL && GTK_IS_TREE_SORTABLE(md)) {
+      gint c = app->interface_ini_file_type_sort_col;
+      gint o = app->interface_ini_file_type_sort_order;
+      if (c == GTK_TREE_SORTABLE_UNSORTED_SORT_COLUMN_ID) {
+        gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(md),
+                                             GTK_TREE_SORTABLE_UNSORTED_SORT_COLUMN_ID, GTK_SORT_ASCENDING);
+      } else if (da_ini_file_type_sort_col_ok(c) && da_ini_sort_order_ok(o)) {
+        gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(md), c, (GtkSortType)o);
+      }
+    } else if (md != NULL && GTK_IS_TREE_SORTABLE(md)) {
+      gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(md), DA_FT_COL_ALLOC_RAW, GTK_SORT_DESCENDING);
+    }
+    g_free(app->interface_ini_file_type_col_widths);
+    app->interface_ini_file_type_col_widths = NULL;
+    app->interface_ini_file_type_sort_set = FALSE;
+  }
+}
+
+static void da_ini_save_tree_view_prefs(GKeyFile *kf, const AppState *app) {
+  if (kf == NULL || app == NULL) {
+    return;
+  }
+  if (app->tree != NULL && GTK_IS_TREE_VIEW(app->tree) && app->flat_list_model != NULL) {
+    GtkTreeSortable *st = GTK_TREE_SORTABLE(app->flat_list_model);
+    gint sc = 0;
+    GtkSortType ord = GTK_SORT_ASCENDING;
+    if (gtk_tree_sortable_get_sort_column_id(st, &sc, &ord)) {
+      g_key_file_set_integer(kf, DA_SEC_INTERFACE, DA_KEY_FV_SORT_COL, sc);
+      g_key_file_set_integer(kf, DA_SEC_INTERFACE, DA_KEY_FV_SORT_ORD, (gint)ord);
+    } else {
+      g_key_file_set_integer(kf, DA_SEC_INTERFACE, DA_KEY_FV_SORT_COL, GTK_TREE_SORTABLE_UNSORTED_SORT_COLUMN_ID);
+      g_key_file_set_integer(kf, DA_SEC_INTERFACE, DA_KEY_FV_SORT_ORD, (gint)GTK_SORT_ASCENDING);
+    }
+    gchar *w = da_ini_join_column_widths(GTK_TREE_VIEW(app->tree));
+    if (w != NULL) {
+      g_key_file_set_string(kf, DA_SEC_INTERFACE, DA_KEY_FV_WIDTHS, w);
+      g_free(w);
+    }
+  }
+
+  if (app->tree_view != NULL && GTK_IS_TREE_VIEW(app->tree_view) && app->tree_view_store != NULL) {
+    GtkTreeSortable *st = GTK_TREE_SORTABLE(app->tree_view_store);
+    gint sc = 0;
+    GtkSortType ord = GTK_SORT_ASCENDING;
+    if (gtk_tree_sortable_get_sort_column_id(st, &sc, &ord)) {
+      g_key_file_set_integer(kf, DA_SEC_INTERFACE, DA_KEY_TV_SORT_COL, sc);
+      g_key_file_set_integer(kf, DA_SEC_INTERFACE, DA_KEY_TV_SORT_ORD, (gint)ord);
+    } else {
+      g_key_file_set_integer(kf, DA_SEC_INTERFACE, DA_KEY_TV_SORT_COL, GTK_TREE_SORTABLE_UNSORTED_SORT_COLUMN_ID);
+      g_key_file_set_integer(kf, DA_SEC_INTERFACE, DA_KEY_TV_SORT_ORD, (gint)GTK_SORT_ASCENDING);
+    }
+    gchar *w = da_ini_join_column_widths(GTK_TREE_VIEW(app->tree_view));
+    if (w != NULL) {
+      g_key_file_set_string(kf, DA_SEC_INTERFACE, DA_KEY_TV_WIDTHS, w);
+      g_free(w);
+    }
+  }
+
+  if (app->file_type_tree != NULL && GTK_IS_TREE_VIEW(app->file_type_tree)) {
+    GtkTreeModel *md = gtk_tree_view_get_model(GTK_TREE_VIEW(app->file_type_tree));
+    if (md != NULL && GTK_IS_TREE_SORTABLE(md)) {
+      GtkTreeSortable *st = GTK_TREE_SORTABLE(md);
+      gint sc = 0;
+      GtkSortType ord = GTK_SORT_ASCENDING;
+      if (gtk_tree_sortable_get_sort_column_id(st, &sc, &ord)) {
+        g_key_file_set_integer(kf, DA_SEC_INTERFACE, DA_KEY_FT_SORT_COL, sc);
+        g_key_file_set_integer(kf, DA_SEC_INTERFACE, DA_KEY_FT_SORT_ORD, (gint)ord);
+      } else {
+        g_key_file_set_integer(kf, DA_SEC_INTERFACE, DA_KEY_FT_SORT_COL, GTK_TREE_SORTABLE_UNSORTED_SORT_COLUMN_ID);
+        g_key_file_set_integer(kf, DA_SEC_INTERFACE, DA_KEY_FT_SORT_ORD, (gint)GTK_SORT_ASCENDING);
+      }
+    }
+    gchar *w = da_ini_join_column_widths(GTK_TREE_VIEW(app->file_type_tree));
+    if (w != NULL) {
+      g_key_file_set_string(kf, DA_SEC_INTERFACE, DA_KEY_FT_WIDTHS, w);
+      g_free(w);
+    }
+  }
+}
 
 static gchar *da_exe_dir_utf8(void) {
 #if defined(G_OS_WIN32)
@@ -249,6 +576,7 @@ void da_ini_load_interface(AppState *app) {
   if (app == NULL) {
     return;
   }
+  da_ini_clear_interface_tree_prefs(app);
   app->treemap_style = DM_TREEMAP_STYLE_INIT_DEFAULT;
   app->interface_alternate_row_colors = FALSE;
   app->interface_show_header = TRUE;
@@ -313,6 +641,7 @@ void da_ini_load_interface(AppState *app) {
           app->interface_size_display_format = sf;
         }
       }
+      da_ini_read_tree_prefs(kf, app);
     }
     g_key_file_unref(kf);
     g_free(path);
@@ -468,6 +797,8 @@ void da_ini_save_interface(const AppState *app) {
     }
     g_key_file_set_integer(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DISPLAY_FORMAT, sf);
   }
+
+  da_ini_save_tree_view_prefs(kf, app);
 
   gsize len = 0;
   gchar *data = g_key_file_to_data(kf, &len, NULL);

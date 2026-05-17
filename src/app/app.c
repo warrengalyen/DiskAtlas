@@ -16,6 +16,7 @@
 static void on_window_destroy(GtkWidget *w, gpointer user_data) {
   (void)w;
   AppState *app = (AppState *)user_data;
+  da_ini_save_interface(app);
   da_ini_save_filetree(app);
   scan_controller_detach(app);
   if (app->scan != NULL) {
