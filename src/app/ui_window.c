@@ -33,6 +33,18 @@
 #include "da_fs_monitor.h"
 #include "da_drag_drop.h"
 
+#define DISKATLAS_WINDOW_UI_RESOURCE "/ui/diskatlas_window.ui"
+#define DISKATLAS_SETTINGS_DIALOG_RESOURCE "/ui/settings_dialog.glade"
+#define DA_SETTINGS_DIALOG_WIDTH_PX 650
+#define DA_SETTINGS_DIALOG_HEIGHT_PX 500
+#define DISKATLAS_ABOUT_DIALOG_RESOURCE "/ui/about_dialog.glade"
+#define DISKATLAS_TREEMAP_EXPORT_DIALOG_RESOURCE "/ui/treemap_export_dialog.glade"
+#define DISKATLAS_ABOUT_ICON_RESOURCE "/icons/about-icon.png"
+#define DISKATLAS_APP_CSS_RESOURCE "/app.css"
+#define DISKATLAS_APP_ICON_RESOURCE "/app-icon.ico"
+#define DISKATLAS_TREE_PROGRESS_STYLE_CLASS "diskatlas-tree-progress"
+#define DISKATLAS_TREE_ALLOC_CELL_BG "#EFEFEF"
+
 void da_ui_sync_file_menu(AppState *app) {
   gboolean ok = FALSE;
   if (app != NULL && app->scan != NULL) {
@@ -47,6 +59,9 @@ void da_ui_sync_file_menu(AppState *app) {
   }
   if (app != NULL && app->file_menu_export_file_types_csv != NULL) {
     gtk_widget_set_sensitive(app->file_menu_export_file_types_csv, ok);
+  }
+  if (app != NULL && app->file_menu_treemap_image != NULL) {
+    gtk_widget_set_sensitive(app->file_menu_treemap_image, ok);
   }
   if (app != NULL && app->file_menu_copy_clipboard != NULL) {
     gtk_widget_set_sensitive(app->file_menu_copy_clipboard, ok);
@@ -264,6 +279,16 @@ static void on_file_menu_zoom_out_activate(GtkMenuItem *item, gpointer user_data
 
 /* ---- PNG export dialog ---------------------------------------------------- */
 
+static void da_treemap_export_cancel_clicked(GtkButton *btn, gpointer user_data) {
+  (void)btn;
+  gtk_dialog_response(GTK_DIALOG(user_data), GTK_RESPONSE_CANCEL);
+}
+
+static void da_treemap_export_ok_clicked(GtkButton *btn, gpointer user_data) {
+  (void)btn;
+  gtk_dialog_response(GTK_DIALOG(user_data), GTK_RESPONSE_OK);
+}
+
 static void on_file_menu_treemap_image_activate(GtkMenuItem *item, gpointer user_data) {
   AppState *app = (AppState *)user_data;
   (void)item;
@@ -271,7 +296,85 @@ static void on_file_menu_treemap_image_activate(GtkMenuItem *item, gpointer user
     return;
   }
 
-  /* Step 1: native file chooser for output path. */
+  /* Step 1: export options (Glade: header bar + size / flags), before save dialog. */
+  GError *opt_err = NULL;
+  GtkBuilder *opt_builder = gtk_builder_new();
+  if (!gtk_builder_add_from_resource(opt_builder, DISKATLAS_TREEMAP_EXPORT_DIALOG_RESOURCE, &opt_err)) {
+    g_warning("Failed to load treemap export options UI (%s): %s", DISKATLAS_TREEMAP_EXPORT_DIALOG_RESOURCE,
+              opt_err->message);
+    g_clear_error(&opt_err);
+    g_object_unref(opt_builder);
+    return;
+  }
+
+  GObject *opt_obj = gtk_builder_get_object(opt_builder, "treemap_export_dialog");
+  if (opt_obj == NULL || !GTK_IS_DIALOG(opt_obj)) {
+    g_warning("treemap_export_dialog object missing or not a GtkDialog");
+    g_object_unref(opt_builder);
+    return;
+  }
+
+  GtkWidget *dlg = GTK_WIDGET(opt_obj);
+  gtk_window_set_transient_for(GTK_WINDOW(dlg), GTK_WINDOW(app->window));
+
+  GtkWidget *cancel_btn = GTK_WIDGET(gtk_builder_get_object(opt_builder, "cancel_btn"));
+  GtkWidget *export_btn = GTK_WIDGET(gtk_builder_get_object(opt_builder, "export_btn"));
+  if (cancel_btn != NULL) {
+    g_signal_connect(cancel_btn, "clicked", G_CALLBACK(da_treemap_export_cancel_clicked), dlg);
+  }
+  if (export_btn != NULL) {
+    g_signal_connect(export_btn, "clicked", G_CALLBACK(da_treemap_export_ok_clicked), dlg);
+  }
+
+  GtkWidget *spin_w = GTK_WIDGET(gtk_builder_get_object(opt_builder, "export_width_spin"));
+  GtkWidget *spin_h = GTK_WIDGET(gtk_builder_get_object(opt_builder, "export_height_spin"));
+  GtkWidget *chk_gray = GTK_WIDGET(gtk_builder_get_object(opt_builder, "export_grayscale_check"));
+  GtkWidget *chk_free = GTK_WIDGET(gtk_builder_get_object(opt_builder, "export_show_free_space_check"));
+  gint exp_w_ini = 1920;
+  gint exp_h_ini = 1080;
+  gboolean exp_gray_ini = FALSE;
+  gboolean exp_free_ini = app->interface_treemap_show_free_space;
+  da_ini_export_treemap_png_load(&exp_w_ini, &exp_h_ini, &exp_gray_ini, &exp_free_ini,
+                                 app->interface_treemap_show_free_space);
+  if (spin_w != NULL && GTK_IS_SPIN_BUTTON(spin_w)) {
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin_w), (gdouble)exp_w_ini);
+  }
+  if (spin_h != NULL && GTK_IS_SPIN_BUTTON(spin_h)) {
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin_h), (gdouble)exp_h_ini);
+  }
+  if (chk_gray != NULL && GTK_IS_TOGGLE_BUTTON(chk_gray)) {
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(chk_gray), exp_gray_ini);
+  }
+  if (chk_free != NULL && GTK_IS_TOGGLE_BUTTON(chk_free)) {
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(chk_free), exp_free_ini);
+  }
+
+  gtk_widget_show_all(dlg);
+
+  if (gtk_dialog_run(GTK_DIALOG(dlg)) != GTK_RESPONSE_OK) {
+    gtk_widget_destroy(dlg);
+    g_object_unref(opt_builder);
+    return;
+  }
+
+  int exp_w = 1920;
+  int exp_h = 1080;
+  if (spin_w != NULL && GTK_IS_SPIN_BUTTON(spin_w)) {
+    exp_w = (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(spin_w));
+  }
+  if (spin_h != NULL && GTK_IS_SPIN_BUTTON(spin_h)) {
+    exp_h = (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(spin_h));
+  }
+  gboolean gray = (chk_gray != NULL && GTK_IS_TOGGLE_BUTTON(chk_gray))
+                  ? gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(chk_gray))
+                  : FALSE;
+  gboolean show_free = (chk_free != NULL && GTK_IS_TOGGLE_BUTTON(chk_free))
+                       ? gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(chk_free))
+                       : app->interface_treemap_show_free_space;
+  gtk_widget_destroy(dlg);
+  g_object_unref(opt_builder);
+
+  /* Step 2: native file chooser for output path. */
   GtkFileChooserNative *native =
       gtk_file_chooser_native_new("Save Treemap as PNG", GTK_WINDOW(app->window), GTK_FILE_CHOOSER_ACTION_SAVE,
                                   "_Save", "_Cancel");
@@ -289,8 +392,8 @@ static void on_file_menu_treemap_image_activate(GtkMenuItem *item, gpointer user
   gtk_file_chooser_add_filter(chooser, all_ff);
   gtk_file_chooser_set_filter(chooser, png_ff);
 
-  gint resp = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
-  if (resp != GTK_RESPONSE_ACCEPT) {
+  gint fc_resp = gtk_native_dialog_run(GTK_NATIVE_DIALOG(native));
+  if (fc_resp != GTK_RESPONSE_ACCEPT) {
     gtk_native_dialog_destroy(GTK_NATIVE_DIALOG(native));
     return;
   }
@@ -300,57 +403,6 @@ static void on_file_menu_treemap_image_activate(GtkMenuItem *item, gpointer user
     return;
   }
 
-  /* Step 2: options dialog (width, height, grayscale, free space). */
-  GtkWidget *dlg = gtk_dialog_new_with_buttons(
-      "Export Options",
-      GTK_WINDOW(app->window),
-      GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-      "_Cancel", GTK_RESPONSE_CANCEL,
-      "_Export", GTK_RESPONSE_OK,
-      NULL);
-  GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
-  gtk_container_set_border_width(GTK_CONTAINER(content), 12);
-  gtk_box_set_spacing(GTK_BOX(content), 6);
-
-  /* Width */
-  GtkWidget *hb_w = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-  gtk_box_pack_start(GTK_BOX(hb_w), gtk_label_new("Width:"), FALSE, FALSE, 0);
-  GtkWidget *spin_w = gtk_spin_button_new_with_range(100, 16384, 1);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin_w), 1920);
-  gtk_box_pack_start(GTK_BOX(hb_w), spin_w, FALSE, FALSE, 0);
-  gtk_box_pack_start(GTK_BOX(content), hb_w, FALSE, FALSE, 0);
-
-  /* Height */
-  GtkWidget *hb_h = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-  gtk_box_pack_start(GTK_BOX(hb_h), gtk_label_new("Height:"), FALSE, FALSE, 0);
-  GtkWidget *spin_h = gtk_spin_button_new_with_range(100, 16384, 1);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin_h), 1080);
-  gtk_box_pack_start(GTK_BOX(hb_h), spin_h, FALSE, FALSE, 0);
-  gtk_box_pack_start(GTK_BOX(content), hb_h, FALSE, FALSE, 0);
-
-  /* Grayscale */
-  GtkWidget *chk_gray = gtk_check_button_new_with_label("Grayscale (shades of gray instead of color)");
-  gtk_box_pack_start(GTK_BOX(content), chk_gray, FALSE, FALSE, 0);
-
-  /* Show free space */
-  GtkWidget *chk_free = gtk_check_button_new_with_label("Show free space tile");
-  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(chk_free), app->interface_treemap_show_free_space);
-  gtk_box_pack_start(GTK_BOX(content), chk_free, FALSE, FALSE, 0);
-
-  gtk_widget_show_all(content);
-
-  if (gtk_dialog_run(GTK_DIALOG(dlg)) != GTK_RESPONSE_OK) {
-    gtk_widget_destroy(dlg);
-    g_free(output_path);
-    return;
-  }
-
-  int exp_w  = (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(spin_w));
-  int exp_h  = (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(spin_h));
-  gboolean gray      = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(chk_gray));
-  gboolean show_free = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(chk_free));
-  gtk_widget_destroy(dlg);
-
   uint64_t used_b = (app->volume_total_bytes > app->volume_free_bytes)
                     ? app->volume_total_bytes - app->volume_free_bytes : 0u;
 
@@ -358,6 +410,9 @@ static void on_file_menu_treemap_image_activate(GtkMenuItem *item, gpointer user
                                           output_path, exp_w, exp_h,
                                           gray, show_free,
                                           app->volume_free_bytes, used_b);
+  if (ok) {
+    da_ini_export_treemap_png_save((gint)exp_w, (gint)exp_h, gray, show_free);
+  }
   if (!ok) {
     GtkWidget *err = gtk_message_dialog_new(GTK_WINDOW(app->window),
                                             GTK_DIALOG_MODAL,
@@ -480,20 +535,6 @@ static void da_file_view_paned_on_allocate(GtkWidget *widget, GdkRectangle *allo
     da_tree_scrolled_clamp_vadjustment(GTK_WIDGET(user_data));
   }
 }
-
-#define DISKATLAS_WINDOW_UI_RESOURCE "/ui/diskatlas_window.ui"
-#define DISKATLAS_SETTINGS_DIALOG_RESOURCE "/ui/settings_dialog.glade"
-/** Natural size of MIME tab + GtkTextView can exceed this unless layout is constrained; geometry caps the toplevel. */
-#define DA_SETTINGS_DIALOG_WIDTH_PX 650
-#define DA_SETTINGS_DIALOG_HEIGHT_PX 500
-#define DISKATLAS_ABOUT_DIALOG_RESOURCE "/ui/about_dialog.glade"
-#define DISKATLAS_ABOUT_ICON_RESOURCE "/icons/about-icon.png"
-#define DISKATLAS_APP_CSS_RESOURCE "/app.css"
-#define DISKATLAS_APP_ICON_RESOURCE "/app-icon.ico"
-/** gtk_style_context_add_class for percent-column progress CSS (file list + Tree View tabs). */
-#define DISKATLAS_TREE_PROGRESS_STYLE_CLASS "diskatlas-tree-progress"
-/** Default GtkCellRendererText background for Allocated columns (file list + Tree View tab). */
-#define DISKATLAS_TREE_ALLOC_CELL_BG "#EFEFEF"
 
 /** GtkCellRendererText: `background`; pixbuf/progress: `cell-background` (GTK 3). */
 static void da_cell_renderer_apply_row_bg(GtkCellRenderer *cell, const gchar *html, gboolean set) {
@@ -2542,6 +2583,7 @@ void da_ui_build(AppState *app) {
   }
   {
     GtkWidget *w = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_treemap_image"));
+    app->file_menu_treemap_image = w;
     if (w != NULL) {
       g_signal_connect(w, "activate", G_CALLBACK(on_file_menu_treemap_image_activate), app);
     }

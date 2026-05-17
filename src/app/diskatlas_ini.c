@@ -46,6 +46,14 @@
 #define DA_KEY_ALWAYS_RUN_AS_ADMIN "always_run_as_admin"
 #define DA_KEY_HIDE_ADMIN_NTFS_NOTICE "hide_admin_ntfs_notice"
 
+#define DA_SEC_EXPORT "export"
+#define DA_KEY_EXPORT_TREEMAP_PNG_WIDTH "treemap_png_width"
+#define DA_KEY_EXPORT_TREEMAP_PNG_HEIGHT "treemap_png_height"
+#define DA_KEY_EXPORT_TREEMAP_PNG_GRAYSCALE "treemap_png_grayscale"
+#define DA_KEY_EXPORT_TREEMAP_PNG_SHOW_FREE_SPACE "treemap_png_show_free_space"
+#define DA_EXPORT_TREEMAP_PNG_DIM_MIN 100
+#define DA_EXPORT_TREEMAP_PNG_DIM_MAX 16384
+
 #define DA_KEY_FV_SORT_COL "file_view_tree_sort_column"
 #define DA_KEY_FV_SORT_ORD "file_view_tree_sort_order"
 #define DA_KEY_FV_WIDTHS "file_view_tree_column_widths"
@@ -1014,6 +1022,94 @@ void da_ini_search_history_save(const gchar *const *items, gsize n) {
     }
     g_key_file_set_string_list(kf, DA_SEC_SEARCH_HISTORY, DA_KEY_SEARCH_QUERIES, items, n);
   }
+  gsize len = 0;
+  gchar *data = g_key_file_to_data(kf, &len, NULL);
+  g_key_file_unref(kf);
+  if (data == NULL) {
+    g_free(path);
+    return;
+  }
+  gchar *dir = g_path_get_dirname(path);
+  if (dir != NULL) {
+    g_mkdir_with_parents(dir, 0755);
+    g_free(dir);
+  }
+  GError *werr = NULL;
+  g_file_set_contents(path, data, (gssize)len, &werr);
+  g_clear_error(&werr);
+  g_free(data);
+  g_free(path);
+}
+
+static gint da_ini_clamp_treemap_export_dim(gint v) {
+  if (v < DA_EXPORT_TREEMAP_PNG_DIM_MIN) {
+    return DA_EXPORT_TREEMAP_PNG_DIM_MIN;
+  }
+  if (v > DA_EXPORT_TREEMAP_PNG_DIM_MAX) {
+    return DA_EXPORT_TREEMAP_PNG_DIM_MAX;
+  }
+  return v;
+}
+
+void da_ini_export_treemap_png_load(gint *width, gint *height, gboolean *grayscale, gboolean *show_free_space,
+                                    gboolean show_free_space_fallback) {
+  if (width == NULL || height == NULL || grayscale == NULL || show_free_space == NULL) {
+    return;
+  }
+  gchar *path = da_ini_path();
+  if (path == NULL) {
+    *show_free_space = show_free_space_fallback;
+    return;
+  }
+  GKeyFile *kf = g_key_file_new();
+  if (!da_key_file_load_merged(kf, path) || !g_key_file_has_group(kf, DA_SEC_EXPORT)) {
+    g_key_file_unref(kf);
+    g_free(path);
+    *show_free_space = show_free_space_fallback;
+    return;
+  }
+  g_free(path);
+
+  GError *err = NULL;
+  if (g_key_file_has_key(kf, DA_SEC_EXPORT, DA_KEY_EXPORT_TREEMAP_PNG_WIDTH, NULL)) {
+    gint w = g_key_file_get_integer(kf, DA_SEC_EXPORT, DA_KEY_EXPORT_TREEMAP_PNG_WIDTH, &err);
+    g_clear_error(&err);
+    *width = da_ini_clamp_treemap_export_dim(w);
+  }
+  if (g_key_file_has_key(kf, DA_SEC_EXPORT, DA_KEY_EXPORT_TREEMAP_PNG_HEIGHT, NULL)) {
+    gint h = g_key_file_get_integer(kf, DA_SEC_EXPORT, DA_KEY_EXPORT_TREEMAP_PNG_HEIGHT, &err);
+    g_clear_error(&err);
+    *height = da_ini_clamp_treemap_export_dim(h);
+  }
+  if (g_key_file_has_key(kf, DA_SEC_EXPORT, DA_KEY_EXPORT_TREEMAP_PNG_GRAYSCALE, NULL)) {
+    gboolean g = g_key_file_get_boolean(kf, DA_SEC_EXPORT, DA_KEY_EXPORT_TREEMAP_PNG_GRAYSCALE, &err);
+    g_clear_error(&err);
+    *grayscale = g;
+  }
+  if (g_key_file_has_key(kf, DA_SEC_EXPORT, DA_KEY_EXPORT_TREEMAP_PNG_SHOW_FREE_SPACE, NULL)) {
+    gboolean f = g_key_file_get_boolean(kf, DA_SEC_EXPORT, DA_KEY_EXPORT_TREEMAP_PNG_SHOW_FREE_SPACE, &err);
+    g_clear_error(&err);
+    *show_free_space = f;
+  } else {
+    *show_free_space = show_free_space_fallback;
+  }
+  g_key_file_unref(kf);
+}
+
+void da_ini_export_treemap_png_save(gint width, gint height, gboolean grayscale, gboolean show_free_space) {
+  gchar *path = da_ini_path();
+  if (path == NULL) {
+    return;
+  }
+  gint w = da_ini_clamp_treemap_export_dim(width);
+  gint h = da_ini_clamp_treemap_export_dim(height);
+  GKeyFile *kf = g_key_file_new();
+  (void)da_key_file_load_merged(kf, path);
+  g_key_file_set_integer(kf, DA_SEC_EXPORT, DA_KEY_EXPORT_TREEMAP_PNG_WIDTH, w);
+  g_key_file_set_integer(kf, DA_SEC_EXPORT, DA_KEY_EXPORT_TREEMAP_PNG_HEIGHT, h);
+  g_key_file_set_boolean(kf, DA_SEC_EXPORT, DA_KEY_EXPORT_TREEMAP_PNG_GRAYSCALE, grayscale);
+  g_key_file_set_boolean(kf, DA_SEC_EXPORT, DA_KEY_EXPORT_TREEMAP_PNG_SHOW_FREE_SPACE, show_free_space);
+
   gsize len = 0;
   gchar *data = g_key_file_to_data(kf, &len, NULL);
   g_key_file_unref(kf);

@@ -48,4 +48,15 @@ gchar **da_ini_search_history_load(gsize *n_out);
 /** Persist search strings (newest first). Pass @a n=0 to remove the section. */
 void da_ini_search_history_save(const gchar *const *items, gsize n);
 
+/**
+ * Read `[export]` treemap PNG keys into @a width, @a height, @a grayscale, @a show_free_space.
+ * Each value is only updated when its key exists and is valid; dimensions are clamped to [100, 16384].
+ * If `treemap_png_show_free_space` is absent, @a show_free_space is set to @a show_free_space_fallback.
+ */
+void da_ini_export_treemap_png_load(gint *width, gint *height, gboolean *grayscale, gboolean *show_free_space,
+                                    gboolean show_free_space_fallback);
+
+/** Merge-write `[export]` treemap PNG keys (dimensions clamped to [100, 16384]). */
+void da_ini_export_treemap_png_save(gint width, gint height, gboolean grayscale, gboolean show_free_space);
+
 #endif /* DISKATLAS_INI_H */
