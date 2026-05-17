@@ -87,6 +87,7 @@ void treemap_widget_set_zoom_callback(TreemapWidget *w,
 
 /**
  * Render the treemap to a PNG file at the requested pixel dimensions.
+ * Tile multi-selection outlines are omitted from the export (the on-screen selection is unchanged).
  * @p show_free_space / @p free_bytes / @p used_bytes override the widget's current free-space
  * state for the exported image only; the live widget state is fully restored afterwards.
  * Returns TRUE on success; FALSE if the widget has no layout or the file cannot be written.

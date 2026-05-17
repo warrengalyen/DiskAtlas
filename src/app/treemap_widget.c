@@ -121,6 +121,9 @@ struct _TreemapWidget {
   /* ---- Zoom callback (double-click) --------------------------------------- */
   void (*on_zoom_in)(GtkWidget *, gint64, gpointer);
   gpointer on_zoom_in_data;
+
+  /** When TRUE, `treemap_draw_to_cr` skips selection outlines (PNG export only). */
+  gboolean draw_omit_selection;
 };
 
 G_DEFINE_TYPE(TreemapWidget, treemap_widget, GTK_TYPE_DRAWING_AREA)
@@ -1063,7 +1066,7 @@ static void treemap_draw_to_cr(TreemapWidget *self, cairo_t *cr) {
   cairo_set_source_rgba(cr, HOVER_BORDER_R, HOVER_BORDER_G, HOVER_BORDER_B, HOVER_BORDER_A);
   for (i = 0; i < self->rect_count; i++) {
     const treemap_rect_t *R = &self->rects[i];
-    gboolean sel = treemap_rect_is_selected(self, (gint)i);
+    gboolean sel = self->draw_omit_selection ? FALSE : treemap_rect_is_selected(self, (gint)i);
     gboolean hov = ((gint)i == self->hovered_index);
     double bw, off;
     if (!sel && !hov) {
@@ -1084,7 +1087,7 @@ static void treemap_draw_to_cr(TreemapWidget *self, cairo_t *cr) {
   cairo_set_source_rgba(cr, HOVER_BORDER_R, HOVER_BORDER_G, HOVER_BORDER_B, HOVER_BORDER_A);
   for (i = 0; i < self->dir_label_count; i++) {
     const TreemapDirLabel *HL = &self->dir_labels[i];
-    gboolean sel = treemap_dir_is_selected(self, (gint)i);
+    gboolean sel = self->draw_omit_selection ? FALSE : treemap_dir_is_selected(self, (gint)i);
     gboolean hov = ((gint)i == self->hovered_dir_index);
     double bw, off;
     if (!sel && !hov) {
@@ -1786,7 +1789,9 @@ gboolean treemap_widget_export_png(TreemapWidget *w, const char *output_path,
   }
 
   cr = cairo_create(surf);
+  w->draw_omit_selection = TRUE;
   treemap_draw_to_cr(w, cr);
+  w->draw_omit_selection = FALSE;
   cairo_destroy(cr);
 
   /* Optional grayscale conversion using luminance formula. */
