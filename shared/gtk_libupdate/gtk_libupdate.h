@@ -14,6 +14,12 @@
  * gtk_libupdate_check_for_updates copies *cfg shallowly for the duration of the
  * async check; pointer fields must stay valid until the flow finishes (string
  * literals or process-lifetime storage are fine).
+ *
+ * Optional manifest fields `description` and `description_format` (see
+ * libupdate README) are shown when present: release notes appear in a scrollable
+ * area for “update available” and, if the server includes them, when already
+ * up to date. HTML descriptions are converted from libupdate’s HTML subset to
+ * Pango markup for GtkLabel (not a full browser engine).
  */
 typedef void (*GtkLibupdateConfigureDialogFn)(GtkWidget *dialog);
 

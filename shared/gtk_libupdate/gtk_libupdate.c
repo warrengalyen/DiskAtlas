@@ -8,6 +8,222 @@
 #define GTK_LIBUPDATE_HAVE_LIBUPDATE 0
 #endif
 
+/**
+ * gtk_dialog_get_action_area() is deprecated. GtkDialog packs the content area
+ * inside a main container; the button row is a sibling of that container, not
+ * of gtk_dialog_get_content_area(). Find the shell child that does not contain
+ * the content area as a descendant, then match horizontal insets to content.
+ */
+static GtkWidget *gtk_lu_dialog_find_action_row_widget(GtkDialog *dialog) {
+  GtkWidget *content;
+  GtkWidget *shell;
+  GList *lst;
+  GtkWidget *found = NULL;
+  GtkWidget *hint;
+  GtkWidget *par;
+
+  if (dialog == NULL) {
+    return NULL;
+  }
+  content = gtk_dialog_get_content_area(dialog);
+  if (content == NULL) {
+    return NULL;
+  }
+
+  shell = gtk_bin_get_child(GTK_BIN(dialog));
+  if (shell != NULL && GTK_IS_CONTAINER(shell)) {
+    lst = gtk_container_get_children(GTK_CONTAINER(shell));
+    for (GList *l = lst; l != NULL; l = l->next) {
+      GtkWidget *c = GTK_WIDGET(l->data);
+      if (!gtk_widget_is_ancestor(content, c)) {
+        found = c;
+      }
+    }
+    g_list_free(lst);
+    if (found != NULL) {
+      return found;
+    }
+  }
+
+  /* Fallback: walk up from content and look for a sibling subtree that does not
+   * contain the content widget (older or unusual dialog layouts). */
+  for (hint = gtk_widget_get_parent(content); hint != NULL; hint = gtk_widget_get_parent(hint)) {
+    par = gtk_widget_get_parent(hint);
+    if (par == NULL || !GTK_IS_CONTAINER(par)) {
+      continue;
+    }
+    lst = gtk_container_get_children(GTK_CONTAINER(par));
+    for (GList *l = lst; l != NULL; l = l->next) {
+      GtkWidget *w = GTK_WIDGET(l->data);
+      if (!gtk_widget_is_ancestor(content, w)) {
+        found = w;
+      }
+    }
+    g_list_free(lst);
+    if (found != NULL) {
+      return found;
+    }
+  }
+
+  return NULL;
+}
+
+static void gtk_lu_style_padding_h(GtkWidget *widget, gint *out_l, gint *out_r) {
+  GtkStyleContext *ctx;
+  GtkStateFlags state;
+  GtkBorder pad = {0};
+
+  if (widget == NULL || out_l == NULL || out_r == NULL) {
+    return;
+  }
+  ctx = gtk_widget_get_style_context(widget);
+  state = gtk_widget_get_state_flags(widget);
+  gtk_style_context_get_padding(ctx, state, &pad);
+  *out_l = (gint)pad.left;
+  *out_r = (gint)pad.right;
+}
+
+static void gtk_lu_dialog_pick_horizontal_margins(GtkDialog *dialog, GtkWidget *content, gint *out_s,
+                                                   gint *out_e) {
+  gint hs = 0;
+  gint he = 0;
+  gint pl;
+  gint pr;
+
+  if (content != NULL) {
+    hs = gtk_widget_get_margin_start(content);
+    he = gtk_widget_get_margin_end(content);
+    if (GTK_IS_CONTAINER(content)) {
+      GList *lst = gtk_container_get_children(GTK_CONTAINER(content));
+      for (GList *l = lst; l != NULL; l = l->next) {
+        GtkWidget *ch = GTK_WIDGET(l->data);
+        gint s = gtk_widget_get_margin_start(ch);
+        gint e = gtk_widget_get_margin_end(ch);
+        if (s > hs) {
+          hs = s;
+        }
+        if (e > he) {
+          he = e;
+        }
+      }
+      g_list_free(lst);
+    }
+    gtk_lu_style_padding_h(content, &pl, &pr);
+    if (pl > hs) {
+      hs = pl;
+    }
+    if (pr > he) {
+      he = pr;
+    }
+    if (GTK_IS_CONTAINER(content)) {
+      GList *lst2 = gtk_container_get_children(GTK_CONTAINER(content));
+      for (GList *l = lst2; l != NULL; l = l->next) {
+        gtk_lu_style_padding_h(GTK_WIDGET(l->data), &pl, &pr);
+        if (pl > hs) {
+          hs = pl;
+        }
+        if (pr > he) {
+          he = pr;
+        }
+      }
+      g_list_free(lst2);
+    }
+  }
+  if (dialog != NULL && GTK_IS_MESSAGE_DIALOG(dialog)) {
+    GtkWidget *ma = gtk_message_dialog_get_message_area(GTK_MESSAGE_DIALOG(dialog));
+    if (ma != NULL) {
+      gint s = gtk_widget_get_margin_start(ma);
+      gint e = gtk_widget_get_margin_end(ma);
+      if (s > hs) {
+        hs = s;
+      }
+      if (e > he) {
+        he = e;
+      }
+      gtk_lu_style_padding_h(ma, &pl, &pr);
+      if (pl > hs) {
+        hs = pl;
+      }
+      if (pr > he) {
+        he = pr;
+      }
+    }
+  }
+  *out_s = hs;
+  *out_e = he;
+}
+
+static gint gtk_lu_max_margin_bottom_of_children(GtkWidget *container) {
+  gint m = 0;
+  GList *lst;
+
+  if (container == NULL || !GTK_IS_CONTAINER(container)) {
+    return 0;
+  }
+  lst = gtk_container_get_children(GTK_CONTAINER(container));
+  for (GList *l = lst; l != NULL; l = l->next) {
+    gint b = gtk_widget_get_margin_bottom(GTK_WIDGET(l->data));
+    if (b > m) {
+      m = b;
+    }
+  }
+  g_list_free(lst);
+  return m;
+}
+
+static void gtk_lu_dialog_sync_action_margins_from_content(GtkDialog *dialog) {
+  GtkWidget *content;
+  GtkWidget *action_row;
+  gint hs;
+  gint he;
+  gint gap_above_buttons;
+  gint bottom_pad;
+
+  if (dialog == NULL) {
+    return;
+  }
+  content = gtk_dialog_get_content_area(dialog);
+  action_row = gtk_lu_dialog_find_action_row_widget(dialog);
+  if (action_row == NULL || content == NULL) {
+    return;
+  }
+
+  gtk_lu_dialog_pick_horizontal_margins(dialog, content, &hs, &he);
+
+  gap_above_buttons = gtk_widget_get_margin_bottom(content);
+  {
+    gint from_children = gtk_lu_max_margin_bottom_of_children(content);
+    if (from_children > gap_above_buttons) {
+      gap_above_buttons = from_children;
+    }
+  }
+  if (gap_above_buttons == 0) {
+    gap_above_buttons = 4;
+  }
+
+  bottom_pad = gtk_widget_get_margin_bottom(content);
+  {
+    gint from_children = gtk_lu_max_margin_bottom_of_children(content);
+    if (from_children > bottom_pad) {
+      bottom_pad = from_children;
+    }
+  }
+
+  gtk_widget_set_margin_start(action_row, hs);
+  gtk_widget_set_margin_end(action_row, he);
+  gtk_widget_set_margin_top(action_row, gap_above_buttons);
+  gtk_widget_set_margin_bottom(action_row, bottom_pad);
+}
+
+static void gtk_lu_apply_dialog_layout(const GtkLibupdateConfig *cfg, GtkWidget *dialog) {
+  if (cfg != NULL && cfg->configure_message_dialog != NULL && dialog != NULL) {
+    cfg->configure_message_dialog(dialog);
+  }
+  if (dialog != NULL && GTK_IS_DIALOG(dialog)) {
+    gtk_lu_dialog_sync_action_margins_from_content(GTK_DIALOG(dialog));
+  }
+}
+
 #if GTK_LIBUPDATE_HAVE_LIBUPDATE
 #include <update.h>
 
@@ -29,6 +245,15 @@ typedef struct {
   update_info_t info;
 } GtkLuCheckResult;
 
+static void gtk_lu_check_result_free(gpointer p) {
+  GtkLuCheckResult *r = (GtkLuCheckResult *)p;
+  if (r == NULL) {
+    return;
+  }
+  update_info_free(&r->info);
+  g_free(r);
+}
+
 typedef struct {
   GtkWindow *parent;
   GtkWidget *main_widget;
@@ -45,9 +270,103 @@ typedef struct {
   gchar *zip_path;
 } GtkLuDownloadJob;
 
-static void gtk_lu_apply_dialog_layout(const GtkLibupdateConfig *cfg, GtkWidget *dialog) {
-  if (cfg != NULL && cfg->configure_message_dialog != NULL && dialog != NULL) {
-    cfg->configure_message_dialog(dialog);
+/**
+ * GtkLabel uses Pango markup, not HTML. libupdate emits a small HTML subset;
+ * map common tags so release notes render instead of failing markup parse.
+ */
+static gchar *gtk_lu_re_replace(const gchar *input, const gchar *pattern, const gchar *replacement) {
+  GError *err = NULL;
+  GRegex *re = g_regex_new(pattern, G_REGEX_CASELESS, 0, &err);
+  gchar *out;
+
+  if (re == NULL || err != NULL) {
+    g_clear_error(&err);
+    return g_strdup(input);
+  }
+  out = g_regex_replace_literal(re, input, -1, 0, replacement, 0, &err);
+  g_regex_unref(re);
+  if (err != NULL) {
+    g_clear_error(&err);
+    return g_strdup(input);
+  }
+  if (out == NULL) {
+    return g_strdup(input);
+  }
+  return out;
+}
+
+static gchar *gtk_lu_libupdate_html_to_pango_markup(const char *html) {
+  gchar *a;
+  gchar *b;
+  gchar *c;
+  gchar *d;
+  gchar *e;
+  gchar *f;
+
+  if (html == NULL) {
+    return NULL;
+  }
+
+  a = gtk_lu_re_replace(html, "<br\\s*/?>", "\n");
+  b = gtk_lu_re_replace(a, "</?p[^>]*>", "\n");
+  g_free(a);
+  c = gtk_lu_re_replace(b, "</?div[^>]*>", "\n");
+  g_free(b);
+  /* Drop list wrappers without inserting blank lines (unlike treating them as blocks). */
+  d = gtk_lu_re_replace(c, "</?[ou]l[^>]*>", "");
+  g_free(c);
+  /* Second and later list items */
+  e = gtk_lu_re_replace(d, "</li\\s*>\\s*<li[^>]*>\\s*", "\n\xe2\x80\xa2 ");
+  g_free(d);
+  /* First item in each list run */
+  f = gtk_lu_re_replace(e, "<li[^>]*>\\s*", "\xe2\x80\xa2 ");
+  g_free(e);
+  d = gtk_lu_re_replace(f, "</li\\s*>", "");
+  g_free(f);
+
+  e = gtk_lu_re_replace(d, "\\n{2,}", "\n");
+  g_free(d);
+  f = gtk_lu_re_replace(e, "\\n[ \\t]+", "\n");
+  g_free(e);
+  d = gtk_lu_re_replace(f, "[ \\t]+\\n", "\n");
+  g_free(f);
+  e = gtk_lu_re_replace(d, "[ \\t]{2,}", " ");
+  g_free(d);
+  g_strstrip(e);
+
+  return e;
+}
+
+static void gtk_lu_notes_label_apply_geometry(GtkWidget *notes_w) {
+  gtk_label_set_xalign(GTK_LABEL(notes_w), 0.0f);
+  gtk_label_set_yalign(GTK_LABEL(notes_w), 0.0f);
+  gtk_label_set_line_wrap(GTK_LABEL(notes_w), TRUE);
+  gtk_label_set_selectable(GTK_LABEL(notes_w), TRUE);
+  gtk_label_set_max_width_chars(GTK_LABEL(notes_w), 72);
+  gtk_widget_set_halign(notes_w, GTK_ALIGN_FILL);
+  gtk_widget_set_valign(notes_w, GTK_ALIGN_START);
+  gtk_widget_set_hexpand(notes_w, TRUE);
+  gtk_widget_set_vexpand(notes_w, FALSE);
+}
+
+static void gtk_lu_label_set_release_notes(GtkLabel *label, const update_info_t *info) {
+  const char *desc = update_get_description(info);
+
+  if (desc == NULL || desc[0] == '\0') {
+    gtk_label_set_text(label, "");
+    return;
+  }
+  if (update_description_is_html(info)) {
+    gchar *pango = gtk_lu_libupdate_html_to_pango_markup(desc);
+    const gchar *use = (pango != NULL && pango[0] != '\0') ? pango : desc;
+
+    gtk_label_set_markup(label, use);
+    if (gtk_label_get_text(label) == NULL || gtk_label_get_text(label)[0] == '\0') {
+      gtk_label_set_text(label, desc);
+    }
+    g_free(pango);
+  } else {
+    gtk_label_set_text(label, desc);
   }
 }
 
@@ -141,7 +460,7 @@ static void gtk_lu_check_worker(GTask *task, gpointer source_object, gpointer ta
 
   if (cfg == NULL || cfg->manifest_url == NULL || cfg->manifest_url[0] == '\0') {
     r->status = GTK_LU_NOT_CONFIGURED;
-    g_task_return_pointer(task, r, g_free);
+    g_task_return_pointer(task, r, gtk_lu_check_result_free);
     return;
   }
 
@@ -151,7 +470,7 @@ static void gtk_lu_check_worker(GTask *task, gpointer source_object, gpointer ta
 
   if (update_init(&opts) != UPDATE_OK) {
     r->status = GTK_LU_INIT_FAIL;
-    g_task_return_pointer(task, r, g_free);
+    g_task_return_pointer(task, r, gtk_lu_check_result_free);
     return;
   }
 
@@ -161,36 +480,36 @@ static void gtk_lu_check_worker(GTask *task, gpointer source_object, gpointer ta
 
   if (st == UPDATE_ERROR) {
     r->status = UPDATE_ERROR;
-    g_task_return_pointer(task, r, g_free);
+    g_task_return_pointer(task, r, gtk_lu_check_result_free);
     return;
   }
 
   if (st == UPDATE_NOT_AVAILABLE || st == UPDATE_NOOP) {
     r->status = UPDATE_NOOP;
-    g_task_return_pointer(task, r, g_free);
+    g_task_return_pointer(task, r, gtk_lu_check_result_free);
     return;
   }
 
   if (st != UPDATE_AVAILABLE) {
     r->status = UPDATE_ERROR;
-    g_task_return_pointer(task, r, g_free);
+    g_task_return_pointer(task, r, gtk_lu_check_result_free);
     return;
   }
 
   if (!gtk_lu_manifest_checksum_format_ok(r->info.checksum)) {
     r->status = GTK_LU_BAD_CHECKSUM;
-    g_task_return_pointer(task, r, g_free);
+    g_task_return_pointer(task, r, gtk_lu_check_result_free);
     return;
   }
 
   if (r->info.download_url[0] == '\0') {
     r->status = UPDATE_ERROR;
-    g_task_return_pointer(task, r, g_free);
+    g_task_return_pointer(task, r, gtk_lu_check_result_free);
     return;
   }
 
   r->status = UPDATE_AVAILABLE;
-  g_task_return_pointer(task, r, g_free);
+  g_task_return_pointer(task, r, gtk_lu_check_result_free);
 }
 
 static void gtk_lu_download_job_free(GtkLuDownloadJob *job) {
@@ -402,7 +721,6 @@ static void gtk_lu_start_download(GtkWindow *parent, GtkWidget *main_widget, con
       gtk_dialog_new_with_buttons("Downloading update", parent,
                                   GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, NULL);
   gtk_window_set_default_size(GTK_WINDOW(job->progress_dialog), 420, -1);
-  gtk_lu_apply_dialog_layout(cfg, job->progress_dialog);
 
   box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
   gtk_widget_set_margin_top(box, 12);
@@ -421,6 +739,7 @@ static void gtk_lu_start_download(GtkWindow *parent, GtkWidget *main_widget, con
 
   content = gtk_dialog_get_content_area(GTK_DIALOG(job->progress_dialog));
   gtk_container_add(GTK_CONTAINER(content), box);
+  gtk_lu_apply_dialog_layout(cfg, job->progress_dialog);
   gtk_widget_show_all(job->progress_dialog);
 
   gtk_widget_set_sensitive(main_widget, FALSE);
@@ -474,7 +793,9 @@ static void gtk_lu_check_complete_fixed(GObject *source_object, GAsyncResult *re
   }
 
   if (r == NULL || parent == NULL) {
-    g_free(r);
+    if (r != NULL) {
+      gtk_lu_check_result_free(r);
+    }
     g_free(ud);
     return;
   }
@@ -519,14 +840,55 @@ static void gtk_lu_check_complete_fixed(GObject *source_object, GAsyncResult *re
   }
   case UPDATE_NOOP:
   case UPDATE_NOT_AVAILABLE: {
-    gchar *msg = g_strdup_printf("You are running the latest version of %s.", name);
-    if (msg != NULL) {
-      GtkWidget *d = gtk_message_dialog_new(w, GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_OK, "%s",
-                                            msg);
+    const char *desc = update_get_description(&r->info);
+    if (desc != NULL && desc[0] != '\0') {
+      GtkWidget *d = gtk_dialog_new_with_buttons(
+          "Software update", w, GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "Close",
+          GTK_RESPONSE_CLOSE, NULL);
+      GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(d));
+      GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+      gtk_widget_set_margin_top(vbox, 4);
+      gtk_widget_set_margin_bottom(vbox, 4);
+      gtk_widget_set_margin_start(vbox, 8);
+      gtk_widget_set_margin_end(vbox, 8);
+      gtk_box_pack_start(GTK_BOX(content), vbox, TRUE, TRUE, 0);
+
+      gchar *summary = g_strdup_printf("You are running the latest version of %s.", name);
+      GtkWidget *summary_l = gtk_label_new(summary != NULL ? summary : "");
+      g_free(summary);
+      gtk_label_set_line_wrap(GTK_LABEL(summary_l), TRUE);
+      gtk_label_set_xalign(GTK_LABEL(summary_l), 0.0f);
+      gtk_box_pack_start(GTK_BOX(vbox), summary_l, FALSE, FALSE, 0);
+
+      GtkWidget *hdr = gtk_label_new(NULL);
+      gtk_label_set_markup(GTK_LABEL(hdr), "<b>Release notes</b>");
+      gtk_label_set_xalign(GTK_LABEL(hdr), 0.0f);
+      gtk_box_pack_start(GTK_BOX(vbox), hdr, FALSE, FALSE, 0);
+
+      GtkWidget *sw = gtk_scrolled_window_new(NULL, NULL);
+      gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+      gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(sw), GTK_SHADOW_IN);
+      gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(sw), 120);
+      gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(sw), 240);
+      GtkWidget *notes = gtk_label_new(NULL);
+      gtk_lu_notes_label_apply_geometry(notes);
+      gtk_lu_label_set_release_notes(GTK_LABEL(notes), &r->info);
+      gtk_container_add(GTK_CONTAINER(sw), notes);
+      gtk_box_pack_start(GTK_BOX(vbox), sw, TRUE, TRUE, 0);
       gtk_lu_apply_dialog_layout(cfg, d);
+      gtk_widget_show_all(d);
       gtk_dialog_run(GTK_DIALOG(d));
       gtk_widget_destroy(d);
-      g_free(msg);
+    } else {
+      gchar *msg = g_strdup_printf("You are running the latest version of %s.", name);
+      if (msg != NULL) {
+        GtkWidget *d = gtk_message_dialog_new(w, GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_OK, "%s",
+                                              msg);
+        gtk_lu_apply_dialog_layout(cfg, d);
+        gtk_dialog_run(GTK_DIALOG(d));
+        gtk_widget_destroy(d);
+        g_free(msg);
+      }
     }
     break;
   }
@@ -543,18 +905,72 @@ static void gtk_lu_check_complete_fixed(GObject *source_object, GAsyncResult *re
     break;
   }
   case UPDATE_AVAILABLE: {
-    gchar *body = g_strdup_printf(
-        "A newer version of %s is available (version %s).\n\n"
-        "Download this update now?",
-        name, r->info.version[0] != '\0' ? r->info.version : "(unknown)");
-    GtkWidget *d = gtk_message_dialog_new(
-        w, GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO,
-        "%s", body != NULL ? body : "Download update?");
-    g_free(body);
-    gtk_dialog_set_default_response(GTK_DIALOG(d), GTK_RESPONSE_NO);
-    gtk_lu_apply_dialog_layout(cfg, d);
-    gint response = gtk_dialog_run(GTK_DIALOG(d));
-    gtk_widget_destroy(d);
+    const char *ver = r->info.version[0] != '\0' ? r->info.version : "(unknown)";
+    const char *desc = update_get_description(&r->info);
+    gboolean have_notes = (desc != NULL && desc[0] != '\0');
+    gint response;
+
+    if (!have_notes) {
+      gchar *body = g_strdup_printf(
+          "A newer version of %s is available (version %s).\n\n"
+          "Download this update now?",
+          name, ver);
+      GtkWidget *d = gtk_message_dialog_new(
+          w, GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO,
+          "%s", body != NULL ? body : "Download update?");
+      g_free(body);
+      gtk_dialog_set_default_response(GTK_DIALOG(d), GTK_RESPONSE_NO);
+      gtk_lu_apply_dialog_layout(cfg, d);
+      response = gtk_dialog_run(GTK_DIALOG(d));
+      gtk_widget_destroy(d);
+    } else {
+      GtkWidget *d = gtk_dialog_new_with_buttons(
+          "Software update", w, GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "Not now",
+          GTK_RESPONSE_NO, "Download", GTK_RESPONSE_YES, NULL);
+      gtk_dialog_set_default_response(GTK_DIALOG(d), GTK_RESPONSE_NO);
+      gtk_window_set_default_size(GTK_WINDOW(d), 520, -1);
+
+      GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(d));
+      GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+      gtk_widget_set_margin_top(vbox, 4);
+      gtk_widget_set_margin_bottom(vbox, 4);
+      gtk_widget_set_margin_start(vbox, 8);
+      gtk_widget_set_margin_end(vbox, 8);
+      gtk_box_pack_start(GTK_BOX(content), vbox, TRUE, TRUE, 0);
+
+      gchar *summary = g_strdup_printf(
+          "A newer version of %s is available (version %s).\n\nDownload this update now?", name, ver);
+      GtkWidget *summary_l = gtk_label_new(summary != NULL ? summary : "");
+      g_free(summary);
+      gtk_label_set_line_wrap(GTK_LABEL(summary_l), TRUE);
+      gtk_label_set_xalign(GTK_LABEL(summary_l), 0.0f);
+      gtk_widget_set_hexpand(summary_l, TRUE);
+      gtk_box_pack_start(GTK_BOX(vbox), summary_l, FALSE, FALSE, 0);
+
+      GtkWidget *hdr = gtk_label_new(NULL);
+      gtk_label_set_markup(GTK_LABEL(hdr), "<b>Release notes</b>");
+      gtk_label_set_xalign(GTK_LABEL(hdr), 0.0f);
+      gtk_box_pack_start(GTK_BOX(vbox), hdr, FALSE, FALSE, 0);
+
+      GtkWidget *sw = gtk_scrolled_window_new(NULL, NULL);
+      gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+      gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(sw), GTK_SHADOW_IN);
+      gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(sw), 140);
+      gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(sw), 280);
+      gtk_widget_set_hexpand(sw, TRUE);
+      gtk_widget_set_vexpand(sw, TRUE);
+
+      GtkWidget *notes = gtk_label_new(NULL);
+      gtk_lu_notes_label_apply_geometry(notes);
+      gtk_lu_label_set_release_notes(GTK_LABEL(notes), &r->info);
+      gtk_container_add(GTK_CONTAINER(sw), notes);
+      gtk_box_pack_start(GTK_BOX(vbox), sw, TRUE, TRUE, 0);
+
+      gtk_lu_apply_dialog_layout(cfg, d);
+      gtk_widget_show_all(d);
+      response = gtk_dialog_run(GTK_DIALOG(d));
+      gtk_widget_destroy(d);
+    }
 
     if (response == GTK_RESPONSE_YES) {
       gtk_lu_start_download(parent, main_widget, cfg, &r->info);
@@ -582,7 +998,7 @@ static void gtk_lu_check_complete_fixed(GObject *source_object, GAsyncResult *re
   }
   }
 
-  g_free(r);
+  gtk_lu_check_result_free(r);
   g_free(ud);
 }
 
@@ -599,6 +1015,7 @@ void gtk_libupdate_check_for_updates(GtkWindow *parent, const GtkLibupdateConfig
   if (cfg->configure_message_dialog != NULL) {
     cfg->configure_message_dialog(d);
   }
+  gtk_lu_dialog_sync_action_margins_from_content(GTK_DIALOG(d));
   gtk_dialog_run(GTK_DIALOG(d));
   gtk_widget_destroy(d);
 #else

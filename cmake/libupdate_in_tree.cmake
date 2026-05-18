@@ -15,6 +15,7 @@ add_library(update SHARED
   "${LU_LIB}/src/update.c"
   "${LU_LIB}/src/update_path.c"
   "${LU_LIB}/src/update_remote_check.c"
+  "${LU_LIB}/src/update_html.c"
   "${LU_LIB}/src/update_ops.c"
   "${LU_LIB}/src/update_extract.c"
   "${LU_LIB}/src/json_mini.c"

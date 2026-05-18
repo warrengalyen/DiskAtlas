@@ -6,6 +6,7 @@ dist/
 *.ui~
 *.ui#
 *.glade~
+*.json
 scripts/
 installer/
 cert/
