@@ -220,16 +220,19 @@ if(DISKATLAS_GTK3_FOUND)
     "${DISKATLAS_SRC}/app/da_fs_monitor.c"
     "${DISKATLAS_SRC}/app/da_drag_drop.c"
     "${DISKATLAS_SRC}/app/da_app_update.c"
+    "${CMAKE_SOURCE_DIR}/shared/gtk_libupdate/gtk_libupdate.c"
     ${DISKATLAS_GRESOURCE_C}
   )
   set_target_properties(diskatlas_app PROPERTIES OUTPUT_NAME diskatlas)
   diskatlas_set_exe_bin_output(diskatlas_app)
-  target_include_directories(diskatlas_app PRIVATE "${DISKATLAS_SRC}/include" "${CMAKE_CURRENT_BINARY_DIR}")
+  target_include_directories(diskatlas_app PRIVATE "${DISKATLAS_SRC}/include" "${CMAKE_CURRENT_BINARY_DIR}"
+        "${CMAKE_SOURCE_DIR}/shared/gtk_libupdate")
   target_compile_options(diskatlas_app PRIVATE ${GTK3_CFLAGS_OTHER})
   target_include_directories(diskatlas_app PRIVATE ${GTK3_INCLUDE_DIRS})
   target_link_directories(diskatlas_app PRIVATE ${GTK3_LIBRARY_DIRS})
   target_link_libraries(diskatlas_app PRIVATE diskatlas_core ${GTK3_LIBRARIES})
-  target_compile_definitions(diskatlas_app PRIVATE "DISKATLAS_HAVE_LIBUPDATE=$<BOOL:$<TARGET_EXISTS:update>>")
+  target_compile_definitions(diskatlas_app PRIVATE
+    "GTK_LIBUPDATE_HAVE_LIBUPDATE=$<BOOL:$<TARGET_EXISTS:update>>")
   if(TARGET update)
     target_link_libraries(diskatlas_app PRIVATE update)
   endif()
