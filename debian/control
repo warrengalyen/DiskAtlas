@@ -1,0 +1,29 @@
+Source: diskatlas
+Section: utils
+Priority: optional
+Maintainer: Warren Galyen <wgalyen@mechanikadesign.com>
+Build-Depends: debhelper-compat (= 13),
+               gcc,
+               cmake,
+               pkg-config,
+               libgtk-3-dev
+Standards-Version: 4.6.0
+License: GPL-3.0
+Homepage: https://software.mechanikadesign.com/software/diskatlas
+
+Package: diskatlas
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         libgtk-3-0
+Description: Cross-platform disk space analyzer with treemap visualization
+ DiskAtlas helps you find what is using space on your disks. Scan local
+ drives, folders, and removable media, then explore results in treemap and
+ tree views.
+ .
+ Features:
+  - Treemap and tree views for disk usage
+  - File type breakdown with customizable MIME categories
+  - Export scan results to CSV
+  - NTFS-aware scanning on Windows (where supported)
+  - Automatic update checks (Help menu)

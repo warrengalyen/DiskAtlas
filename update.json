@@ -1,7 +1,5 @@
 {
-    "version": "1.0.1",
+    "version": "1.0.0",
     "download_url": "https://www.mechanikadesign.com/software/diskatlas/diskatlas.zip",
-    "checksum": "3f3d553190cadcb074d1a176b9fc69123bc3d9fcb40f079d8ee6699981418ffc",
-    "description_format": "html",
-    "description": "<b>New Features</b><br><ul><li>Faster startup</li></ul>"
+    "checksum": "3f3d553190cadcb074d1a176b9fc69123bc3d9fcb40f079d8ee6699981418ffc"
 }

@@ -1,0 +1,5 @@
+diskatlas (1.0.0) distribution; urgency=low
+
+  * Initial Debian packaging
+
+ -- Warren Galyen <wgalyen@mechanikadesign.com>  Wed, 20 May 2026 00:00:00 +0000

@@ -8,5 +8,4 @@ dist/
 *.glade~
 *.json
 scripts/
-installer/
 cert/

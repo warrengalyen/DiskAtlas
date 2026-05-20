@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=DiskAtlas
+Comment=Disk space analyzer with treemap visualization
+Exec=diskatlas
+Icon=diskatlas
+Categories=Utility;System;FileTools;

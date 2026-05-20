@@ -1,0 +1,79 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE=1
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	true
+
+override_dh_auto_install:
+	mkdir -p debian/diskatlas/usr/bin
+	mkdir -p debian/diskatlas/usr/lib/diskatlas
+	mkdir -p debian/diskatlas/usr/share/applications
+	mkdir -p debian/diskatlas/usr/share/pixmaps
+	mkdir -p debian/diskatlas/usr/share/doc/diskatlas
+
+	# Install the executable (check common build output locations)
+	@if [ -f bin/diskatlas ]; then \
+		install -m 0755 bin/diskatlas debian/diskatlas/usr/bin/diskatlas; \
+	elif [ -f diskatlas ]; then \
+		install -m 0755 diskatlas debian/diskatlas/usr/bin/diskatlas; \
+	elif [ -f build/diskatlas ]; then \
+		install -m 0755 build/diskatlas debian/diskatlas/usr/bin/diskatlas; \
+	elif [ -f build-linux/diskatlas ]; then \
+		install -m 0755 build-linux/diskatlas debian/diskatlas/usr/bin/diskatlas; \
+	else \
+		echo "Error: diskatlas executable not found"; \
+		exit 1; \
+	fi
+
+	# Install core shared library
+	@if [ -f bin/libdiskatlas_core.so ]; then \
+		install -m 0644 bin/libdiskatlas_core.so debian/diskatlas/usr/lib/diskatlas/libdiskatlas_core.so; \
+	elif [ -f bin/libdiskatlas_core.so.0 ]; then \
+		install -m 0644 bin/libdiskatlas_core.so.0 debian/diskatlas/usr/lib/diskatlas/libdiskatlas_core.so; \
+	fi
+
+	# Install libupdate companion binaries when built in-tree
+	@if [ -f bin/updater ]; then \
+		install -m 0755 bin/updater debian/diskatlas/usr/bin/updater; \
+	fi
+	@if [ -f bin/libupdate.so ]; then \
+		install -m 0644 bin/libupdate.so debian/diskatlas/usr/lib/diskatlas/libupdate.so; \
+	fi
+
+	# Set RPATH so the binary finds private libraries
+	@if command -v patchelf >/dev/null 2>&1 && [ -f debian/diskatlas/usr/bin/diskatlas ]; then \
+		patchelf --set-rpath '$$ORIGIN/../lib/diskatlas' debian/diskatlas/usr/bin/diskatlas; \
+	fi
+
+	# Install desktop entry
+	install -m 0644 debian/diskatlas.desktop debian/diskatlas/usr/share/applications/diskatlas.desktop
+
+	# Install icon
+	install -m 0644 resources/app-icon.png debian/diskatlas/usr/share/pixmaps/diskatlas.png
+
+	# Install readme documentation
+	install -m 0644 readme.txt debian/diskatlas/usr/share/doc/diskatlas/README
+
+	# Fix directory permissions for dpkg-deb
+	find debian/diskatlas -type d -exec chmod 0755 {} \;
+	chmod 0755 debian/diskatlas
+	chmod 0755 debian/diskatlas/DEBIAN 2>/dev/null || true
+
+override_dh_auto_clean:
+	true
+
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym
+
+override_dh_fixperms:
+	dh_fixperms
+	find debian/diskatlas -type d -exec chmod 0755 {} \;
+
+override_dh_builddeb:
+	chmod -R 0755 debian/diskatlas/DEBIAN 2>/dev/null || true
+	find debian/diskatlas -type d -exec chmod 0755 {} \;
+	dh_builddeb
