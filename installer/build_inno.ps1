@@ -2,7 +2,7 @@
 # Requires Inno Setup to be installed
 
 param(
-    [string]$Version = "1.2.0",
+    [string]$Version = "1.0.0",
     [string]$SourceDir = "..",
     [string]$OutputDir = "..\dist"
 )

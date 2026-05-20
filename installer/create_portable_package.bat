@@ -5,7 +5,7 @@ echo ========================================
 echo DiskAtlas Portable Package Creator
 echo ========================================
 
-set VERSION=1.2.0
+set VERSION=1.0.0
 set APP_NAME=DiskAtlas
 set SOURCE_DIR=%~dp0..
 set DIST_DIR=%SOURCE_DIR%\dist

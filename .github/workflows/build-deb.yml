@@ -1,0 +1,72 @@
+name: Build Debian Package
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          debhelper \
+          devscripts \
+          build-essential \
+          cmake \
+          pkg-config \
+          libgtk-3-dev \
+          libx11-dev
+    
+    - name: Sync Debian version from CMakeLists.txt
+      run: |
+        VERSION=$(sed -n 's/^  VERSION //p' CMakeLists.txt | tr -d ' ')
+        if [ -z "$VERSION" ]; then
+          echo "Error: could not read project VERSION from CMakeLists.txt"
+          exit 1
+        fi
+        CURRENT=$(sed -n '1s/diskatlas (\([^)]*\)).*/\1/p' debian/changelog)
+        echo "CMake project version: $VERSION"
+        echo "debian/changelog version: ${CURRENT:-<missing>}"
+        if [ "$CURRENT" != "$VERSION" ]; then
+          sed -i "1s/colorsnatch ([^)]*)/colorsnatch (${VERSION})/" debian/changelog
+          echo "Updated debian/changelog to $VERSION"
+        fi
+    
+    - name: Build application
+      run: |
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build
+    
+    - name: Build Debian package
+      run: |
+        mkdir -p dist
+        dpkg-buildpackage -us -uc -b --no-sign -d
+        mv ../diskatlas_*.deb dist/ 2>/dev/null || echo "No .deb file found"
+    
+    - name: List generated packages
+      run: |
+        ls -lh dist/
+    
+    - name: Upload Debian package artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: debian-package
+        path: dist/diskatlas_*.deb
+        retention-days: 30
+        if-no-files-found: error
+    
+    - name: Upload all artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-artifacts
+        path: dist/
+        retention-days: 30
+
