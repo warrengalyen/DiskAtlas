@@ -1210,18 +1210,7 @@ static void on_name_cell_editing_canceled(GtkCellRenderer *renderer, gpointer us
 
 static void on_search_clear_clicked(GtkButton *btn, gpointer user_data) {
   (void)btn;
-  AppState *app = (AppState *)user_data;
-  if (app->search == NULL) {
-    return;
-  }
-  if (GTK_IS_COMBO_BOX(app->search)) {
-    GtkWidget *ch = gtk_bin_get_child(GTK_BIN(app->search));
-    if (ch != NULL && GTK_IS_ENTRY(ch)) {
-      gtk_entry_set_text(GTK_ENTRY(ch), "");
-    }
-  } else if (GTK_IS_ENTRY(app->search)) {
-    gtk_entry_set_text(GTK_ENTRY(app->search), "");
-  }
+  da_file_view_search_clear((AppState *)user_data);
 }
 
 static void on_file_menu_copy_activate(GtkMenuItem *item, gpointer user_data) {
@@ -2314,6 +2303,9 @@ void da_ui_build(AppState *app) {
    * fixed_height_mode is safe with children as long as all rows (parent and
    * child) use the same cell renderers at the same font size — which they do. */
   gtk_tree_view_set_fixed_height_mode(GTK_TREE_VIEW(app->tree), TRUE);
+  /* Do not steal printable keys for type-ahead row search; filter uses the entry above the list. */
+  gtk_tree_view_set_search_column(GTK_TREE_VIEW(app->tree), -1);
+  gtk_tree_view_set_enable_search(GTK_TREE_VIEW(app->tree), FALSE);
 
   /* Install deleted-state cell data functions on file view text columns 3–7
    * (Size=3, Allocated=4, Modified=5, Dup Count=6, Dup Size=7).

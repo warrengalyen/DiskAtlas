@@ -9,6 +9,12 @@ void scan_controller_detach(AppState *app);
 /** File-view search: editable combo, history rows, `<clear>` row; call after `app->search` is loaded from UI. */
 void da_file_view_search_combo_init(AppState *app);
 
+/** Entry inside `app->search` (GtkComboBox with has-entry or plain GtkEntry); NULL if unavailable. */
+GtkEntry *da_file_view_search_get_entry(const AppState *app);
+
+/** Clear the filter entry and re-apply the file list (no active filter). */
+void da_file_view_search_clear(AppState *app);
+
 /** Start a new scan, or cancel the current one if still running (same as the Scan toolbar button). */
 void scan_controller_request_scan(AppState *app);
 void scan_controller_refresh_volume_labels(AppState *app);

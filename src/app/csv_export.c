@@ -15,6 +15,33 @@
 
 #define DA_CSV_FILE_TYPES_HEADER "Extension,File Type,Percent,Size,Allocated,Files"
 
+/** RFC4180-style UTF-8 field (same rules as diskatlas_csv_export.c). */
+static void fprint_csv_utf8_field(FILE *out, const char *s) {
+  if (s == NULL) {
+    s = "";
+  }
+  int need_quote = 0;
+  for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+    if (*p == '"' || *p == ',' || *p == '\n' || *p == '\r' || *p < 32u) {
+      need_quote = 1;
+      break;
+    }
+  }
+  if (!need_quote) {
+    fputs(s, out);
+    return;
+  }
+  fputc('"', out);
+  for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+    if (*p == '"') {
+      fputs("\"\"", out);
+    } else {
+      fputc((int)*p, out);
+    }
+  }
+  fputc('"', out);
+}
+
 int da_export_scan_csv(AppState *app, const char *utf8_path, gboolean include_reserved_space_column, char *errbuf,
                        size_t errlen) {
   if (errbuf != NULL && errlen > 0) {

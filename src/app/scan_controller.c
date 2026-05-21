@@ -35,22 +35,53 @@
 static void kill_timer(guint *id);
 static void apply_search_filter(AppState *app);
 static void on_search_combo_changed(GtkComboBox *cb, gpointer user_data);
+static void on_search_changed(GtkEditable *editable, gpointer user_data);
+static void on_search_entry_activate(GtkEntry *entry, gpointer user_data);
 
-static GtkEntry *da_file_view_search_get_entry(const AppState *app) {
+static GtkEntry *da_file_view_search_find_entry_widget(GtkWidget *widget) {
+  if (widget == NULL) {
+    return NULL;
+  }
+  if (GTK_IS_ENTRY(widget)) {
+    return GTK_ENTRY(widget);
+  }
+  if (GTK_IS_CONTAINER(widget)) {
+    for (GList *l = gtk_container_get_children(GTK_CONTAINER(widget)); l != NULL; l = l->next) {
+      GtkEntry *e = da_file_view_search_find_entry_widget(GTK_WIDGET(l->data));
+      if (e != NULL) {
+        return e;
+      }
+    }
+  }
+  return NULL;
+}
+
+GtkEntry *da_file_view_search_get_entry(const AppState *app) {
   if (app == NULL || app->search == NULL) {
     return NULL;
   }
   if (GTK_IS_COMBO_BOX(app->search)) {
-    GtkWidget *ch = gtk_bin_get_child(GTK_BIN(app->search));
-    if (ch != NULL && GTK_IS_ENTRY(ch)) {
-      return GTK_ENTRY(ch);
-    }
-    return NULL;
+    /* gtk_combo_box_get_entry() is GTK 3.22+; walk the combo's child tree instead. */
+    return da_file_view_search_find_entry_widget(app->search);
   }
   if (GTK_IS_ENTRY(app->search)) {
     return GTK_ENTRY(app->search);
   }
   return NULL;
+}
+
+/** Keep the filter entry typable (not greyed, not read-only) after combo model rebuilds or list populate. */
+static void da_file_view_search_ensure_editable(AppState *app) {
+  if (app == NULL || app->search == NULL) {
+    return;
+  }
+  gtk_widget_set_sensitive(app->search, TRUE);
+  GtkEntry *en = da_file_view_search_get_entry(app);
+  if (en != NULL) {
+    gtk_widget_set_sensitive(GTK_WIDGET(en), TRUE);
+    gtk_widget_set_can_focus(GTK_WIDGET(en), TRUE);
+    gtk_editable_set_editable(GTK_EDITABLE(en), TRUE);
+  }
 }
 
 static const gchar *da_file_view_search_get_text(const AppState *app) {
@@ -75,6 +106,7 @@ static void da_search_combo_model_rebuild(AppState *app) {
   gtk_combo_box_text_append_text(cbt, DA_SEARCH_HISTORY_CLEAR_ITEM);
   g_signal_handlers_unblock_by_func(app->search, G_CALLBACK(on_search_combo_changed), app);
   gtk_combo_box_set_active(GTK_COMBO_BOX(cbt), -1);
+  da_file_view_search_ensure_editable(app);
 }
 
 static void da_search_history_persist_and_refresh(AppState *app) {
@@ -122,8 +154,14 @@ static void on_search_combo_changed(GtkComboBox *cb, gpointer user_data) {
     return;
   }
 
+  GtkEntry *en = da_file_view_search_get_entry(app);
+  if (en != NULL) {
+    gtk_entry_set_text(en, t);
+  }
   g_free(t);
   gtk_combo_box_set_active(cb, -1);
+  kill_timer(&app->timer_search);
+  apply_search_filter(app);
 }
 
 static void da_search_history_maybe_record(AppState *app) {
@@ -171,13 +209,34 @@ void da_file_view_search_combo_init(AppState *app) {
     }
   }
 
+  /* Do not bind entry text to the dropdown model; history picks copy text in on_search_combo_changed. */
+  gtk_combo_box_set_entry_text_column(GTK_COMBO_BOX(app->search), -1);
+
   GtkEntry *en = da_file_view_search_get_entry(app);
   if (en != NULL) {
     gtk_entry_set_placeholder_text(en, "Filter (* ? wildcards)…");
+    g_signal_connect(en, "changed", G_CALLBACK(on_search_changed), app);
+    g_signal_connect(en, "activate", G_CALLBACK(on_search_entry_activate), app);
   }
 
   da_search_combo_model_rebuild(app);
   g_signal_connect(app->search, "changed", G_CALLBACK(on_search_combo_changed), app);
+  da_file_view_search_ensure_editable(app);
+}
+
+void da_file_view_search_clear(AppState *app) {
+  if (app == NULL) {
+    return;
+  }
+  GtkEntry *en = da_file_view_search_get_entry(app);
+  if (en != NULL) {
+    gtk_entry_set_text(en, "");
+  }
+  if (app->search != NULL && GTK_IS_COMBO_BOX(app->search)) {
+    gtk_combo_box_set_active(GTK_COMBO_BOX(app->search), -1);
+  }
+  kill_timer(&app->timer_search);
+  apply_search_filter(app);
 }
 
 static gboolean scan_controller_is_file_view_tab(const AppState *app) {
@@ -1672,6 +1731,7 @@ static gboolean on_timer_fill_chunk(gpointer data) {
   kill_timer(&app->timer_fill);
 
   app->list_populated = TRUE;
+  da_file_view_search_ensure_editable(app);
   char finish_pan[256];
   scan_progress_t pr_done = scan_get_progress(app->scan);
   if (app->mft_dump_banner_after_populate) {
@@ -2218,18 +2278,6 @@ void scan_controller_attach(AppState *app) {
   }
   if (app->show_folders_check != NULL) {
     g_signal_connect(app->show_folders_check, "toggled", G_CALLBACK(on_show_folders_toggled), app);
-  }
-  {
-    GtkEntry *sen = da_file_view_search_get_entry(app);
-    if (sen != NULL) {
-      g_signal_connect(sen, "changed", G_CALLBACK(on_search_changed), app);
-      g_signal_connect(sen, "activate", G_CALLBACK(on_search_entry_activate), app);
-    } else if (app->search != NULL) {
-      g_signal_connect(app->search, "changed", G_CALLBACK(on_search_changed), app);
-      if (GTK_IS_ENTRY(app->search)) {
-        g_signal_connect(app->search, "activate", G_CALLBACK(on_search_entry_activate), app);
-      }
-    }
   }
   if (app->tree_view != NULL) {
     g_signal_connect(app->tree_view, "row-expanded", G_CALLBACK(on_tree_view_row_expanded), app);
