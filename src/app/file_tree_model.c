@@ -11,6 +11,133 @@
 #include "file_tree_model.h"
 #include "format_text.h"
 
+#if defined(G_OS_WIN32)
+#include <windows.h>
+#endif
+
+/** TRUE when @a seg (NUL-terminated at @a seg_len) is "$Recycle.Bin" (any common casing). */
+static gboolean da_path_seg_is_recycle_bin_ci(const char *seg, size_t seg_len) {
+  return seg_len == 13 && g_ascii_strncasecmp(seg, "$Recycle.Bin", 13) == 0;
+}
+
+gboolean da_path_is_under_recycle_bin_ci(const char *path_utf8) {
+  if (path_utf8 == NULL || path_utf8[0] == '\0') {
+    return FALSE;
+  }
+  /* First component may be "$RECYCLE.BIN" with no leading separator (e.g. "D:\$RECYCLE.BIN\..."). */
+  {
+    const char *end = path_utf8;
+    while (*end != '\0' && *end != '\\' && *end != '/') {
+      end++;
+    }
+    if (da_path_seg_is_recycle_bin_ci(path_utf8, (size_t)(end - path_utf8))) {
+      return TRUE;
+    }
+  }
+  for (const char *p = path_utf8; *p != '\0'; p++) {
+    if ((*p == '\\' || *p == '/') && p[1] != '\0') {
+      const char *seg = p + 1;
+      const char *end = seg;
+      while (*end != '\0' && *end != '\\' && *end != '/') {
+        end++;
+      }
+      if (da_path_seg_is_recycle_bin_ci(seg, (size_t)(end - seg))) {
+        return TRUE;
+      }
+    }
+  }
+  {
+    gchar *lower = g_utf8_strdown(path_utf8, -1);
+    if (lower != NULL) {
+      const char *needle = "$recycle.bin";
+      const size_t nlen = 13;
+      for (const char *hit = lower; (hit = strstr(hit, needle)) != NULL; hit++) {
+        const char before = (hit == lower) ? '/' : hit[-1];
+        const char after = hit[nlen];
+        if ((hit == lower || before == '\\' || before == '/') &&
+            (after == '\0' || after == '\\' || after == '/')) {
+          g_free(lower);
+          return TRUE;
+        }
+        if (hit[0] != '\0') {
+          hit++;
+        }
+      }
+      g_free(lower);
+    }
+  }
+  return FALSE;
+}
+
+gboolean da_path_is_recycle_internal_name_ci(const char *path_utf8) {
+  if (path_utf8 == NULL || path_utf8[0] == '\0') {
+    return FALSE;
+  }
+  if (da_path_is_under_recycle_bin_ci(path_utf8)) {
+    return TRUE;
+  }
+  const char *base = path_utf8;
+  for (const char *p = path_utf8; *p != '\0'; p++) {
+    if (*p == '\\' || *p == '/') {
+      base = p + 1;
+    }
+  }
+  if (base[0] == '$' && (base[1] == 'I' || base[1] == 'i' || base[1] == 'R' || base[1] == 'r')) {
+    return TRUE;
+  }
+  return FALSE;
+}
+
+gboolean da_node_is_hidden(const file_node_t *node) {
+  if (node == NULL) {
+    return FALSE;
+  }
+  return da_path_is_hidden_for_display(node->path, node->win32_attributes, node);
+}
+
+gboolean da_path_is_hidden_for_display(const char *path_utf8, uint32_t win32_attributes,
+                                         const file_node_t *scan_node) {
+  if (scan_node != NULL) {
+    if (da_path_is_recycle_internal_name_ci(scan_node->path)) {
+      return TRUE;
+    }
+#if defined(G_OS_WIN32)
+    if ((scan_node->win32_attributes & FILE_ATTRIBUTE_HIDDEN) != 0) {
+      return TRUE;
+    }
+#endif
+  }
+  if (path_utf8 != NULL && da_path_is_recycle_internal_name_ci(path_utf8)) {
+    return TRUE;
+  }
+#if defined(G_OS_WIN32)
+  if ((win32_attributes & FILE_ATTRIBUTE_HIDDEN) != 0) {
+    return TRUE;
+  }
+#endif
+#if !defined(G_OS_WIN32)
+  if (path_utf8 != NULL) {
+    const char *base = path_utf8;
+    for (const char *p = path_utf8; *p != '\0'; p++) {
+      if (*p == '/') {
+        base = p + 1;
+      }
+    }
+    if (base[0] == '.') {
+      return TRUE;
+    }
+  }
+#endif
+  return FALSE;
+}
+
+gboolean da_view_hidden_files(const AppState *app) {
+  if (app == NULL) {
+    return TRUE;
+  }
+  return app->interface_view_hidden_files;
+}
+
 gboolean da_duplicates_only(const AppState *app) {
   if (app == NULL || app->duplicates_only_check == NULL) {
     return FALSE;
@@ -36,8 +163,12 @@ gboolean da_node_shown_in_file_view(const AppState *app, const scan_results_view
   if (v == NULL || v->nodes == NULL || nid >= v->count) {
     return FALSE;
   }
-  uint32_t kind = v->nodes[nid].attributes & DISKATLAS_NODE_KIND_MASK;
+  const file_node_t *node = &v->nodes[nid];
+  uint32_t kind = node->attributes & DISKATLAS_NODE_KIND_MASK;
   if (kind == DISKATLAS_NODE_KIND_DIR && !da_show_folders_in_file_list(app)) {
+    return FALSE;
+  }
+  if (!da_view_hidden_files(app) && da_node_is_hidden(node)) {
     return FALSE;
   }
   return TRUE;

@@ -24,6 +24,9 @@ GtkWidget *treemap_widget_new(void);
  */
 void treemap_widget_set_data(TreemapWidget *widget, const char *root_utf8, const file_node_t *nodes,
                              size_t count);
+/** Rebuild layout; when @p view_hidden is FALSE, omit hidden/recycle-bin nodes from the treemap. */
+void treemap_widget_set_data_filtered(TreemapWidget *widget, const char *root_utf8,
+                                      const file_node_t *nodes, size_t count, gboolean view_hidden);
 
 /** Full treemap appearance (radial lighting, borders, thresholds). */
 void treemap_widget_set_style(TreemapWidget *w, const DmTreemapStyle *s);

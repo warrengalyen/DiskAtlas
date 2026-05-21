@@ -9,15 +9,22 @@
 
 #include "diskatlas.h"
 #include "tree_view_model.h"
+#include "file_tree_model.h"
 #include "format_text.h"
 #include "da_fs_monitor.h"
+
+#if defined(G_OS_WIN32)
+#include <windows.h>
+#endif
 
 /* ---- Internal entry (one per scan node, in depth-sorted order) ---- */
 
 typedef struct {
   uint32_t kind;             /* DISKATLAS_NODE_KIND_* */
-  const char *path;          /* borrowed from scan blob (valid while app->scan alive) */
-  size_t      scan_nid;      /* SIZE_MAX = synthetic root row (no scan node) */
+  const char *path;          /* borrowed from scan or owned when path_owned */
+  const char *display_name;  /* optional; owned when non-NULL */
+  gboolean    path_owned;
+  size_t      scan_nid;      /* SIZE_MAX = synthetic row (no scan node) */
   uint64_t mtime_unix_ns;
   uint32_t win32_attributes;
   uint64_t size_bytes;       /* file: own size; dir: subtree logical total */
@@ -44,7 +51,11 @@ struct DaTreeViewModel {
  * the trailing separator leaves nothing — fall back to the full path so the
  * row always shows something useful.
  */
-static const char *tv_display_name(const char *path) {
+static const char *tv_display_name(const DaTvEntry *e) {
+  if (e != NULL && e->display_name != NULL && e->display_name[0] != '\0') {
+    return e->display_name;
+  }
+  const char *path = e != NULL ? e->path : NULL;
   if (path == NULL || path[0] == '\0') {
     return "";
   }
@@ -55,6 +66,219 @@ static const char *tv_display_name(const char *path) {
     }
   }
   return (base[0] != '\0') ? base : path;
+}
+
+static void tv_entry_free_owned(DaTvEntry *e) {
+  if (e == NULL) {
+    return;
+  }
+  if (e->path_owned && e->path != NULL) {
+    g_free((gpointer)e->path);
+    e->path = NULL;
+    e->path_owned = FALSE;
+  }
+  if (e->display_name != NULL) {
+    g_free((gpointer)e->display_name);
+    e->display_name = NULL;
+  }
+}
+
+static void tv_entries_free_all_owned(DaTvEntry *entries, size_t count) {
+  if (entries == NULL) {
+    return;
+  }
+  for (size_t i = 0; i < count; i++) {
+    tv_entry_free_owned(&entries[i]);
+  }
+}
+
+static gboolean tv_entry_is_hidden(const DaTvEntry *e) {
+  if (e == NULL) {
+    return FALSE;
+  }
+#if defined(G_OS_WIN32)
+  if ((e->win32_attributes & FILE_ATTRIBUTE_HIDDEN) != 0) {
+    return TRUE;
+  }
+#endif
+  if (da_path_is_recycle_internal_name_ci(e->path)) {
+    return TRUE;
+  }
+  {
+    const char *shown = tv_display_name(e);
+    if (shown != NULL && shown[0] != '\0' && da_path_is_recycle_internal_name_ci(shown)) {
+      return TRUE;
+    }
+  }
+  if (e->display_name != NULL && e->scan_nid == SIZE_MAX) {
+    return TRUE;
+  }
+  return FALSE;
+}
+
+static gboolean tv_entry_visible(const AppState *app, const DaTvEntry *e) {
+  if (da_view_hidden_files(app)) {
+    return TRUE;
+  }
+  return !tv_entry_is_hidden(e);
+}
+
+static gboolean tv_is_recycle_sid_folder_path(const char *path) {
+  if (path == NULL || path[0] == '\0') {
+    return FALSE;
+  }
+  gchar *lower = g_utf8_strdown(path, -1);
+  if (lower == NULL) {
+    return FALSE;
+  }
+  const char *rb = strstr(lower, "$recycle.bin");
+  if (rb == NULL) {
+    g_free(lower);
+    return FALSE;
+  }
+  const char *after = rb + 13;
+  if (*after == '\\' || *after == '/') {
+    after++;
+  } else if (*after != '\0') {
+    g_free(lower);
+    return FALSE;
+  }
+  if (strncmp(after, "s-1-5-", 6) != 0) {
+    g_free(lower);
+    return FALSE;
+  }
+  const char *end_seg = after;
+  while (*end_seg != '\0' && *end_seg != '\\' && *end_seg != '/') {
+    end_seg++;
+  }
+  gboolean ok = (*end_seg == '\0');
+  g_free(lower);
+  return ok;
+}
+
+static gchar *tv_truncate_path_for_label(const char *path, size_t max_len) {
+  if (path == NULL) {
+    return g_strdup("");
+  }
+  size_t len = strlen(path);
+  if (len <= max_len) {
+    return g_strdup(path);
+  }
+  const size_t keep = max_len > 6 ? max_len - 3 : 0;
+  const size_t head = keep / 2;
+  const size_t tail = keep - head;
+  return g_strdup_printf("%.*s...%.*s", (int)head, path, (int)tail, path + len - tail);
+}
+
+#define TV_RECYCLE_GROUP_LABEL_MAX 72u
+
+static gchar *tv_format_recycle_group_label(guint file_count, const char *folder_path) {
+  gchar *trunc = tv_truncate_path_for_label(folder_path, TV_RECYCLE_GROUP_LABEL_MAX);
+  gchar *label = g_strdup_printf("[%u Files in %s]", file_count, trunc != NULL ? trunc : "");
+  g_free(trunc);
+  return label;
+}
+
+/** Reparent direct file children of recycle SID folders under a WizTree-style synthetic folder. */
+static gboolean tv_apply_recycle_bin_grouping(DaTvEntry **entries_inout, size_t *count_inout,
+                                              GCancellable *cancellable) {
+  DaTvEntry *entries = *entries_inout;
+  size_t n = *count_inout;
+  if (entries == NULL || n == 0) {
+    return TRUE;
+  }
+
+  for (size_t sid_idx = 0; sid_idx < n; sid_idx++) {
+    if (g_cancellable_is_cancelled(cancellable)) {
+      return FALSE;
+    }
+    DaTvEntry *sid = &entries[sid_idx];
+    if (sid->display_name != NULL || sid->kind != DISKATLAS_NODE_KIND_DIR || sid->path == NULL ||
+        !tv_is_recycle_sid_folder_path(sid->path) || sid->first_child_id < 0) {
+      continue;
+    }
+
+    int32_t *file_ids = NULL;
+    size_t file_cap = 0;
+    size_t file_len = 0;
+    int32_t dir_head = -1;
+    int32_t dir_tail = -1;
+
+    int32_t cid = sid->first_child_id;
+    while (cid >= 0 && (size_t)cid < n) {
+      DaTvEntry *ch = &entries[cid];
+      int32_t next = ch->next_sibling_id;
+      if (ch->kind == DISKATLAS_NODE_KIND_FILE) {
+        if (file_len == file_cap) {
+          size_t nc = file_cap ? file_cap * 2u : 8u;
+          int32_t *nf = (int32_t *)realloc(file_ids, nc * sizeof(int32_t));
+          if (nf == NULL) {
+            free(file_ids);
+            return FALSE;
+          }
+          file_ids = nf;
+          file_cap = nc;
+        }
+        file_ids[file_len++] = cid;
+      } else {
+        ch->next_sibling_id = -1;
+        if (dir_head < 0) {
+          dir_head = cid;
+          dir_tail = cid;
+        } else {
+          entries[dir_tail].next_sibling_id = cid;
+          dir_tail = cid;
+        }
+      }
+      cid = next;
+    }
+
+    if (file_len == 0) {
+      free(file_ids);
+      sid->first_child_id = dir_head;
+      sid->last_child_id = dir_tail;
+      continue;
+    }
+
+    DaTvEntry *grown = (DaTvEntry *)realloc(entries, (n + 1) * sizeof(DaTvEntry));
+    if (grown == NULL) {
+      free(file_ids);
+      return FALSE;
+    }
+    entries = grown;
+    *entries_inout = entries;
+
+    int32_t syn_id = (int32_t)n;
+    DaTvEntry *syn = &entries[syn_id];
+    memset(syn, 0, sizeof(*syn));
+    syn->kind = DISKATLAS_NODE_KIND_DIR;
+    syn->path = g_strdup(sid->path);
+    syn->path_owned = TRUE;
+    syn->display_name = tv_format_recycle_group_label((guint)file_len, sid->path);
+    syn->scan_nid = SIZE_MAX;
+#if defined(G_OS_WIN32)
+    syn->win32_attributes = FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_DIRECTORY;
+#endif
+    syn->parent_id = (int32_t)sid_idx;
+    syn->first_child_id = file_ids[0];
+    syn->last_child_id = file_ids[(size_t)(file_len - 1)];
+
+    for (size_t fi = 0; fi < file_len; fi++) {
+      int32_t fid = file_ids[fi];
+      entries[fid].parent_id = syn_id;
+      entries[fid].next_sibling_id =
+          (fi + 1 < file_len) ? file_ids[fi + 1] : -1;
+    }
+    free(file_ids);
+
+    syn->next_sibling_id = dir_head;
+    sid->first_child_id = syn_id;
+    sid->last_child_id = (dir_tail >= 0) ? dir_tail : syn_id;
+
+    n++;
+    *count_inout = n;
+  }
+  return TRUE;
 }
 
 static int count_separators(const char *path) {
@@ -178,6 +402,14 @@ static void da_tv_format_row_strings(const DaTreeViewModel *m, int32_t eid, char
 }
 
 static void da_tv_insert_entry(AppState *app, GtkTreeIter *parent_iter, int32_t eid) {
+  if (app == NULL || app->tree_view_model == NULL || eid < 0 ||
+      (size_t)eid >= app->tree_view_model->count) {
+    return;
+  }
+  const DaTvEntry *evis = &app->tree_view_model->entries[(size_t)eid];
+  if (!tv_entry_visible(app, evis)) {
+    return;
+  }
   DaTreeViewModel *m = app->tree_view_model;
   char pct_label[48];
   char size_str[64], alloc_str[64];
@@ -195,7 +427,7 @@ static void da_tv_insert_entry(AppState *app, GtkTreeIter *parent_iter, int32_t 
   da_format_mtime_local(e->mtime_unix_ns, mtime_str, sizeof(mtime_str));
   da_format_win32_attr_letters(e->win32_attributes, attrs_str, sizeof(attrs_str));
 
-  const char *name = tv_display_name(e->path);
+  const char *name = tv_display_name(e);
 
   GtkTreeIter iter;
   gtk_tree_store_insert_with_values(app->tree_view_store, &iter, parent_iter, -1,
@@ -262,9 +494,14 @@ typedef struct {
 } TvBuildData;
 
 static void tv_build_data_free(TvBuildData *bd) {
-  if (bd == NULL) { return; }
+  if (bd == NULL) {
+    return;
+  }
   g_free(bd->scan_root);
-  free(bd->entries);
+  if (bd->entries != NULL) {
+    tv_entries_free_all_owned(bd->entries, bd->count);
+    free(bd->entries);
+  }
   g_free(bd);
 }
 
@@ -345,6 +582,8 @@ static void tv_build_worker(GTask *task, gpointer source_object,
     }
     entries[i].kind             = 0;
     entries[i].path             = NULL;
+    entries[i].display_name     = NULL;
+    entries[i].path_owned         = FALSE;
     entries[i].scan_nid         = SIZE_MAX;
     entries[i].mtime_unix_ns    = 0;
     entries[i].win32_attributes = 0;
@@ -416,6 +655,14 @@ static void tv_build_worker(GTask *task, gpointer source_object,
   g_hash_table_destroy(path_map);
   free(sorted_idx);
 
+  if (!tv_apply_recycle_bin_grouping(&entries, &n, cancellable)) {
+    tv_entries_free_all_owned(entries, n);
+    free(entries);
+    g_task_return_error(task,
+      g_error_new_literal(G_IO_ERROR, G_IO_ERROR_CANCELLED, "tree-view build cancelled"));
+    return;
+  }
+
   /* Step 4: bottom-up aggregation. */
   for (int32_t pos = (int32_t)n - 1; pos >= 0; pos--) {
     if ((pos & 0x3FF) == 0 && g_cancellable_is_cancelled(cancellable)) {
@@ -445,6 +692,8 @@ static void tv_build_worker(GTask *task, gpointer source_object,
       DaTvEntry *sr = &entries[n];
       sr->kind             = DISKATLAS_NODE_KIND_DIR;
       sr->path             = scan_root_path;
+      sr->display_name     = NULL;
+      sr->path_owned       = FALSE;
       sr->scan_nid         = SIZE_MAX;
       sr->mtime_unix_ns    = 0;
       sr->win32_attributes = 0;
@@ -530,6 +779,7 @@ static void tv_build_done(GObject *source_object, GAsyncResult *res, gpointer us
 
   /* Swap model. */
   if (app->tree_view_model != NULL) {
+    tv_entries_free_all_owned(app->tree_view_model->entries, app->tree_view_model->count);
     free(app->tree_view_model->entries);
     g_free(app->tree_view_model->scan_root_str);
     free(app->tree_view_model);
@@ -646,6 +896,7 @@ void da_tree_view_clear(AppState *app) {
     gtk_tree_store_clear(app->tree_view_store);
   }
   if (app->tree_view_model != NULL) {
+    tv_entries_free_all_owned(app->tree_view_model->entries, app->tree_view_model->count);
     free(app->tree_view_model->entries);
     g_free(app->tree_view_model->scan_root_str);
     free(app->tree_view_model);
@@ -708,7 +959,7 @@ static void da_tv_refresh_path_columns_branch(GtkTreeModel *model, GtkTreeIter *
       (gsize)eid < app->tree_view_model->count) {
     const DaTvEntry *e = &app->tree_view_model->entries[(int32_t)eid];
     const char *p = e->path != NULL ? e->path : "";
-    gtk_tree_store_set(GTK_TREE_STORE(model), iter, DA_TV_COL_NAME, tv_display_name(p), DA_TV_COL_PATH, p, -1);
+    gtk_tree_store_set(GTK_TREE_STORE(model), iter, DA_TV_COL_NAME, tv_display_name(e), DA_TV_COL_PATH, p, -1);
   }
   GtkTreeIter child;
   if (gtk_tree_model_iter_children(model, &child, iter)) {
@@ -800,4 +1051,34 @@ gboolean da_tv_entry_get_stats(const DaTreeViewModel *m, gint64 entry_id,
   if (out_alloc)      *out_alloc      = e->alloc_bytes;
   if (out_file_count) *out_file_count = e->file_count;
   return TRUE;
+}
+
+gboolean da_tree_view_model_entry_win32_attributes(const DaTreeViewModel *m, gint64 entry_id,
+                                                   uint32_t *out_attrs) {
+  if (out_attrs != NULL) {
+    *out_attrs = 0;
+  }
+  if (m == NULL || out_attrs == NULL || entry_id < 0 || (size_t)entry_id >= m->count) {
+    return FALSE;
+  }
+  *out_attrs = m->entries[(size_t)entry_id].win32_attributes;
+  return TRUE;
+}
+
+gboolean da_tree_view_model_entry_scan_nid(const DaTreeViewModel *m, gint64 entry_id, size_t *out_nid) {
+  if (out_nid != NULL) {
+    *out_nid = SIZE_MAX;
+  }
+  if (m == NULL || out_nid == NULL || entry_id < 0 || (size_t)entry_id >= m->count) {
+    return FALSE;
+  }
+  *out_nid = m->entries[(size_t)entry_id].scan_nid;
+  return TRUE;
+}
+
+gboolean da_tree_view_model_entry_is_hidden(const DaTreeViewModel *m, gint64 entry_id) {
+  if (m == NULL || entry_id < 0 || (size_t)entry_id >= m->count) {
+    return FALSE;
+  }
+  return tv_entry_is_hidden(&m->entries[(size_t)entry_id]);
 }

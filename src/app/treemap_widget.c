@@ -8,6 +8,7 @@
 #include <pango/pangocairo.h>
 
 #include "diskatlas.h"
+#include "file_tree_model.h"
 #include "format_text.h"
 #include "dm_treemap_colors.h"
 #include "treemap_widget.h"
@@ -297,7 +298,8 @@ static uint64_t treemap_node_compute_agg(TreemapNode *n) {
   return n->agg;
 }
 
-static TreemapNode *treemap_build_tree(const char *root_utf8, const file_node_t *nodes, size_t count) {
+static TreemapNode *treemap_build_tree(const char *root_utf8, const file_node_t *nodes, size_t count,
+                                       gboolean view_hidden) {
   TreemapNode *root;
   char *root_norm;
   size_t ni;
@@ -317,6 +319,9 @@ static TreemapNode *treemap_build_tree(const char *root_utf8, const file_node_t 
     int si;
 
     if (fn->path == NULL) {
+      continue;
+    }
+    if (!view_hidden && da_node_is_hidden(fn)) {
       continue;
     }
     rel = rel_path_under_root(fn->path, root_norm);
@@ -383,6 +388,9 @@ static TreemapNode *treemap_build_tree(const char *root_utf8, const file_node_t 
    * interactive (hover path shown in status bar, click selects in tree view). */
   for (ni = 0; ni < count; ni++) {
     const file_node_t *fn = &nodes[ni];
+    if (!view_hidden && da_node_is_hidden(fn)) {
+      continue;
+    }
     uint32_t kind = fn->attributes & DISKATLAS_NODE_KIND_MASK;
     if (kind == DISKATLAS_NODE_KIND_DIR && fn->path != NULL) {
       char *p = g_strdup(fn->path);
@@ -1487,8 +1495,8 @@ void treemap_widget_set_style(TreemapWidget *w, const DmTreemapStyle *s) {
   gtk_widget_queue_draw(GTK_WIDGET(w));
 }
 
-void treemap_widget_set_data(TreemapWidget *widget, const char *root_utf8, const file_node_t *nodes,
-                             size_t count) {
+void treemap_widget_set_data_filtered(TreemapWidget *widget, const char *root_utf8,
+                                      const file_node_t *nodes, size_t count, gboolean view_hidden) {
   GtkAllocation a;
   const file_node_t *prev_nodes;
   size_t prev_count;
@@ -1520,7 +1528,7 @@ void treemap_widget_set_data(TreemapWidget *widget, const char *root_utf8, const
   widget->anchor_rect_index = -1;
 
   if (nodes != NULL && count > 0 && widget->root_utf8[0] != '\0') {
-    widget->tree_root = treemap_build_tree(widget->root_utf8, nodes, count);
+    widget->tree_root = treemap_build_tree(widget->root_utf8, nodes, count, view_hidden);
   } else {
     widget->tree_root = NULL;
   }
@@ -1533,6 +1541,11 @@ void treemap_widget_set_data(TreemapWidget *widget, const char *root_utf8, const
   } else {
     gtk_widget_queue_resize(GTK_WIDGET(widget));
   }
+}
+
+void treemap_widget_set_data(TreemapWidget *widget, const char *root_utf8, const file_node_t *nodes,
+                             size_t count) {
+  treemap_widget_set_data_filtered(widget, root_utf8, nodes, count, TRUE);
 }
 
 void treemap_widget_set_hover_callback(TreemapWidget *w,

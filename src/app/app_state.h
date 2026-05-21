@@ -186,6 +186,12 @@ typedef struct AppState {
   /** When TRUE, treemap renders file/folder name labels on tiles; persisted as `treemap_show_labels` in `[interface]`. Default TRUE. */
   gboolean interface_treemap_show_labels;
 
+  /** When TRUE, hidden and $Recycle.Bin paths appear in tree/file lists (grayed); persisted as `view_hidden_files`. Default TRUE. */
+  gboolean interface_view_hidden_files;
+
+  /** Options → View hidden files/folders (menu only; toggles `interface_view_hidden_files`). */
+  GtkWidget *options_menu_view_hidden;
+
   /** From `[interface]` at startup; applied once in `da_ini_apply_interface_tree_columns`, then cleared. */
   gboolean interface_ini_file_view_sort_set;
   gint     interface_ini_file_view_sort_col;

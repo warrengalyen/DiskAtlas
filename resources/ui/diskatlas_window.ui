@@ -439,6 +439,15 @@
                       </object>
                     </child>
                     <child>
+                      <object class="GtkCheckMenuItem" id="options_menu_view_hidden">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="label" translatable="yes">View hidden files/folders</property>
+                        <property name="use-underline">True</property>
+                        <property name="active">True</property>
+                      </object>
+                    </child>
+                    <child>
                       <object class="GtkSeparatorMenuItem">
                         <property name="visible">True</property>
                         <property name="can-focus">False</property>

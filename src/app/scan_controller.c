@@ -1081,7 +1081,8 @@ static void da_refresh_treemap(AppState *app) {
         }
       }
     }
-    treemap_widget_set_data(TREEMAP_WIDGET(app->treemap), root_for_treemap, v.nodes, v.count);
+    treemap_widget_set_data_filtered(TREEMAP_WIDGET(app->treemap), root_for_treemap, v.nodes, v.count,
+                                     da_view_hidden_files(app));
     g_free(derived_root);
   }
 }
@@ -1969,7 +1970,7 @@ static void start_scan(AppState *app) {
   scan_options_t opt;
   memset(&opt, 0, sizeof(opt));
   opt.struct_version = DISKATLAS_SCAN_OPTIONS_STRUCT_VERSION;
-  opt.flags = 0;
+  opt.flags = DISKATLAS_SCAN_OPTION_INCLUDE_HIDDEN;
   opt.max_depth = 0;
   opt.io_threads = 0;
   if (app->duplicates_file_combo != NULL) {
@@ -2076,6 +2077,31 @@ static void on_show_folders_toggled(GtkToggleButton *btn, gpointer user_data) {
   }
 
   apply_search_filter(app);
+}
+
+void scan_controller_on_view_hidden_files_toggled(AppState *app) {
+  if (app == NULL || !app->list_populated || app->scan == NULL) {
+    return;
+  }
+
+  kill_timer(&app->timer_fill);
+  kill_timer(&app->timer_filter);
+
+  panel_scan_set_text(app, "Updating file list…");
+  if (rebuild_master_index_list(app) != 0) {
+    GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
+                                          GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
+                                          "Out of memory while rebuilding the file list.");
+    da_message_dialog_apply_layout(d);
+    gtk_dialog_run(GTK_DIALOG(d));
+    gtk_widget_destroy(d);
+    return;
+  }
+
+  apply_search_filter(app);
+  (void)da_tree_view_populate(app);
+  da_refresh_treemap(app);
+  scan_controller_sync_file_view_status(app);
 }
 
 static void on_duplicates_only_toggled(GtkToggleButton *btn, gpointer user_data) {
@@ -2315,7 +2341,7 @@ void scan_controller_fill_scan_options_for_import(AppState *app, scan_options_t 
   }
   memset(out, 0, sizeof(*out));
   out->struct_version = DISKATLAS_SCAN_OPTIONS_STRUCT_VERSION;
-  out->flags = 0;
+  out->flags = DISKATLAS_SCAN_OPTION_INCLUDE_HIDDEN;
   out->max_depth = 0;
   out->io_threads = 0;
   if (app->duplicates_file_combo != NULL) {

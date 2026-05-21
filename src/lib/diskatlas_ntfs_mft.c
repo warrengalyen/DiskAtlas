@@ -1018,6 +1018,46 @@ static bool ntfs_emit_skip_system_metadata_ci(const wchar_t *full, const wchar_t
   return false;
 }
 
+/** TRUE when @a rel (path after volume root) is under $Recycle.Bin or basename is $I/$R recycle internal name. */
+static bool ntfs_path_rel_is_recycle_internal_ci(const wchar_t *rel) {
+  if (rel == NULL || rel[0] == L'\0') {
+    return false;
+  }
+  if (_wcsnicmp(rel, L"$Recycle.Bin\\", 14) == 0 || _wcsicmp(rel, L"$Recycle.Bin") == 0) {
+    return true;
+  }
+  const wchar_t *base = rel;
+  for (const wchar_t *p = rel; *p != L'\0'; p++) {
+    if (*p == L'\\') {
+      base = p + 1;
+    }
+  }
+  if (base[0] == L'$' && (base[1] == L'I' || base[1] == L'R')) {
+    return true;
+  }
+  return false;
+}
+
+static uint32_t ntfs_augment_dosattrs_for_emit(const wchar_t *full, const wchar_t *vol_root,
+                                                uint32_t dosattrs, bool is_dir) {
+  size_t vrl = wcslen(vol_root);
+  const wchar_t *rel = full;
+  if (vrl > 0 && _wcsnicmp(full, vol_root, vrl) == 0) {
+    rel = full + vrl;
+    if (*rel == L'\\') {
+      rel++;
+    }
+  }
+  if (!ntfs_path_rel_is_recycle_internal_ci(rel)) {
+    return dosattrs;
+  }
+  dosattrs |= FILE_ATTRIBUTE_HIDDEN;
+  if (!is_dir) {
+    dosattrs |= FILE_ATTRIBUTE_SYSTEM;
+  }
+  return dosattrs;
+}
+
 static uint64_t ntfs_volume_root_mft_index(const wchar_t *vol_root_path) {
   HANDLE h =
       CreateFileW(vol_root_path, FILE_READ_ATTRIBUTES,
@@ -1467,7 +1507,9 @@ static bool mft_parse_emit_mft_common(
     }
 
     bool dir_f = is_dir[idx] != 0;
-    if (!diskatlas_win32_record_entry_metadata(r, full, sizes[idx], mtimes[idx], dosattrs[idx],
+    uint32_t emit_attrs =
+        ntfs_augment_dosattrs_for_emit(full, vol_path_full, dosattrs[idx], dir_f);
+    if (!diskatlas_win32_record_entry_metadata(r, full, sizes[idx], mtimes[idx], emit_attrs,
                                                dir_f)) {
       continue;
     }

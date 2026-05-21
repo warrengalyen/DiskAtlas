@@ -74,4 +74,14 @@ gboolean da_tv_entry_get_stats(const DaTreeViewModel *m, gint64 entry_id,
                                uint64_t *out_size, uint64_t *out_alloc,
                                uint64_t *out_file_count);
 
+/** Win32 FILE_ATTRIBUTE_* for a tree entry; FALSE if @a entry_id is invalid or placeholder. */
+gboolean da_tree_view_model_entry_win32_attributes(const DaTreeViewModel *m, gint64 entry_id,
+                                                   uint32_t *out_attrs);
+
+/** TRUE when the tree row should use hidden (gray) styling. */
+gboolean da_tree_view_model_entry_is_hidden(const DaTreeViewModel *m, gint64 entry_id);
+
+/** Scan node index for @a entry_id, or SIZE_MAX when synthetic / unknown. */
+gboolean da_tree_view_model_entry_scan_nid(const DaTreeViewModel *m, gint64 entry_id, size_t *out_nid);
+
 #endif  /* TREE_VIEW_MODEL_H */

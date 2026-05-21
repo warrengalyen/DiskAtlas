@@ -41,6 +41,7 @@
 #define DA_KEY_SHOW_TREEMAP "show_treemap"
 #define DA_KEY_TREEMAP_SHOW_FREE_SPACE "treemap_show_free_space"
 #define DA_KEY_TREEMAP_SHOW_LABELS "treemap_show_labels"
+#define DA_KEY_VIEW_HIDDEN_FILES "view_hidden_files"
 #define DA_SEC_GENERAL "general"
 #define DA_KEY_ENABLE_RENAME "enable_rename"
 #define DA_KEY_WIN32_EXPLORER_CTX_MENU "win32_explorer_context_menu"
@@ -596,6 +597,7 @@ void da_ini_load_interface(AppState *app) {
   app->interface_show_treemap = TRUE;
   app->interface_treemap_show_free_space = FALSE;
   app->interface_treemap_show_labels = TRUE;
+  app->interface_view_hidden_files = TRUE;
   app->interface_size_display_format = DA_SIZE_DISPLAY_DYNAMIC;
 
   gint places = 1;
@@ -645,6 +647,11 @@ void da_ini_load_interface(AppState *app) {
         gboolean sl = g_key_file_get_boolean(kf, DA_SEC_INTERFACE, DA_KEY_TREEMAP_SHOW_LABELS, &err);
         g_clear_error(&err);
         app->interface_treemap_show_labels = sl;
+      }
+      if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_VIEW_HIDDEN_FILES, NULL)) {
+        gboolean vh = g_key_file_get_boolean(kf, DA_SEC_INTERFACE, DA_KEY_VIEW_HIDDEN_FILES, &err);
+        g_clear_error(&err);
+        app->interface_view_hidden_files = vh;
       }
       if (g_key_file_has_key(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DISPLAY_FORMAT, NULL)) {
         gint sf = g_key_file_get_integer(kf, DA_SEC_INTERFACE, DA_KEY_SIZE_DISPLAY_FORMAT, &err);
@@ -802,6 +809,7 @@ void da_ini_save_interface(const AppState *app) {
   g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_SHOW_TREEMAP, app->interface_show_treemap);
   g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_TREEMAP_SHOW_FREE_SPACE, app->interface_treemap_show_free_space);
   g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_TREEMAP_SHOW_LABELS, app->interface_treemap_show_labels);
+  g_key_file_set_boolean(kf, DA_SEC_INTERFACE, DA_KEY_VIEW_HIDDEN_FILES, app->interface_view_hidden_files);
   {
     gint sf = app->interface_size_display_format;
     if (sf < (gint)DA_SIZE_DISPLAY_DYNAMIC || sf > (gint)DA_SIZE_DISPLAY_TB) {

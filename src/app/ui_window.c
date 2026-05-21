@@ -201,6 +201,22 @@ static void on_options_menu_show_treemap_toggled(GtkCheckMenuItem *item, gpointe
   da_ini_save_interface(app);
 }
 
+static void on_options_menu_view_hidden_toggled(GtkCheckMenuItem *item, gpointer user_data) {
+  AppState *app = (AppState *)user_data;
+  if (app == NULL || item == NULL) {
+    return;
+  }
+  app->interface_view_hidden_files = gtk_check_menu_item_get_active(item);
+  da_ini_save_interface(app);
+  scan_controller_on_view_hidden_files_toggled(app);
+  if (app->tree_view != NULL) {
+    gtk_widget_queue_draw(app->tree_view);
+  }
+  if (app->tree != NULL) {
+    gtk_widget_queue_draw(app->tree);
+  }
+}
+
 static void on_options_menu_show_free_space_toggled(GtkCheckMenuItem *item, gpointer user_data) {
   AppState *app = (AppState *)user_data;
   if (app == NULL || item == NULL) {
@@ -644,22 +660,127 @@ static void da_load_global_app_css(void) {
 
 /* ---- Deleted-state cell styling helpers ---- */
 
+static gboolean da_row_is_hidden_for_style(AppState *app, const char *path, uint32_t win32_attrs,
+                                           gint64 tv_entry_id) {
+  if (app != NULL && app->tree_view_model != NULL && tv_entry_id >= 0 &&
+      tv_entry_id != DA_TV_LP_PLACEHOLDER &&
+      da_tree_view_model_entry_is_hidden(app->tree_view_model, tv_entry_id)) {
+    return TRUE;
+  }
+  const file_node_t *scan_node = NULL;
+  if (app != NULL && app->scan != NULL && tv_entry_id >= 0 && tv_entry_id != DA_TV_LP_PLACEHOLDER) {
+    size_t nid = SIZE_MAX;
+    if (da_tree_view_model_entry_scan_nid(app->tree_view_model, tv_entry_id, &nid) && nid < SIZE_MAX) {
+      scan_results_view_t v = scan_get_results(app->scan);
+      if (v.nodes != NULL && nid < v.count) {
+        scan_node = &v.nodes[nid];
+      }
+    }
+  }
+  if (scan_node == NULL && app != NULL && app->scan != NULL && path != NULL && path[0] != '\0') {
+    scan_results_view_t v = scan_get_results(app->scan);
+    for (size_t i = 0; i < v.count; i++) {
+      if (v.nodes[i].path == NULL) {
+        continue;
+      }
+#if defined(G_OS_WIN32)
+      if (g_ascii_strcasecmp(v.nodes[i].path, path) == 0) {
+#else
+      if (strcmp(v.nodes[i].path, path) == 0) {
+#endif
+        scan_node = &v.nodes[i];
+        break;
+      }
+    }
+  }
+  return da_path_is_hidden_for_display(path, win32_attrs, scan_node);
+}
+
+/** TRUE if this tree row or any ancestor should render as hidden (gray). */
+static gboolean da_tv_tree_row_hidden_for_style(AppState *app, GtkTreeModel *model, GtkTreeIter *iter) {
+  if (app == NULL || !da_view_hidden_files(app)) {
+    return FALSE;
+  }
+  GtkTreeIter walk = *iter;
+  for (;;) {
+    gchar *path = NULL;
+    gchar *name = NULL;
+    gint64 eid = -1;
+    gtk_tree_model_get(model, &walk, DA_TV_COL_PATH, &path, DA_TV_COL_NAME, &name, DA_TV_COL_IDX_ID, &eid,
+                       -1);
+    if (eid != DA_TV_LP_PLACEHOLDER) {
+      uint32_t w32 = 0;
+      (void)da_tree_view_model_entry_win32_attributes(app->tree_view_model, eid, &w32);
+      const char *path_use = path;
+      const char *borrowed = NULL;
+      if ((path_use == NULL || path_use[0] == '\0') && eid >= 0 &&
+          da_tree_view_model_borrow_path_for_entry_id(app->tree_view_model, eid, &borrowed) &&
+          borrowed != NULL) {
+        path_use = borrowed;
+      }
+      if (da_row_is_hidden_for_style(app, path_use, w32, eid)) {
+        g_free(path);
+        g_free(name);
+        return TRUE;
+      }
+      if (name != NULL && name[0] != '\0' && da_path_is_recycle_internal_name_ci(name)) {
+        g_free(path);
+        g_free(name);
+        return TRUE;
+      }
+    } else if (name != NULL && name[0] != '\0' && da_path_is_recycle_internal_name_ci(name)) {
+      g_free(path);
+      g_free(name);
+      return TRUE;
+    }
+    g_free(path);
+    g_free(name);
+    if (!gtk_tree_model_iter_parent(model, &walk, &walk)) {
+      break;
+    }
+  }
+  return FALSE;
+}
+
 /**
- * Apply red foreground + strikethrough to a text cell renderer when the given
- * path is in app->deleted_path_set; otherwise reset those properties.
+ * Deleted: red + strikethrough. Hidden (when visible): gray foreground. Else: default.
+ * When @a hidden_row is TRUE, the row is treated as hidden without re-checking path/attrs.
  */
-static void da_apply_deleted_cell_style(GtkCellRenderer *cell, AppState *app, const char *path) {
+static void da_apply_row_text_cell_style(GtkCellRenderer *cell, AppState *app, const char *path,
+                                         uint32_t win32_attrs, gint64 tv_entry_id,
+                                         gboolean hidden_row) {
   gboolean is_deleted = FALSE;
   if (app != NULL && app->deleted_path_set != NULL && path != NULL && path[0] != '\0') {
     is_deleted = g_hash_table_contains(app->deleted_path_set, path);
   }
+  gboolean is_hidden = FALSE;
+  if (!is_deleted && da_view_hidden_files(app)) {
+    is_hidden =
+        hidden_row ? TRUE : da_row_is_hidden_for_style(app, path, win32_attrs, tv_entry_id);
+  }
   if (GTK_IS_CELL_RENDERER_TEXT(cell)) {
-    g_object_set(cell,
-                 "foreground",        is_deleted ? "red" : NULL,
-                 "foreground-set",    is_deleted,
-                 "strikethrough",     is_deleted,
-                 "strikethrough-set", is_deleted,
-                 NULL);
+    if (is_deleted) {
+      g_object_set(cell,
+                   "foreground", "#FF0000",
+                   "foreground-set", TRUE,
+                   "strikethrough", TRUE,
+                   "strikethrough-set", TRUE,
+                   NULL);
+    } else if (is_hidden) {
+      g_object_set(cell,
+                   "foreground", "#888888",
+                   "foreground-set", TRUE,
+                   "strikethrough", FALSE,
+                   "strikethrough-set", TRUE,
+                   NULL);
+    } else {
+      g_object_set(cell,
+                   "foreground", NULL,
+                   "foreground-set", FALSE,
+                   "strikethrough", FALSE,
+                   "strikethrough-set", FALSE,
+                   NULL);
+    }
   } else if (DA_IS_CELL_RENDERER_PROGRESS(cell)) {
     g_object_set(cell, "strikethrough", is_deleted, NULL);
   }
@@ -691,11 +812,10 @@ static void da_fv_deleted_text_cell_data(GtkTreeViewColumn *col, GtkCellRenderer
   g_object_set(cell, "text", text, NULL);
   g_free(text);
 
-  /* Deleted styling: resolve nid → path → check deleted set. */
   const char *path = NULL;
-  gchar *path_buf = NULL;
+  uint32_t w32 = 0;
   AppState *app = ctx->app;
-  if (app != NULL && app->deleted_path_set != NULL && app->scan != NULL) {
+  if (app != NULL && app->scan != NULL) {
     gint64 lp = 0;
     gtk_tree_model_get(model, iter, DA_COL_LP, &lp, -1);
     size_t nid = SIZE_MAX;
@@ -703,11 +823,11 @@ static void da_fv_deleted_text_cell_data(GtkTreeViewColumn *col, GtkCellRenderer
       scan_results_view_t v = scan_get_results(app->scan);
       if (v.nodes != NULL && nid < v.count) {
         path = v.nodes[nid].path;
+        w32 = v.nodes[nid].win32_attributes;
       }
     }
-    (void)path_buf;
   }
-  da_apply_deleted_cell_style(cell, app, path);
+  da_apply_row_text_cell_style(cell, app, path, w32, -1, FALSE);
 
   gboolean is_alloc = !ctx->is_tree_view && (ctx->model_text_col == DA_COL_ALLOCATED);
   da_tree_view_apply_zebra_cell(col, cell, model, iter, app, is_alloc);
@@ -721,17 +841,21 @@ static void da_tv_deleted_text_cell_data(GtkTreeViewColumn *col, GtkCellRenderer
   if (ctx == NULL) {
     return;
   }
-  /* Set text from the bound model column. */
   gchar *text = NULL;
   gtk_tree_model_get(model, iter, ctx->model_text_col, &text, -1);
-  g_object_set(cell, "text", text, NULL);
+  g_object_set(cell, "markup", NULL, "text", text != NULL ? text : "", NULL);
   g_free(text);
 
-  /* Deleted styling: read path from DA_TV_COL_PATH. */
   gchar *path = NULL;
-  gtk_tree_model_get(model, iter, DA_TV_COL_PATH, &path, -1);
+  gint64 eid = -1;
+  uint32_t w32 = 0;
+  if (ctx->app != NULL) {
+    gtk_tree_model_get(model, iter, DA_TV_COL_PATH, &path, DA_TV_COL_IDX_ID, &eid, -1);
+    (void)da_tree_view_model_entry_win32_attributes(ctx->app->tree_view_model, eid, &w32);
+  }
 
-  da_apply_deleted_cell_style(cell, ctx->app, path);
+  gboolean is_hidden = da_tv_tree_row_hidden_for_style(ctx->app, model, iter);
+  da_apply_row_text_cell_style(cell, ctx->app, path, w32, eid, is_hidden);
   g_free(path);
 
   gboolean is_alloc = ctx->is_tree_view && (ctx->model_text_col == DA_TV_COL_ALLOC);
@@ -842,9 +966,9 @@ static void file_view_file_name_text_cell_data(GtkTreeViewColumn *column, GtkCel
   file_view_set_search_highlight_cell(cell, app, plain);
   g_free(plain);
 
-  /* Deleted-state styling: look up the node path. */
   const char *path = NULL;
-  if (app != NULL && app->deleted_path_set != NULL && app->scan != NULL) {
+  uint32_t w32 = 0;
+  if (app != NULL && app->scan != NULL) {
     gint64 lp = 0;
     gtk_tree_model_get(model, iter, DA_COL_LP, &lp, -1);
     size_t nid = SIZE_MAX;
@@ -852,10 +976,11 @@ static void file_view_file_name_text_cell_data(GtkTreeViewColumn *column, GtkCel
       scan_results_view_t v = scan_get_results(app->scan);
       if (v.nodes != NULL && nid < v.count) {
         path = v.nodes[nid].path;
+        w32 = v.nodes[nid].win32_attributes;
       }
     }
   }
-  da_apply_deleted_cell_style(cell, app, path);
+  da_apply_row_text_cell_style(cell, app, path, w32, -1, FALSE);
   da_tree_view_apply_zebra_cell(column, cell, model, iter, app, FALSE);
 }
 
@@ -866,9 +991,19 @@ static void file_view_path_text_cell_data(GtkTreeViewColumn *column, GtkCellRend
   gtk_tree_model_get(model, iter, 1, &plain, -1);
   file_view_set_search_highlight_cell(cell, app, plain);
 
-  /* Deleted-state styling. */
-  const char *path = plain; /* col 1 IS the path */
-  da_apply_deleted_cell_style(cell, app, path);
+  uint32_t w32 = 0;
+  if (app != NULL && app->scan != NULL && plain != NULL) {
+    gint64 lp = 0;
+    gtk_tree_model_get(model, iter, DA_COL_LP, &lp, -1);
+    size_t nid = SIZE_MAX;
+    if (da_tree_lp_to_scan_nid(app, lp, &nid) && nid != SIZE_MAX) {
+      scan_results_view_t v = scan_get_results(app->scan);
+      if (nid < v.count) {
+        w32 = v.nodes[nid].win32_attributes;
+      }
+    }
+  }
+  da_apply_row_text_cell_style(cell, app, plain, w32, -1, FALSE);
   g_free(plain);
   da_tree_view_apply_zebra_cell(column, cell, model, iter, app, FALSE);
 }
@@ -1936,9 +2071,9 @@ static void pct_of_drive_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *c
                0.98f, NULL);
   g_free(txt);
 
-  /* Deleted styling: resolve nid → path → apply strikethrough. */
   const char *path = NULL;
-  if (app != NULL && app->deleted_path_set != NULL && app->scan != NULL) {
+  uint32_t w32 = 0;
+  if (app != NULL && app->scan != NULL) {
     gint64 lp = 0;
     gtk_tree_model_get(model, iter, DA_COL_LP, &lp, -1);
     size_t nid = SIZE_MAX;
@@ -1946,10 +2081,11 @@ static void pct_of_drive_cell_data(GtkTreeViewColumn *column, GtkCellRenderer *c
       scan_results_view_t sv = scan_get_results(app->scan);
       if (sv.nodes != NULL && nid < sv.count) {
         path = sv.nodes[nid].path;
+        w32 = sv.nodes[nid].win32_attributes;
       }
     }
   }
-  da_apply_deleted_cell_style(cell, app, path);
+  da_apply_row_text_cell_style(cell, app, path, w32, -1, FALSE);
   da_tree_view_apply_zebra_cell(column, cell, model, iter, app, FALSE);
 }
 
@@ -2080,8 +2216,13 @@ static void tv_pct_of_parent_cell_data(GtkTreeViewColumn *column, GtkCellRendere
                "text", txt != NULL ? txt : "", "text-xalign", 0.98f, NULL);
   g_free(txt);
 
-  /* Deleted styling: read path from model → apply strikethrough. */
-  da_apply_deleted_cell_style(cell, app, path);
+  uint32_t w32 = 0;
+  gint64 eid = -1;
+  if (app != NULL && path != NULL) {
+    gtk_tree_model_get(model, iter, DA_TV_COL_IDX_ID, &eid, -1);
+    (void)da_tree_view_model_entry_win32_attributes(app->tree_view_model, eid, &w32);
+  }
+  da_apply_row_text_cell_style(cell, app, path, w32, eid, FALSE);
   g_free(path);
   da_tree_view_apply_zebra_cell(column, cell, model, iter, app, FALSE);
 }
@@ -2558,6 +2699,17 @@ void da_ui_build(AppState *app) {
       g_signal_handlers_unblock_by_func(w, G_CALLBACK(on_options_menu_show_free_labels_toggled), app);
       g_signal_connect(w, "toggled", G_CALLBACK(on_options_menu_show_free_labels_toggled), app);
     }
+  }
+  app->options_menu_view_hidden = GTK_WIDGET(gtk_builder_get_object(builder, "options_menu_view_hidden"));
+  if (app->options_menu_view_hidden != NULL && GTK_IS_CHECK_MENU_ITEM(app->options_menu_view_hidden)) {
+    g_signal_handlers_block_by_func(app->options_menu_view_hidden,
+                                    G_CALLBACK(on_options_menu_view_hidden_toggled), app);
+    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->options_menu_view_hidden),
+                                   app->interface_view_hidden_files);
+    g_signal_handlers_unblock_by_func(app->options_menu_view_hidden,
+                                      G_CALLBACK(on_options_menu_view_hidden_toggled), app);
+    g_signal_connect(app->options_menu_view_hidden, "toggled",
+                     G_CALLBACK(on_options_menu_view_hidden_toggled), app);
   }
   {
     GtkWidget *w = GTK_WIDGET(gtk_builder_get_object(builder, "file_menu_zoom_in"));
