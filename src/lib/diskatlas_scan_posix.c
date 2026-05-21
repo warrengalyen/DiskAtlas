@@ -1,8 +1,9 @@
 #if !defined(_WIN32)
 
+#define _POSIX_C_SOURCE 200809L
+
 #include <dirent.h>
 #include <errno.h>
-#include <string.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>

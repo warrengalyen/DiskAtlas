@@ -719,7 +719,9 @@ static void gtk_lu_start_download(GtkWindow *parent, GtkWidget *main_widget, con
 
   job->progress_dialog =
       gtk_dialog_new_with_buttons("Downloading update", parent,
-                                  GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, NULL);
+                                  GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+                                  "_Cancel", GTK_RESPONSE_CANCEL,
+                                  NULL);
   gtk_window_set_default_size(GTK_WINDOW(job->progress_dialog), 420, -1);
 
   box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);

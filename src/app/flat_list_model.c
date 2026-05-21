@@ -487,6 +487,18 @@ static gint flm_sort_cmp(gconstpointer a, gconstpointer b, gpointer ctx_) {
   return (ctx->sort_ord == GTK_SORT_DESCENDING) ? -r : r;
 }
 
+static const FlatSortCtx *flm_sort_ctx_for_qsort;
+
+static int flm_sort_cmp_qsort(const void *a, const void *b) {
+  return (int)flm_sort_cmp(a, b, (gpointer)flm_sort_ctx_for_qsort);
+}
+
+static void flm_sort_indices(size_t *sorted, size_t count, const FlatSortCtx *ctx) {
+  flm_sort_ctx_for_qsort = ctx;
+  qsort(sorted, count, sizeof(size_t), flm_sort_cmp_qsort);
+  flm_sort_ctx_for_qsort = NULL;
+}
+
 /* Sort m->sorted in-place, then emit rows-reordered so GtkTreeView
  * re-renders in the new order without individual row-changed signals. */
 static void flm_do_sort(FlatListModel *m) {
@@ -513,7 +525,7 @@ static void flm_do_sort(FlatListModel *m) {
   memcpy(old_order, m->sorted, m->count * sizeof(size_t));
 
   FlatSortCtx ctx = { v.nodes, m, m->sort_col, m->sort_ord };
-  g_sort_array(m->sorted, (guint)m->count, sizeof(size_t), flm_sort_cmp, &ctx);
+  flm_sort_indices(m->sorted, m->count, &ctx);
 
   /* Build permutation array: new_order[new_pos] = old_pos */
   GHashTable *pos_map = g_hash_table_new(g_direct_hash, g_direct_equal);
@@ -554,7 +566,7 @@ static void flm_do_sort_silent(FlatListModel *m) {
     return;
   }
   FlatSortCtx ctx = { v.nodes, m, m->sort_col, m->sort_ord };
-  g_sort_array(m->sorted, (guint)m->count, sizeof(size_t), flm_sort_cmp, &ctx);
+  flm_sort_indices(m->sorted, m->count, &ctx);
 }
 
 /* ---- GtkTreeSortableIface ---- */

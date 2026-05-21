@@ -1,3 +1,7 @@
+#if defined(__linux__)
+#define _DEFAULT_SOURCE
+#endif
+
 #include <stddef.h>
 
 #include <glib.h>

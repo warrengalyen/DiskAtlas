@@ -5,26 +5,6 @@
  *
  * Implements platform_enum_storage_devices() for non-Windows platforms.
  *
- * Linux strategy:
- *   - Parse /proc/mounts via setmntent() / getmntent() (mntent.h).
- *   - statvfs() per mount for capacity figures.
- *   - Filesystem type string → filesystem_type_from_name().
- *   - is_network: fstype in {cifs, smb2, smb3, smbfs, nfs, nfs3, nfs4, davfs, davfs2}.
- *   - is_removable: heuristic — mount point starts with /media or /run/media.
- *   - MTP (best-effort): detect mounts with fstype "fuse.gvfsd-fuse" or paths
- *     under ~/.gvfs / /run/user/*/gvfs; marked FS_MTP, SCAN_CAP_GENERIC.
- *   - Pseudo-filesystems (proc, sys, devtmpfs, tmpfs, cgroup*, etc.) are skipped.
- *
- * macOS strategy:
- *   - getmntinfo() returns a struct statfs array without /proc/mounts.
- *   - statfs.f_fstypename → filesystem_type_from_name().
- *   - MNT_RDONLY flag → is_read_only.
- *   - MNT_LOCAL absent → is_network.
- *   - f_mntfromname heuristic for is_removable (disk2, disk3, … vs disk0/disk1).
- *
- * Error tolerance:
- *   - Per-mount statvfs / statfs failures → skip that entry silently.
- *   - Permission errors are non-fatal.
  */
 
 #include "diskatlas_storage.h"
@@ -145,13 +125,12 @@ DISKATLAS_API size_t platform_enum_storage_devices(storage_device_t **devices) {
     return 0;
   }
 
-  struct mntent ent;
-  char mntbuf[4096];
+  struct mntent *ent;
 
-  while (getmntent_r(fp, &ent, mntbuf, (int)sizeof(mntbuf)) != NULL) {
-    const char *fstype  = ent.mnt_type;
-    const char *mnt_dir = ent.mnt_dir;
-    const char *mnt_fsname = ent.mnt_fsname;
+  while ((ent = getmntent(fp)) != NULL) {
+    const char *fstype  = ent->mnt_type;
+    const char *mnt_dir = ent->mnt_dir;
+    const char *mnt_fsname = ent->mnt_fsname;
 
     /* Skip pseudo / virtual filesystems. */
     if (is_pseudo_fs(fstype)) {
@@ -159,7 +138,7 @@ DISKATLAS_API size_t platform_enum_storage_devices(storage_device_t **devices) {
     }
 
     /* Skip bind mounts (same device mounted at multiple paths). */
-    if (hasmntopt(&ent, "bind") != NULL) {
+    if (hasmntopt(ent, "bind") != NULL) {
       continue;
     }
 
@@ -208,7 +187,7 @@ DISKATLAS_API size_t platform_enum_storage_devices(storage_device_t **devices) {
     }
 
     /* Read-only: check mount options string. */
-    dev->is_read_only = (hasmntopt(&ent, "ro") != NULL) ? 1 : 0;
+    dev->is_read_only = (hasmntopt(ent, "ro") != NULL) ? 1 : 0;
 
     /* Disk space via statvfs. */
     struct statvfs svfs;
@@ -216,7 +195,7 @@ DISKATLAS_API size_t platform_enum_storage_devices(storage_device_t **devices) {
       dev->total_bytes = (uint64_t)svfs.f_blocks * (uint64_t)svfs.f_frsize;
       dev->free_bytes  = (uint64_t)svfs.f_bavail * (uint64_t)svfs.f_frsize;
     }
-    /* statvfs failure (e.g. network share offline) → leave bytes at 0. */
+    /* statvfs failure (e.g. network share offline) -> leave bytes at 0. */
   }
 
   endmntent(fp);

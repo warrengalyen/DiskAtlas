@@ -59,7 +59,7 @@ void da_format_bytes(uint64_t n, char *dst, size_t dstsz) {
   int d = da_bytes_decimal_places;
   switch (da_bytes_display_format) {
   case DA_SIZE_DISPLAY_BYTES: {
-    char num[80];
+    char num[64];
     da_format_uint64_locale(n, num, sizeof(num));
     snprintf(dst, dstsz, "%s B", num);
     return;
