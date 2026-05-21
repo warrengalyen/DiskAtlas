@@ -1,7 +1,10 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 #include "diskatlas_internal.h"
 
@@ -161,12 +164,12 @@ DISKATLAS_API const size_t *diskatlas_dup_group_members(const scan_result_t *res
 
 static bool da_blob_append_utf8_path(diskatlas_scan_result_t *r, const char *utf8, size_t *out_off) {
   if (r == NULL || utf8 == NULL || out_off == NULL) {
-    return FALSE;
+    return false;
   }
   size_t len = strlen(utf8) + 1u;
   size_t need = r->path_blob_len + len;
   if (need < r->path_blob_len) {
-    return FALSE;
+    return false;
   }
   while (r->path_blob_cap < need) {
     size_t cap = r->path_blob_cap ? r->path_blob_cap : 64u;
@@ -176,7 +179,7 @@ static bool da_blob_append_utf8_path(diskatlas_scan_result_t *r, const char *utf
     }
     char *nb = (char *)realloc(r->path_blob, cap);
     if (nb == NULL) {
-      return FALSE;
+      return false;
     }
     r->path_blob = nb;
     r->path_blob_cap = cap;
@@ -184,7 +187,7 @@ static bool da_blob_append_utf8_path(diskatlas_scan_result_t *r, const char *utf
   memcpy(r->path_blob + r->path_blob_len, utf8, len);
   *out_off = r->path_blob_len;
   r->path_blob_len = need;
-  return TRUE;
+  return true;
 }
 
 DISKATLAS_API int scan_result_paths_after_rename(scan_result_t *result, const char *old_path_utf8,
