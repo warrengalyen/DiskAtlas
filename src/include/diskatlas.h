@@ -184,6 +184,28 @@ DISKATLAS_API int scan_result_paths_after_rename(scan_result_t *result, const ch
  */
 DISKATLAS_API scan_result_t *diskatlas_scan_import_csv(const char *utf8_path, char *errbuf, size_t errbuf_len);
 
+#define DISKATLAS_CSV_EXPORT_OPTIONS_STRUCT_VERSION 1u
+
+typedef struct diskatlas_csv_export_options {
+  uint32_t struct_version;
+  uint32_t flags;
+  uint64_t drive_capacity_bytes;
+  uint64_t free_space_bytes;
+  uint64_t used_space_bytes;
+  uint64_t reserved_space_bytes;
+  uint64_t reserved_u64[2];
+} diskatlas_csv_export_options_t;
+
+#define DISKATLAS_CSV_EXPORT_INCLUDE_RESERVED (1u << 0)
+
+/**
+ * Export a completed scan to DiskAtlas CSV format (same columns as diskatlas_scan_import_csv).
+ * \p vol is from scan_get_results; \p options may be NULL (volume columns zeroed).
+ */
+DISKATLAS_API int diskatlas_scan_export_csv(scan_result_t *result, const char *utf8_path,
+                                            const diskatlas_csv_export_options_t *options,
+                                            char *errbuf, size_t errbuf_len);
+
 #if defined(_WIN32)
 /**
  * Parse a raw NTFS $MFT dump into a completed scan_result_t.

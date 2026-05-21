@@ -1,0 +1,5 @@
+# DiskAtlas scan_tree golden manifest (path suffix | size | kind)
+scan_tree/file_a.txt|11|FILE
+scan_tree/file_b.txt|11|FILE
+scan_tree/sub/nested.txt|11|FILE
+scan_tree/sub|0|DIR

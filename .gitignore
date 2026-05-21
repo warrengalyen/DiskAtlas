@@ -9,3 +9,4 @@ dist/
 *.json
 scripts/
 cert/
+tests/fixtures/tmp/

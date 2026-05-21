@@ -41,6 +41,7 @@ configure_file(
 )
 
 option(DISKATLAS_BUILD_LIBUPDATE "Build bundled libupdate (update shared library + updater) into bin/" ON)
+option(DISKATLAS_BUILD_TESTS "Build Unity unit/integration tests" ON)
 
 function(diskatlas_set_exe_bin_output target)
   set_target_properties(${target} PROPERTIES
@@ -99,9 +100,14 @@ endif()
 
 # --- Storage abstraction layer (platform + filesystem) ---
 list(APPEND DISKATLAS_CORE_SRCS
+  "${DISKATLAS_SRC}/lib/diskatlas_wildcard.c"
+  "${DISKATLAS_SRC}/lib/diskatlas_csv_export.c"
   "${DISKATLAS_SRC}/lib/filesystem/filesystem.c"
   "${DISKATLAS_SRC}/lib/platform/platform_path.c"
 )
+if(WIN32)
+  list(APPEND DISKATLAS_CORE_SRCS "${DISKATLAS_SRC}/lib/diskatlas_ntfs_mft_parse.c")
+endif()
 if(WIN32)
   list(APPEND DISKATLAS_CORE_SRCS
     "${DISKATLAS_SRC}/lib/platform/platform_win32.c"
@@ -274,4 +280,11 @@ else()
   if(DISKATLAS_BUILD_GUI)
     message(STATUS "DiskAtlas: GTK+ 3 not found via pkg-config — building core library only (install gtk+-3.0 dev files for the GUI).")
   endif()
+endif()
+
+if(DISKATLAS_BUILD_TESTS)
+  enable_testing()
+  set(UNITY_SUPPORT_INT64 ON CACHE BOOL "Unity 64-bit integers" FORCE)
+  add_subdirectory(lib/unity)
+  add_subdirectory(tests)
 endif()
