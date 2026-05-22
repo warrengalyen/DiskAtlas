@@ -13,7 +13,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 option(DISKATLAS_BUILD_GUI "Build GTK graphical application" ON)
 # When ON: GUI exe uses the Windows subsystem (no extra console). MinGW: -mwindows; MSVC: /SUBSYSTEM:WINDOWS.
 option(DISKATLAS_WIN32_WINDOWS_SUBSYSTEM "Windows: link GUI exe without a console (subsystem windows)" OFF)
-set(DISKATLAS_UPDATE_MANIFEST_URL "https://www.mechanikadesign.com/software/diskatlas/downloads" CACHE STRING
+set(DISKATLAS_UPDATE_MANIFEST_URL "https://www.mechanikadesign.com/software/diskatlas/updates" CACHE STRING
     "HTTPS URL to the update manifest JSON document (e.g. .../update.json). If the URL has no ?query and does not end with .json, CMake appends /update.json (directory-style base). URLs containing ? are left unchanged. Leave empty to disable Help > Check for Updates.")
 
 # URL compiled into the app (libupdate fetches this string as-is).

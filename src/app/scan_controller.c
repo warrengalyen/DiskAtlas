@@ -209,9 +209,6 @@ void da_file_view_search_combo_init(AppState *app) {
     }
   }
 
-  /* Do not bind entry text to the dropdown model; history picks copy text in on_search_combo_changed. */
-  gtk_combo_box_set_entry_text_column(GTK_COMBO_BOX(app->search), -1);
-
   GtkEntry *en = da_file_view_search_get_entry(app);
   if (en != NULL) {
     gtk_entry_set_placeholder_text(en, "Filter (* ? wildcards)…");
