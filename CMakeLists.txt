@@ -138,6 +138,8 @@ if(WIN32)
 endif()
 if(NOT WIN32)
   target_compile_options(diskatlas_core PRIVATE -fvisibility=hidden)
+  # strdup, localtime_r, etc. require POSIX declarations under -std=c17.
+  target_compile_definitions(diskatlas_core PRIVATE _POSIX_C_SOURCE=200809L)
 endif()
 
 # Distinct from diskatlas.exe OUTPUT_NAME "diskatlas": MinGW would reuse libdiskatlas.dll.a and
@@ -150,6 +152,22 @@ if(WIN32)
 endif()
 
 diskatlas_set_core_shared_bin_output(diskatlas_core)
+
+# Linux/macOS tests link core statically so CTest does not depend on loading
+# bin/libdiskatlas_core.so (RPATH/LD_LIBRARY_PATH mismatches caused CI segfaults).
+if(DISKATLAS_BUILD_TESTS AND NOT WIN32)
+  add_library(diskatlas_core_static STATIC ${DISKATLAS_CORE_SRCS})
+  target_include_directories(diskatlas_core_static
+    PUBLIC
+      $<BUILD_INTERFACE:${DISKATLAS_SRC}/include>
+    PRIVATE
+      "${DISKATLAS_SRC}/lib/platform"
+      "${DISKATLAS_SRC}/lib/filesystem"
+  )
+  target_link_libraries(diskatlas_core_static PRIVATE Threads::Threads)
+  target_compile_options(diskatlas_core_static PRIVATE -fvisibility=hidden)
+  target_compile_definitions(diskatlas_core_static PRIVATE _POSIX_C_SOURCE=200809L)
+endif()
 
 if(DISKATLAS_BUILD_LIBUPDATE AND EXISTS "${CMAKE_SOURCE_DIR}/lib/libupdate/libupdate/third_party/miniz/miniz.h")
   include("${CMAKE_SOURCE_DIR}/cmake/libupdate_in_tree.cmake")

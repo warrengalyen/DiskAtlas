@@ -26,7 +26,13 @@ target_compile_definitions(diskatlas_tests PRIVATE
   "DISKATLAS_FIXTURES_DIR=\"${DISKATLAS_FIXTURES_DIR_NORM}\""
 )
 
-target_link_libraries(diskatlas_tests PRIVATE unity::framework diskatlas_core Threads::Threads)
+if(WIN32)
+  set(_diskatlas_test_core diskatlas_core)
+else()
+  set(_diskatlas_test_core diskatlas_core_static)
+endif()
+
+target_link_libraries(diskatlas_tests PRIVATE unity::framework ${_diskatlas_test_core} Threads::Threads)
 
 if(NOT WIN32)
   target_link_libraries(diskatlas_tests PRIVATE m)

@@ -8,6 +8,12 @@ export DH_VERBOSE=1
 override_dh_auto_build:
 	true
 
+# CI pre-builds into bin/; debhelper's obj-* cmake tree also targets bin/. Running
+# tests here can link a fresh diskatlas_tests against a stale libdiskatlas_core.so.
+# Unit tests run in .github/workflows/build-deb.yml via the primary cmake build.
+override_dh_auto_test:
+	true
+
 override_dh_auto_install:
 	mkdir -p debian/diskatlas/usr/bin
 	mkdir -p debian/diskatlas/usr/lib/diskatlas

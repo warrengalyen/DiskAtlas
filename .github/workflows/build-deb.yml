@@ -40,10 +40,11 @@ jobs:
           echo "Updated debian/changelog to $VERSION"
         fi
     
-    - name: Build application
+    - name: Build application and run tests
       run: |
         cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
         cmake --build build
+        ctest --test-dir build --output-on-failure --verbose
     
     - name: Build Debian package
       run: |

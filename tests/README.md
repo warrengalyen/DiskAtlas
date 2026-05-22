@@ -16,6 +16,11 @@ Or via CTest (working directory is the repo root):
 ctest --test-dir build --output-on-failure
 ```
 
+On Linux/macOS, `diskatlas_tests` links `diskatlas_core` **statically** (`diskatlas_core_static`)
+so CTest does not load `bin/libdiskatlas_core.so` at runtime. Debian package builds skip
+`dh_auto_test` (see `debian/rules`); Linux CI runs tests in the primary `build/` tree
+(`.github/workflows/build-deb.yml`).
+
 ## Layout
 
 | Path | Purpose |

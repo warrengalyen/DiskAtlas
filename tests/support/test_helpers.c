@@ -1,3 +1,7 @@
+#if !defined(_WIN32)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "test_helpers.h"
 
 #include <stdio.h>
@@ -8,8 +12,21 @@
 #include <windows.h>
 #else
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 #endif
+
+static char *da_test_strdup(const char *s) {
+  if (s == NULL) {
+    return NULL;
+  }
+  size_t n = strlen(s) + 1u;
+  char *out = (char *)malloc(n);
+  if (out != NULL) {
+    memcpy(out, s, n);
+  }
+  return out;
+}
 
 int da_test_fixture_path(const char *rel, char *out, size_t outsz) {
   if (rel == NULL || out == NULL || outsz == 0) {
@@ -84,7 +101,10 @@ bool da_test_wait_scan_complete(scan_result_t *result, unsigned timeout_ms) {
 #if defined(_WIN32)
     Sleep(step);
 #else
-    usleep(step * 1000u);
+    {
+      struct timespec ts = {0, (long)(step * 1000000u)};
+      (void)nanosleep(&ts, NULL);
+    }
 #endif
     elapsed += step;
   }
@@ -162,7 +182,7 @@ int da_test_load_manifest(const char *manifest_rel, da_test_node_expect_t **out_
       items = ni;
       cap = nc;
     }
-    items[count].path = strdup(path_col);
+    items[count].path = da_test_strdup(path_col);
     items[count].size_bytes = strtoull(size_col, NULL, 10);
     items[count].kind = parse_kind_token(kind_col);
     count++;
