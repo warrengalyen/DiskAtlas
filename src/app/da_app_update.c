@@ -19,6 +19,7 @@ void da_help_menu_check_for_updates(GtkMenuItem *item, gpointer user_data) {
       .libupdate_app_name = "diskatlas",
       .display_name = "DiskAtlas",
       .temp_dir_template = "diskatlas_up_XXXXXX",
+      .package_cache_name = "diskatlas-update.pkg",
       .configure_message_dialog = da_message_dialog_apply_layout,
       .disabled_build_explanation =
           "Your administrator can enable it by setting DISKATLAS_UPDATE_MANIFEST_URL "

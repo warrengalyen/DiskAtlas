@@ -32,6 +32,11 @@ typedef struct GtkLibupdateConfig {
   const char *display_name;
   /** Template for g_dir_make_tmp, e.g. "myapp_up_XXXXXX". */
   const char *temp_dir_template;
+  /**
+   * Optional basename for a stable copy of the download under the install dir before apply
+   * (passed to libupdate as package_cache_name). NULL = use the temp download path as-is.
+   */
+  const char *package_cache_name;
   /** Optional: tweak GtkMessageDialog padding/spacing to match your app. */
   GtkLibupdateConfigureDialogFn configure_message_dialog;
   /**

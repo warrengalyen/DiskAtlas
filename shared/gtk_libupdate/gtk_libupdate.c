@@ -467,6 +467,7 @@ static void gtk_lu_check_worker(GTask *task, gpointer source_object, gpointer ta
   update_options_t opts = {0};
   opts.update_url = cfg->manifest_url;
   opts.app_name = cfg->libupdate_app_name;
+  opts.package_cache_name = cfg->package_cache_name;
 
   if (update_init(&opts) != UPDATE_OK) {
     r->status = GTK_LU_INIT_FAIL;
@@ -542,6 +543,7 @@ static void gtk_lu_download_worker(GTask *task, gpointer source_object, gpointer
   opts.update_url = cfg->manifest_url;
   opts.app_name = cfg->libupdate_app_name;
   opts.expected_sha256 = sha;
+  opts.package_cache_name = cfg->package_cache_name;
 
   if (update_init(&opts) != UPDATE_OK) {
     g_task_return_int(task, GTK_LU_INIT_FAIL);
@@ -715,13 +717,34 @@ static void gtk_lu_start_download(GtkWindow *parent, GtkWidget *main_widget, con
     return;
   }
 
-  job->zip_path = g_build_filename(job->workdir, "package.bin", NULL);
+  {
+    gchar *zip_tmp = g_build_filename(job->workdir, "package.bin", NULL);
+    char zip_abs[4096];
 
-  job->progress_dialog =
-      gtk_dialog_new_with_buttons("Downloading update", parent,
-                                  GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-                                  "_Cancel", GTK_RESPONSE_CANCEL,
-                                  NULL);
+    if (zip_tmp == NULL || update_path_make_absolute(zip_tmp, zip_abs, sizeof zip_abs) != UPDATE_OK) {
+      g_free(zip_tmp);
+      GtkWidget *d = gtk_message_dialog_new(
+          parent, GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
+          "Could not prepare the update package path.");
+      gtk_lu_apply_dialog_layout(cfg, d);
+      gtk_dialog_run(GTK_DIALOG(d));
+      gtk_widget_destroy(d);
+      (void)update_remove_tree(job->workdir);
+      g_free(job->workdir);
+      g_mutex_clear(&job->prog_mutex);
+      g_free(job);
+      gtk_widget_set_sensitive(main_widget, TRUE);
+      return;
+    }
+    job->zip_path = g_strdup(zip_abs);
+    g_free(zip_tmp);
+  }
+
+  job->progress_dialog = gtk_dialog_new();
+  gtk_window_set_title(GTK_WINDOW(job->progress_dialog), "Downloading update");
+  gtk_window_set_transient_for(GTK_WINDOW(job->progress_dialog), parent);
+  gtk_window_set_modal(GTK_WINDOW(job->progress_dialog), TRUE);
+  gtk_window_set_destroy_with_parent(GTK_WINDOW(job->progress_dialog), TRUE);
   gtk_window_set_default_size(GTK_WINDOW(job->progress_dialog), 420, -1);
 
   box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
